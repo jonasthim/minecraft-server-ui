@@ -1,0 +1,73 @@
+{
+  "kind": "original synthetic parser fixtures; not official saved worlds",
+  "license": "MIT (repository LICENSE)",
+  "generator": "generate.py",
+  "expected_geometry": {
+    "order": "x +16*z +256*y",
+    "surface": {
+      "0": "grass_block at base+5",
+      "12": "unknown example:boundary at base (legacy ID769 metadata7)",
+      "13": "unknown example:ore at base (legacy ID770 metadata5)",
+      "255": "water at base+15",
+      "other": "air"
+    },
+    "slice_base_plus_4": {
+      "0": "stone at base"
+    }
+  },
+  "oracles": {
+    "lz4": "Primary C liblz4 via ctypes.LZ4_compress_default; Java framing according to primary lz4-java sources, checksum lower28bits",
+    "xxhash": "Primary C libxxhash via ctypes.XXH32; zero, default-Java, maximum32bit seeds; empty, short,256byte and18000byte inputs"
+  },
+  "official_metadata": [
+    {
+      "id": "1.21.9",
+      "world_version": 4554,
+      "sha1": "ce92fd8d1b2460c41ceda07ae7b3fe863a80d045"
+    },
+    {
+      "id": "26.1",
+      "world_version": 4786,
+      "sha1": "191771837687b766537a8c4607cb6fad79c533a1"
+    },
+    {
+      "id": "26.3",
+      "world_version": 5023,
+      "sha1": "e877b6a07acd633fb3bb475002175cec036e7b87"
+    }
+  ],
+  "sources": [
+    "https://raw.githubusercontent.com/lz4/lz4-java/1.8.0/src/java/net/jpountz/lz4/LZ4BlockInputStream.java",
+    "https://raw.githubusercontent.com/lz4/lz4-java/1.8.0/src/java/net/jpountz/xxhash/StreamingXXHash32.java",
+    "https://github.com/Cyan4973/xxHash/blob/v0.8.3/doc/xxhash_spec.md",
+    "https://github.com/lz4/lz4/blob/v1.10.0/doc/lz4_Block_format.md",
+    "https://github.com/PrismarineJS/prismarine-chunk/blob/master/src/pc/common/BitArray.js",
+    "https://github.com/PrismarineJS/prismarine-chunk/blob/master/src/pc/common/BitArrayNoSpan.js",
+    "https://github.com/Tnze/go-mc/blob/539b4a3a7f030332eb58b8a946116ae7907630d2/save/chunk.go"
+  ],
+  "sha256": {
+    "1.12.2-legacy-level.nbt": "6bf4e145dd8c5c93d5a50de2314d67d9a6e1f83bad203aa8efa814a2efc11552",
+    "1.12.2-legacy.nbt": "3933037e938099a58dd7a97813ce5017168f935e8330e4033a738c6ed0f38526",
+    "1.13-dense-level.nbt": "ba86124466c296cbf8086c695cc15677655b429014ef5648c0a68bba5eb50673",
+    "1.13-dense.nbt": "325fb7f904a3745b6321f0aa7eb8b9c1aa0ae470df30ba166366c343b952150f",
+    "1.15-dense-level.nbt": "39ce5fc6f5f90d7229ff5dc34d8078147d80e133844858ab1a4eb8144df82cc1",
+    "1.15-dense.nbt": "39c346aa7325018cd42bde5c9d805741df373cfbba4f5be5e431ce43130949ee",
+    "1.16-padded-level.nbt": "35045d9ba2b246a93f1c387496476600e2d3464e29fbbb77d5a75bb58a665d57",
+    "1.16-padded.nbt": "2e9bbaf54f65050590ce56b6a0d8582dfb1ea1253dad95b868332794a54c1246",
+    "1.18-negative-level.nbt": "18ee4bb438b986bf187d3534462906db7d2d192979b333ceea2c1ce6046d3bd0",
+    "1.18-negative.nbt": "e91916c8c6e031dc93cea5c8c8cccfe1144db32e667051b7d012c0e7bc9d273f",
+    "1.20.5-modern-level.nbt": "4f30ccda1ea83463f270cd6c8f51fd8dec577e94b36b2b89096b64c1ab8255b4",
+    "1.20.5-modern.nbt": "d26f353116ea48b4099cab452736c73613372ff5f71197322dbde45204b05e49",
+    "1.21.9-modern-level.nbt": "7c4959528d971d30b474cf09f38bf30860c116ef85f5feb21e9f93d3b1cadedc",
+    "1.21.9-modern.nbt": "931089f5c236119a4921526f8dfd4132f178bb6a67c0bc0b0bc4c7417c32e261",
+    "26.1-modern-level.nbt": "c4a051e4a07001da37106b69d9c9b3fc0ab722edecf357cc0447da43407a9081",
+    "26.1-modern.nbt": "34eddfffffa2b291f450e0ab4ca0c16c9cfb08ce53dc20ba14942383880d1776",
+    "26.3-modern-level.nbt": "de2bf77cc11d9d16aed60aebedc1f1de197d51a311121daba1eb610ac8680101",
+    "26.3-modern.nbt": "36c3c753fcbdbf6c99e12ee7be7ba6ce79ae3cb3fd21d4043536607a7aab7f05",
+    "future-schema-level.nbt": "b87783a5a0b6cf2460e3e5cadf7d409bd7c850427df72b66bafd732b7801d21f",
+    "future-schema.nbt": "45b257db0f53ad6401ab55a2b43df1f049eed2f45c5150e1f5716e195e10f40c",
+    "level.nbt": "0b1cded7d6e0ed339675a06d65389e863038cf1ae29d9166f26e2a5ad8290dc9",
+    "lz4-oracle.bin": "91903151ed8a9a2ceaf73843056f24e81ede27ef8b624787f48ea39d03fbc5ac",
+    "xxhash-vectors.json": "fcc40ae81e0f550842409ff64978de349905eb807d22782b351a26538441333a"
+  }
+}
