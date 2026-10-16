@@ -64,3 +64,29 @@ Specific behavioral tests cover the four-worker maximum; same-instance cancellat
 - Actual installation/backup handlers are future packages; no fabricated enqueue operation or fixture-only product prerequisite is provided here.
 - This package does not qualify Minecraft versions, real server operation, Linux systemd, or native Windows execution.
 - SSE replay is client recovery from durable state/output rather than a persistent transport event-ID log. Downloads cap at 5 MiB with an explicit truncation line; paginated logs remain available for remaining retained output.
+
+
+## Task 09 integration extension — WithIdle
+
+Added `jobs.Service.WithIdle(ctx context.Context, instanceID string, fn func() error) error` in owned `internal/jobs/idle.go`, with admission/dispatch changes in `service.go` and behavioral tests in `idle_test.go`.
+
+The final integrator-approved contract uses a per-instance admission reservation. WithIdle validates the domain instance ID, callback, caller context, service availability, overlapping reservation, and queued/running job absence under the same mutex used by admission and dispatch. It then releases the global mutex before invoking the callback. Same-instance Enqueue returns `instance_busy`, dispatch skips reserved instances, and unrelated jobs continue admitting, publishing progress/logs, cancelling, and completing. A reservation does not require the instance row to exist, allowing guarded instance creation.
+
+The callback must never call jobs methods. Lock order is **jobs reservation → native supervisor.WithStopped → filesystem/DB mutation**. No SQL transaction, open result rows, or connection remains held during the callback, so its file/DB mutations can use the database's sole connection. The callback captures ctx for its I/O and returns only after cleanup. A deferred release clears the reservation and signals dispatch after normal return, error, cancellation, or panic. Caller cancellation never releases the reservation while callback cleanup is still active.
+
+Callbacks join the existing active worker drain group while admission is protected by the stopping mutex. Stop closes admission before waiting, waits for callbacks as well as workers, and reports its deadline honestly while a callback remains active. This avoids WaitGroup Add/Wait races and prevents shutdown from closing the database before a guarded mutation has returned.
+
+Evidence for this extension:
+
+- Observed `WithIdle` missing-method RED before implementation, including after the integrator refined the reservation contract.
+- `TestWithIdleExcludesSameInstanceAndAllowsUnrelatedProgress`: same-instance admission and overlapping mutation rejection, callback DB write with max-one connection, unrelated worker phase/log/completion, dispatch liveness, and later same-instance admission.
+- `TestWithIdleRejectsQueuedAndRunningJobs`: running and queued work both block mutation; unrelated instance IDs remain available.
+- `TestWithIdleValidationErrorsAndCancellationReleaseLock`: unavailable/stopped service, invalid IDs, pre-cancelled caller, callback errors/cancellation, and successful subsequent mutation.
+- `TestWithIdleCancellationRetainsReservationUntilReturn`: cancellation cannot free the reservation before cleanup returns.
+- `TestWithIdlePanicReleasesReservation`: panic unwinding releases the reservation.
+- `TestWithIdleParticipatesInShutdownDrain`: Stop times out while callback cleanup is active and refuses new callbacks, then drains after return.
+- `go test -race ./internal/jobs ./internal/events ./internal/api`: PASS.
+- `go vet ./internal/jobs ./internal/events ./internal/api`: PASS.
+- `go test ./...`: PASS, including current instance, launcher, runtime, supervisor, auth, and command packages. Earlier concurrent missing-symbol and Java 16 failures recorded above were resolved by their owning workers before this final extension run.
+
+No non-owned implementation files were changed for this extension. Nothing was staged or committed. Independent integration review and ledger updates remain the integrator's responsibility.

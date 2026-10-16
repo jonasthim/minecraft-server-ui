@@ -49,6 +49,7 @@ type Service struct {
 	mu                sync.Mutex
 	handlers          map[string]Handler
 	running           map[string]active
+	idle              map[string]struct{}
 	started, stopping bool
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -61,7 +62,7 @@ func New(database *sql.DB, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{db: database, log: log, hub: events.NewHub(32), handlers: make(map[string]Handler), running: make(map[string]active), wake: make(chan struct{}, 1), done: make(chan struct{})}
+	return &Service{db: database, log: log, hub: events.NewHub(32), handlers: make(map[string]Handler), running: make(map[string]active), idle: make(map[string]struct{}), wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
 // Register freezes a worker kind before startup. Unknown queued kinds fail
@@ -158,6 +159,9 @@ func (s *Service) Enqueue(ctx context.Context, r Request) (Job, error) {
 	if r.RequestedBy < 0 || !identifier.MatchString(r.Kind) || (r.InstanceID != "" && !identifier.MatchString(r.InstanceID)) {
 		return Job{}, domain.E(domain.CodeValidationFailed, "invalid job request")
 	}
+	if _, reserved := s.idle[r.InstanceID]; reserved {
+		return Job{}, domain.E(domain.CodeInstanceBusy, "instance is being changed")
+	}
 	if _, ok := s.handlers[r.Kind]; !ok {
 		return Job{}, domain.E(domain.CodeUnsupported, "job kind is not registered")
 	}
@@ -212,6 +216,9 @@ func (s *Service) dispatch() {
 	for _, j := range pending {
 		if len(s.running) >= 4 {
 			return
+		}
+		if _, reserved := s.idle[j.InstanceID]; reserved {
+			continue
 		}
 		busy := false
 		for _, a := range s.running {
