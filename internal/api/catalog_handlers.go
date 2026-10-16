@@ -24,14 +24,18 @@ func MountCatalog(r chi.Router, s *catalog.Service) {
 	})
 	r.With(auth.RequireRole(domain.RoleAdmin)).Put("/catalog/curseforge-key", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Key string `json:"key"`
+			Key *string `json:"key"`
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1024)
 		if e := DecodeJSON(r, &in); e != nil {
 			WriteError(w, e)
 			return
 		}
-		v, e := s.ConfigureCurseForge(r.Context(), *auth.UserFrom(r.Context()), in.Key)
+		if in.Key == nil {
+			WriteError(w, domain.E(domain.CodeValidationFailed, "key must be an explicit nonnull string"))
+			return
+		}
+		v, e := s.ConfigureCurseForge(r.Context(), *auth.UserFrom(r.Context()), *in.Key)
 		if e != nil {
 			WriteError(w, e)
 			return

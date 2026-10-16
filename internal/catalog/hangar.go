@@ -106,7 +106,13 @@ func hangarVersionDTO(v hangarVersion, t time.Time) (Version, error) {
 	return r, nil
 }
 func bindHangarURL(v *Version, project Project) {
+	previous := v.OfficialURL
 	v.OfficialURL = project.OfficialURL + "/versions/" + url.PathEscape(v.ID)
+	for i := range v.Dependencies {
+		if v.Dependencies[i].ManualURL == previous {
+			v.Dependencies[i].ManualURL = v.OfficialURL
+		}
+	}
 	for i := range v.Files {
 		v.Files[i].OfficialURL = v.OfficialURL
 	}

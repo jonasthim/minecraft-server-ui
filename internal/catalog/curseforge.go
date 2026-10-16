@@ -17,6 +17,7 @@ type cfProject struct {
 	Summary string `json:"summary"`
 }
 type cfFile struct {
+	GameID           int      `json:"gameId"`
 	ID               int64    `json:"id"`
 	ModID            int64    `json:"modId"`
 	Name             string   `json:"displayName"`
@@ -52,7 +53,7 @@ func cfProjectDTO(p cfProject, t time.Time) (Project, error) {
 	return Project{Provenance: Provenance{CurseForge, t}, ID: num(p.ID), Slug: p.Slug, Kind: kind, Title: p.Name, Description: p.Summary, OfficialURL: "https://www.curseforge.com/minecraft/" + segment + "/" + p.Slug, Compatibility: blankCompatibility()}, nil
 }
 func cfVersionDTO(f cfFile, t time.Time) (Version, error) {
-	if f.ID < 1 || f.ModID < 1 || f.Name == "" || len(f.Dependencies) > 1000 {
+	if f.ID < 1 || f.ModID < 1 || f.GameID != 432 || f.Name == "" || len(f.Dependencies) > 1000 {
 		return Version{}, upstream("malformed CurseForge file")
 	}
 	c := blankCompatibility()
@@ -149,6 +150,9 @@ func (s *Service) cfVersions(ctx context.Context, id string, q Query) (VersionPa
 	if n, e := strconv.ParseInt(id, 10, 32); e != nil || n < 1 {
 		return VersionPage{}, invalid("invalid CurseForge project ID")
 	}
+	if _, e := s.Project(ctx, CurseForge, id); e != nil {
+		return VersionPage{}, e
+	}
 	values := url.Values{"index": {strconv.Itoa(q.Offset)}, "pageSize": {strconv.Itoa(q.Limit)}}
 	if q.Minecraft != "" {
 		values.Set("gameVersion", q.Minecraft)
@@ -191,6 +195,9 @@ func (s *Service) cfVersion(ctx context.Context, project, id string) (Version, e
 		if n, e := strconv.ParseInt(v, 10, 32); e != nil || n < 1 {
 			return Version{}, invalid("invalid CurseForge ID")
 		}
+	}
+	if _, e := s.Project(ctx, CurseForge, project); e != nil {
+		return Version{}, e
 	}
 	var v struct {
 		Data cfFile `json:"data"`

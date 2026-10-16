@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"regexp"
 	"strconv"
 	"time"
 )
+
+var mrSlugPattern = regexp.MustCompile("^[A-Za-z0-9_!@$()`.+,\"'\\-]{3,64}$")
 
 type mrProject struct {
 	ID           string   `json:"id"`
@@ -56,7 +59,7 @@ func mrProjectDTO(v mrProject, t time.Time, kind Kind) (Project, error) {
 	if id == "" {
 		id = v.ProjectID
 	}
-	if !validID(id) || !validID(v.Slug) || v.Title == "" {
+	if !validID(id) || (v.Slug != "" && !mrSlugPattern.MatchString(v.Slug)) || v.Title == "" {
 		return Project{}, upstream("malformed Modrinth project")
 	}
 	if kind == "" {
@@ -70,9 +73,6 @@ func mrProjectDTO(v mrProject, t time.Time, kind Kind) (Project, error) {
 	}
 	c := blankCompatibility()
 	c.Minecraft = v.GameVersions
-	if c.Minecraft == nil {
-		c.Minecraft = v.Versions
-	}
 	if c.Minecraft == nil {
 		c.Minecraft = []string{}
 	}
@@ -151,6 +151,8 @@ func (s *Service) mrSearch(ctx context.Context, q Query) (SearchResult, error) {
 		return r, upstream("malformed Modrinth search page")
 	}
 	for _, hit := range v.Hits {
+		// Search versions are Minecraft versions; project versions are release IDs.
+		hit.GameVersions = hit.Versions
 		p, e := mrProjectDTO(hit, t, q.Kind)
 		if e != nil {
 			return r, e

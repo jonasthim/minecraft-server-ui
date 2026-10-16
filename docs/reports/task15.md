@@ -72,3 +72,27 @@ Consulted current official documentation and actual read-only official API respo
 ## Remaining qualification and dependent work
 
 Integrator review and ledger acceptance are pending. Native Windows execution remains unqualified. No live CurseForge smoke is claimed without an operator's private key. No content activation, pack extraction/application, dependency installation, trial uploads, automatic update qualification or full release matrix is claimed. Task16/17 must gate side/loader/game compatibility, required/manual dependencies, strict archive/path layout and transaction/backup requirements before changing any instance. Unknown evidence blocks automatic content/update qualification; a hash-verified artifact alone does not establish content compatibility.
+
+## Independent review — fix round1
+
+Addressed both Important and all four Minor findings from review of `fd825a7`. Re-review and integrator acceptance remain pending; no package acceptance or release qualification is asserted here.
+
+1. Credential configuration now requires a present, nonnull JSON string. `{}`, `null`, `{ "key": null }` and values of the wrong JSON type return422 without changing the stored key or adding an audit mutation. An explicit empty string still clears the key. The pointer used for request decoding does not change the existing OpenAPI contract, which already requires a string field.
+2. Every exact CurseForge version/list/download flow validates its canonical project with the existing game432 and mod/modpack class6/4471 checks before processing files. Each file also requires its own `gameId` to be432; missing/foreign game IDs are rejected. Download inherits these checks before any CDN request. Deterministic positive cases cover both mods and modpacks; negative cases exercise foreign project games, unsupported Minecraft classes, and missing/foreign file games across all three entry points.
+3. Modrinth search `versions` is mapped to Minecraft versions only inside the search adapter. A project response uses only `game_versions`; its `versions` release IDs can never become compatibility claims when game-version metadata is missing.
+4. Modrinth nullable slugs remain usable through their canonical IDs. Nonempty slugs accept the publisher-documented punctuation and length rules. Publisher links continue to use the validated canonical project ID, so nullable or punctuation-bearing vanity slugs cannot drop an otherwise valid search page.
+5. Hangar's numeric dependency fallback page is rebound to the canonical owner/project/version page when project metadata becomes available. Explicit external dependency links remain intact.
+6. Changing catalog kind aborts the current discovery request and resets results, releases, selected detail, loading/error/paging state and incompatible loader selection. Existing per-request abort guards prevent late results from being applied, including a fetch implementation that completes despite cancellation. Provider changes share the same reset boundary.
+
+All five backend defects were reproduced with new focused regressions before implementation, including the credential mutation/audit effects and the exact CurseForge entry-point bypasses. The UI regression reproduced the old stale-project result before the fix. The new self-contained `internal/catalog/testdata/ui-stale-request.cjs` serves the built application on an ephemeral loopback port, supplies deterministic API fixtures and holds search/release completion independently of AbortSignal. After a content-kind change, both delayed response cases remain discarded and loading state is cleared at390px.
+
+Final round1 verification:
+
+- `go test ./internal/catalog ./internal/api -count=1` — passed.
+- `go test -race ./internal/catalog ./internal/api` — passed.
+- `go vet ./internal/catalog ./internal/api` — passed.
+- `npm --prefix web run typecheck`, `lint`, `build` — passed.
+- `node internal/catalog/testdata/ui-stale-request.cjs` — passed both delayed search and delayed release cases at390px, without browser errors or external network requests.
+- `CATALOG_OFFICIAL_SMOKE=1 go test ./internal/catalog -run TestOfficialSmoke -count=1 -v` — passed again against the official public Modrinth/Hangar metadata APIs and inert verified FabricAPI CDN artifact. No CurseForge key or live CurseForge verification is claimed.
+
+Rechecked [official Modrinth search metadata](https://docs.modrinth.com/api/operations/searchprojects/), [project metadata](https://docs.modrinth.com/api/operations/getproject/) and [CurseForge file/project schemas](https://docs.curseforge.com/rest-api/) for the distinct version fields, nullable/punctuation-bearing slug contract, `gameId` and content-class fields. No exported DTO, API schema, generated types or shared composition change was required for this round.

@@ -138,7 +138,10 @@ func TestCurseForgeNullableDownloadAndServerPackEvidence(t *testing.T) {
 		if r.Header.Get("x-api-key") != "test-private" {
 			t.Fatal("missing private credential")
 		}
-		return response(`{"data":{"id":88,"modId":42,"displayName":"Pack","fileName":"pack.zip","fileLength":200,"isAvailable":true,"downloadUrl":null,"isServerPack":false,"serverPackFileId":99,"gameVersions":["1.21.1","NeoForge"],"hashes":[{"algo":1,"value":"` + strings.Repeat("b", 40) + `"}],"dependencies":[{"modId":7,"relationType":3}]}}`), nil
+		if r.URL.Path == "/v1/mods/42" {
+			return response(`{"data":{"id":42,"gameId":432,"classId":4471,"name":"Pack","slug":"pack"}}`), nil
+		}
+		return response(`{"data":{"id":88,"gameId":432,"modId":42,"displayName":"Pack","fileName":"pack.zip","fileLength":200,"isAvailable":true,"downloadUrl":null,"isServerPack":false,"serverPackFileId":99,"gameVersions":["1.21.1","NeoForge"],"hashes":[{"algo":1,"value":"` + strings.Repeat("b", 40) + `"}],"dependencies":[{"modId":7,"relationType":3}]}}`), nil
 	})
 	_, e := s.ConfigureCurseForge(context.Background(), domain.User{Role: domain.RoleAdmin}, "test-private")
 	if e != nil {

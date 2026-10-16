@@ -98,3 +98,41 @@ func TestCatalogRolesPrivateKeyAndAudit(t *testing.T) {
 		t.Fatal(result, e)
 	}
 }
+
+func TestCatalogKeyRequiresExplicitNonnullString(t *testing.T) {
+	for _, body := range []string{`{}`, `null`, `{"key":null}`, `{"key":false}`, `{"key":123}`, `{"key":[]}`, `{"key":{}}`} {
+		t.Run(body, func(t *testing.T) {
+			ctx := context.Background()
+			d, e := db.OpenMemory(ctx)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer d.Close()
+			s, e := catalog.New(catalog.Config{DB: d, ArtifactDir: t.TempDir(), UserAgent: "catalog-test"})
+			if e != nil {
+				t.Fatal(e)
+			}
+			admin := domain.User{ID: 1, Role: domain.RoleAdmin}
+			if _, e := s.ConfigureCurseForge(ctx, admin, "keep-private-key"); e != nil {
+				t.Fatal(e)
+			}
+			router := chi.NewRouter()
+			MountCatalog(router, s)
+			req := httptest.NewRequest(http.MethodPut, "/catalog/curseforge-key", strings.NewReader(body))
+			req = req.WithContext(auth.WithUser(req.Context(), &admin))
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != 422 {
+				t.Errorf("malformed credential request status=%d", rec.Code)
+			}
+			var key string
+			if e := d.QueryRowContext(ctx, "SELECT curseforge_key FROM catalog_settings WHERE id=1").Scan(&key); e != nil || key != "keep-private-key" {
+				t.Error("malformed request changed private configuration", e)
+			}
+			var count int
+			if e := d.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log").Scan(&count); e != nil || count != 1 {
+				t.Error("malformed request created mutation audit", count, e)
+			}
+		})
+	}
+}
