@@ -6,7 +6,43 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/jonasthim/minecraft-server-ui/internal/domain"
+	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 )
+
+func missingPersistedRootFixture(t *testing.T) *Service {
+	t.Helper()
+	s, base := exportFixture(t)
+	if _, err := s.db.Exec(`INSERT INTO instances(id,name,flavor,minecraft_version,java_major,memory_mib,game_port,config_json) VALUES('alpha','Alpha','paper','1.21.9',21,1024,25565,'{"level_name":"My world"}')`); err != nil {
+		t.Fatal(err)
+	}
+	s.instances = instance.New(s.db, s.paths, nil)
+	if err := os.RemoveAll(filepath.Dir(base)); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestDiscoverMissingPersistedInstanceRootIsAbsent(t *testing.T) {
+	s := missingPersistedRootFixture(t)
+	d, err := s.Discover(context.Background(), "alpha")
+	if err != nil || d.State != "absent" {
+		t.Fatalf("missing persisted root: state=%q err=%v", d.State, err)
+	}
+}
+
+func TestCaptureMissingPersistedInstanceRootIsNotFound(t *testing.T) {
+	s := missingPersistedRootFixture(t)
+	a, err := s.Capture(context.Background(), operator, "alpha")
+	if a != nil {
+		a.Close()
+		t.Fatal("missing world returned archive")
+	}
+	if err == nil || domain.AsError(err).Code != domain.CodeNotFound {
+		t.Fatal("missing saved world is not not_found", err)
+	}
+}
 
 // These substitutions occur after Paths.For's string validation and before the
 // first filesystem open, reproducing the unsafe bootstrap window deterministically.

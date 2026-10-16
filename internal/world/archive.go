@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"strings"
@@ -184,7 +185,7 @@ func (s *Service) validateRoots(ctx context.Context, id string, roots []worldRoo
 	}
 	for _, name := range names {
 		info, se := server.Lstat(name)
-		if os.IsNotExist(se) {
+		if errors.Is(se, fs.ErrNotExist) {
 			if expectedRoots[name] {
 				return changed()
 			}

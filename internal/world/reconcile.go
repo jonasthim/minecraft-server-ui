@@ -2,9 +2,10 @@ package world
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"os"
+	"io/fs"
 	"regexp"
 
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
@@ -79,7 +80,7 @@ func (s *Service) reconcileInstanceExports(ctx context.Context, id string, remai
 	}
 	defer inst.Close()
 	backups, err := openChild(inst, "backups")
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
@@ -87,7 +88,7 @@ func (s *Service) reconcileInstanceExports(ctx context.Context, id string, remai
 	}
 	defer backups.Close()
 	staging, err := openChild(backups, ".exports")
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {

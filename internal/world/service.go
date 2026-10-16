@@ -380,7 +380,7 @@ func (s *Service) discover(ctx context.Context, id string, keep bool) (Discovery
 		return d, nil, nil
 	}
 	inst, e := s.openInstance(id)
-	if os.IsNotExist(e) {
+	if errors.Is(e, fs.ErrNotExist) {
 		d.State = "absent"
 		return d, nil, nil
 	}
@@ -389,7 +389,7 @@ func (s *Service) discover(ctx context.Context, id string, keep bool) (Discovery
 	}
 	defer inst.Close()
 	server, e := openChild(inst, "server")
-	if os.IsNotExist(e) {
+	if errors.Is(e, fs.ErrNotExist) {
 		d.State = "absent"
 		return d, nil, nil
 	}
@@ -413,7 +413,7 @@ func (s *Service) discover(ctx context.Context, id string, keep bool) (Discovery
 			return d, nil, e
 		}
 		r, err := openChild(server, name)
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {

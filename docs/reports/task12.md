@@ -83,3 +83,17 @@ The scoped race run also reproduced an existing test-only synchronization flaw: 
 - `GOOS=windows GOARCH=amd64 go test -c ./internal/world -o /home/thim/.cache/dilla-tmp/minecraft-world-root.test.exe`: PASS; compilation only, not native Windows reparse or drive qualification.
 
 Only internal/world files and this report were changed for this follow-up. Existing archive validation, cleanup and UI behavior were preserved. No game/EULA/service action, dependency, shared file change, staging or commit was performed. The patch is frozen for independent scoped review.
+
+## World source-root review fix round 1 — reviewed d8a72a8
+
+Independent review found that anchored bootstrap wraps missing-component errors, including through errors.Join, while discovery still used os.IsNotExist. Those legacy checks do not unwrap arbitrary wrapped/joined errors. The affected world discovery, source validation and export-staging existence checks now use errors.Is(err, fs.ErrNotExist). The original wrapped errors and joined cleanup details are preserved.
+
+New root_test.go regressions persist an actual SQLite instance row, read it through instance.Service, remove the entire instance directory and exercise public world Discover/Capture. Discovery must return state absent without an error; capture must return no archive and the saved-world not_found domain code.
+
+- RED: `go test ./internal/world -run '^(TestDiscoverMissingPersistedInstanceRootIsAbsent|TestCaptureMissingPersistedInstanceRootIsNotFound)$' -count=1` failed both cases before the correction: discovery returned empty state and `open world root component: statat alpha: no such file or directory`; capture returned that host error instead of not_found.
+- An intermediate build/vet attempt found the obsolete os import in reconcile.go after replacing its existence checks. The unused import was removed before final verification.
+- GREEN: the same focused regression command passed, `ok .../internal/world 0.013s`.
+- `go test -race ./internal/world -count=1`: PASS, `ok .../internal/world 6.706s`.
+- `go vet ./internal/world`, `git diff --check`: PASS.
+
+Only world internals and this report changed. No shared interfaces, root safety checks, archive admission/cleanup policy, UI behavior, staging or commits changed. Frozen for independent scoped review.
