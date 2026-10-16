@@ -1,0 +1,53 @@
+# Native supervision pattern adapted from valheim-server-ui (MIT, Jonas Thim 2026).
+# The launcher owns stdin, logs and the save watchdog. No manager dependencies:
+# restarting/upgrading minecraft-ui.service must leave this entire unit alive.
+[Unit]
+Description=Minecraft Java server (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=minecraft-ui
+Group=minecraft-ui
+WorkingDirectory=/var/lib/minecraft-ui/instances/%i/server
+ExecStart=/usr/local/bin/minecraft-ui launch --data-dir /var/lib/minecraft-ui --instance %i --stop-timeout 90s
+# Only the launcher receives TERM; it writes stop and waits for the JVM.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=105s
+# Task 19 owns bounded crash retries. systemd must never restart autonomously.
+Restart=no
+StandardOutput=journal
+StandardError=journal
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+# A private mount namespace hides manager.db, other instances and credentials
+# from arbitrary server/mod code while exposing this instance and runtime cache.
+TemporaryFileSystem=/var/lib/minecraft-ui:ro
+BindPaths=/var/lib/minecraft-ui/instances/%i /var/lib/minecraft-ui/locks/%i.lock
+BindReadOnlyPaths=/var/lib/minecraft-ui/runtimes
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+# Block cross-process tracing of the manager despite the common service UID.
+SystemCallFilter=~@debug
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

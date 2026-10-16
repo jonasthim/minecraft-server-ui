@@ -1,0 +1,3 @@
+# Root-owned 0440 /etc/sudoers.d/minecraft-ui. unitctl validates verb, argc and ID.
+Defaults:minecraft-ui env_reset
+minecraft-ui ALL=(root) NOPASSWD: /usr/local/lib/minecraft-ui/unitctl

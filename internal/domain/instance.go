@@ -34,9 +34,13 @@ type Instance struct {
 }
 
 var instanceIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+var reservedInstanceIDPattern = regexp.MustCompile(`^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$`)
 var releasePattern = regexp.MustCompile(`^(1|2[6-9]|[3-9][0-9])\.(\d+)(?:\.(\d+))?$`)
 
 func ValidateInstanceID(id string) error {
+	if reservedInstanceIDPattern.MatchString(id) {
+		return fmt.Errorf("instance id is a reserved Windows device name")
+	}
 	if !instanceIDPattern.MatchString(id) {
 		return fmt.Errorf("instance id must contain 1-32 lowercase letters, digits or hyphens, beginning with a letter or digit")
 	}

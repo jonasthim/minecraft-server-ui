@@ -1,0 +1,12 @@
+#!/bin/sh
+# MIT, Copyright (c) 2026 Jonas Thim. See NOTICE.
+# The sole privileged entrypoint; never execute a configuration-supplied command.
+set -eu
+PATH=/usr/bin:/bin
+export PATH
+[ "$#" -eq 2 ] || exit 2
+case "$1" in start|stop|enable|disable) ;; *) exit 2 ;; esac
+instance=$2
+[ "${#instance}" -ge 1 ] && [ "${#instance}" -le 32 ] || exit 2
+case "$instance" in *[!a-z0-9-]*|[!a-z0-9]*|con|prn|aux|nul|com[1-9]|lpt[1-9]) exit 2 ;; esac
+exec /usr/bin/systemctl "$1" "minecraft@${instance}.service"

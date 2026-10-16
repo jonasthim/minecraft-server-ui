@@ -45,3 +45,16 @@ func TestPlainFilename(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInstanceIDRejectsWindowsDeviceNames(t *testing.T) {
+	for _, id := range []string{"con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9"} {
+		if err := ValidateInstanceID(id); err == nil {
+			t.Errorf("reserved Windows device name accepted: %s", id)
+		}
+	}
+	for _, id := range []string{"console", "com10", "lpt0", "con-server", "my-prn"} {
+		if err := ValidateInstanceID(id); err != nil {
+			t.Errorf("portable ID rejected: %s: %v", id, err)
+		}
+	}
+}
