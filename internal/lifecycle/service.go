@@ -39,29 +39,32 @@ type Runtime interface {
 	Get(context.Context, string) (domain.JavaRuntime, error)
 }
 type Config struct {
-	DB        *sql.DB
-	DataDir   string
-	Instances *instance.Service
-	Jobs      *jobs.Service
-	Native    Native
-	Runtime   Runtime
-	Providers []domain.DistributionProvider
-	Console   *console.Service
+	// StopIntent cancels pending crash recovery before a deliberate stop/uninstall is admitted.
+	StopIntent func(context.Context, string, domain.User) error
+	DB         *sql.DB
+	DataDir    string
+	Instances  *instance.Service
+	Jobs       *jobs.Service
+	Native     Native
+	Runtime    Runtime
+	Providers  []domain.DistributionProvider
+	Console    *console.Service
 }
 type Service struct {
-	db        *sql.DB
-	dataDir   string
-	instances *instance.Service
-	queue     *jobs.Service
-	native    Native
-	runtime   Runtime
-	providers map[domain.Flavor]domain.DistributionProvider
-	control   *console.Service
-	seal      func(context.Context, string, domain.LaunchSpec) error
+	stopIntent func(context.Context, string, domain.User) error
+	db         *sql.DB
+	dataDir    string
+	instances  *instance.Service
+	queue      *jobs.Service
+	native     Native
+	runtime    Runtime
+	providers  map[domain.Flavor]domain.DistributionProvider
+	control    *console.Service
+	seal       func(context.Context, string, domain.LaunchSpec) error
 }
 
 func New(c Config) *Service {
-	s := &Service{db: c.DB, dataDir: c.DataDir, instances: c.Instances, queue: c.Jobs, native: c.Native, runtime: c.Runtime, providers: map[domain.Flavor]domain.DistributionProvider{}, control: c.Console}
+	s := &Service{stopIntent: c.StopIntent, db: c.DB, dataDir: c.DataDir, instances: c.Instances, queue: c.Jobs, native: c.Native, runtime: c.Runtime, providers: map[domain.Flavor]domain.DistributionProvider{}, control: c.Console}
 	for _, p := range c.Providers {
 		s.providers[p.Flavor()] = p
 	}

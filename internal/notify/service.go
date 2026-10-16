@@ -10,8 +10,15 @@ import (
 )
 
 func validEvent(e Event) bool {
-	return e.ID != "" && len(e.ID) <= 160 && domain.ValidateInstanceID(e.InstanceID) == nil && (e.Kind == JobFailed || e.Kind == JobSucceeded) && allowedOperation(e.Operation) && !e.CreatedAt.IsZero()
+	if e.ID == "" || len(e.ID) > 160 || domain.ValidateInstanceID(e.InstanceID) != nil || e.CreatedAt.IsZero() {
+		return false
+	}
+	if e.Kind == ServerCrashed {
+		return crashEventID.MatchString(e.ID) && e.Operation == "crash_recovery"
+	}
+	return (e.Kind == JobFailed || e.Kind == JobSucceeded) && allowedOperation(e.Operation)
 }
+
 func allowedOperation(op string) bool {
 	switch op {
 	case "backup_create", "backup_restore", "lifecycle", "content_mutation", "modpack_apply", "update_apply":

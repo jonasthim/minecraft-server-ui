@@ -138,12 +138,12 @@ func (s *Service) Save(ctx context.Context, id string, in ChannelInput, actor do
 	if e := admin(actor); e != nil {
 		return Channel{}, e
 	}
-	if !channelID.MatchString(id) || !validProvider(in.Provider) || len(in.Label) < 1 || len(in.Label) > 80 || strings.ContainsAny(in.Label, "\r\n\x00") || len(in.Events) > 2 || in.Clear && in.Replace != nil {
+	if !channelID.MatchString(id) || !validProvider(in.Provider) || len(in.Label) < 1 || len(in.Label) > 80 || strings.ContainsAny(in.Label, "\r\n\x00") || len(in.Events) > 3 || in.Clear && in.Replace != nil {
 		return Channel{}, domain.E(domain.CodeValidationFailed, "invalid notification channel")
 	}
 	seen := map[EventKind]bool{}
 	for _, k := range in.Events {
-		if k != JobFailed && k != JobSucceeded || seen[k] {
+		if k != JobFailed && k != JobSucceeded && k != ServerCrashed || seen[k] {
 			return Channel{}, domain.E(domain.CodeValidationFailed, "invalid notification event selection")
 		}
 		seen[k] = true

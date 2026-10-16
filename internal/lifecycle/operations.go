@@ -41,6 +41,9 @@ func (s *Service) RegisterJobs() error {
 	return s.queue.Register("lifecycle_verify", s.runVerify)
 }
 func (s *Service) Enqueue(ctx context.Context, u domain.User, id string, in Request) (jobs.Job, error) {
+	return s.enqueue(ctx, "", u, id, in)
+}
+func (s *Service) enqueue(ctx context.Context, key string, u domain.User, id string, in Request) (jobs.Job, error) {
 	admin := in.Operation == "autostart" || in.Operation == "uninstall" || in.Emergency
 	if err := activeUser(u, admin); err != nil {
 		return jobs.Job{}, err
@@ -67,6 +70,11 @@ func (s *Service) Enqueue(ctx context.Context, u domain.User, id string, in Requ
 	if in.CountdownSeconds != nil && (*in.CountdownSeconds < 0 || *in.CountdownSeconds > 3600) {
 		return jobs.Job{}, domain.E(domain.CodeValidationFailed, "countdown must be between 0 and 3600 seconds")
 	}
+	if (in.Operation == "stop" || in.Operation == "uninstall") && s.stopIntent != nil {
+		if err := s.stopIntent(ctx, id, u); err != nil {
+			return jobs.Job{}, err
+		}
+	}
 	if err := s.audit(ctx, u, id, in.Operation); err != nil {
 		return jobs.Job{}, fmt.Errorf("audit lifecycle request: %w", err)
 	}
@@ -74,7 +82,11 @@ func (s *Service) Enqueue(ctx context.Context, u domain.User, id string, in Requ
 	if err != nil {
 		return jobs.Job{}, err
 	}
-	return s.queue.Enqueue(ctx, jobs.Request{InstanceID: id, Kind: "lifecycle", Payload: raw, RequestedBy: u.ID, Cancellable: in.Operation != "uninstall"})
+	request := jobs.Request{InstanceID: id, Kind: "lifecycle", Payload: raw, RequestedBy: u.ID, Cancellable: in.Operation != "uninstall"}
+	if key != "" {
+		return s.queue.EnqueueIdempotent(ctx, key, request)
+	}
+	return s.queue.Enqueue(ctx, request)
 }
 func (s *Service) run(ctx context.Context, e *jobs.Execution) (err error) {
 	defer func() {
@@ -274,6 +286,9 @@ func (s *Service) prepareLaunch(ctx context.Context, e *jobs.Execution) (domain.
 	return spec, instanceID, err
 }
 func (s *Service) start(ctx context.Context, e *jobs.Execution) error {
+	return s.startGuarded(ctx, e, nil)
+}
+func (s *Service) startGuarded(ctx context.Context, e *jobs.Execution, guard RecoveryStartGuard) error {
 	if err := e.Phase(ctx, "preparing_start", 10); err != nil {
 		return err
 	}
@@ -286,7 +301,16 @@ func (s *Service) start(ctx context.Context, e *jobs.Execution) error {
 		return err
 	}
 	var started domain.ProcessIdentity
-	err = e.WithInstanceMutation(ctx, func(id string) error { var err error; started, err = s.native.Start(ctx, id, spec); return err })
+	err = e.WithInstanceMutation(ctx, func(id string) error {
+		start := func() (domain.ProcessIdentity, error) { return s.native.Start(ctx, id, spec) }
+		var err error
+		if guard != nil {
+			started, err = guard(ctx, id, start)
+		} else {
+			started, err = start()
+		}
+		return err
+	})
 	if err != nil {
 		return s.startFailure(e, instanceID, "Native start failed; JVM state requires inspection.")
 	}

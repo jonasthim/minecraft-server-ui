@@ -23,8 +23,9 @@ const (
 type EventKind string
 
 const (
-	JobFailed    EventKind = "job_failed"
-	JobSucceeded EventKind = "job_succeeded"
+	ServerCrashed EventKind = "server_crashed"
+	JobFailed     EventKind = "job_failed"
+	JobSucceeded  EventKind = "job_succeeded"
 )
 
 type Event struct {

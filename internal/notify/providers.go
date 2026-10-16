@@ -20,6 +20,9 @@ type safeFailure string
 
 func (e safeFailure) Error() string { return string(e) }
 func eventText(event Event) string {
+	if event.Kind == ServerCrashed {
+		return "Minecraft server " + event.InstanceID + ": unexpected server exit."
+	}
 	outcome := "succeeded"
 	if event.Kind == JobFailed {
 		outcome = "failed"

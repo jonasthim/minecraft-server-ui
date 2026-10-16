@@ -1262,6 +1262,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Administrator: selfUpdateStatus; explicit configured release trust required; schema-changing upgrades require manual maintenance. */
+        get: operations["selfUpdateStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/update/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Administrator: selfUpdateCheck; explicit configured release trust required; schema-changing upgrades require manual maintenance. */
+        post: operations["selfUpdateCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/update/stage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Administrator: selfUpdateStage; explicit configured release trust required; schema-changing upgrades require manual maintenance. */
+        post: operations["selfUpdateStage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/update/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Administrator: selfUpdateApply; explicit configured release trust required; schema-changing upgrades require manual maintenance. */
+        post: operations["selfUpdateApply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2409,6 +2477,8 @@ export interface components {
             manual: {
                 [key: string]: string;
             };
+            /** @description Actor-owned earlier preview of the same exact verified pack; reuses only matching verified private member receipts. */
+            previous_preview_id?: string;
         };
         ModpackSource: {
             selection: components["schemas"]["ContentSelection"];
@@ -2419,6 +2489,7 @@ export interface components {
                 source: string;
                 fetched_at: string;
             };
+            artifact_selection: components["schemas"]["ContentSelection"];
         };
         ModpackChange: {
             path: string;
@@ -2481,8 +2552,8 @@ export interface components {
             announcement?: string;
             /** @enum {string} */
             backup_kind?: "world" | "full";
-            /** @default 300 */
-            countdown_seconds: number;
+            /** @description Missing value defaults to 300 for restart actions; explicit zero is preserved. */
+            countdown_seconds?: number;
         };
         ScheduleRun: {
             id: string;
@@ -2595,6 +2666,42 @@ export interface components {
             languages: {
                 [key: string]: components["schemas"]["ContentLanguageArtifact"];
             };
+        };
+        SelfUpdateStatus: {
+            current_version: string;
+            /** Format: int64 */
+            schema: number;
+            trust_configured: boolean;
+            activation_available: boolean;
+            disabled_reason: string;
+            /** @enum {string} */
+            schema_policy: "unchanged_schema_only";
+        };
+        SelfUpdateCheck: {
+            version: string;
+            platform: string;
+            /** Format: date-time */
+            published_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            binary_sha256: string;
+            /** Format: int64 */
+            schema: number;
+        };
+        SelfUpdateStage: {
+            id: string;
+            version: string;
+            platform: string;
+            binary_sha256: string;
+            /** Format: int64 */
+            schema: number;
+        };
+        SelfUpdateVersionInput: {
+            version: string;
+        };
+        SelfUpdateApplyInput: {
+            stage_id: string;
+            confirm: boolean;
         };
     };
     responses: never;
@@ -8486,6 +8593,240 @@ export interface operations {
                 };
             };
             /** @description Structured error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    selfUpdateStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelfUpdateStatus"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    selfUpdateCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelfUpdateVersionInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelfUpdateCheck"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    selfUpdateStage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelfUpdateVersionInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelfUpdateStage"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    selfUpdateApply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelfUpdateApplyInput"];
+            };
+        };
+        responses: {
+            /** @description Native activation request accepted; service may disconnect during restart. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -129,6 +129,9 @@ type restoreRequest struct {
 }
 
 func (s *Service) Enqueue(ctx context.Context, id string, kind domain.BackupKind, trigger domain.BackupTrigger, actor domain.User) (jobs.Job, error) {
+	return s.enqueue(ctx, "", id, kind, trigger, actor)
+}
+func (s *Service) enqueue(ctx context.Context, key, id string, kind domain.BackupKind, trigger domain.BackupTrigger, actor domain.User) (jobs.Job, error) {
 	if err := authorize(actor); err != nil {
 		return jobs.Job{}, err
 	}
@@ -146,7 +149,11 @@ func (s *Service) Enqueue(ctx context.Context, id string, kind domain.BackupKind
 		return jobs.Job{}, err
 	}
 	raw, _ := json.Marshal(createRequest{kind, trigger})
-	return s.queue.Enqueue(ctx, jobs.Request{InstanceID: id, Kind: "backup_create", Payload: raw, RequestedBy: actor.ID, Cancellable: true})
+	request := jobs.Request{InstanceID: id, Kind: "backup_create", Payload: raw, RequestedBy: actor.ID, Cancellable: true}
+	if key != "" {
+		return s.queue.EnqueueIdempotent(ctx, key, request)
+	}
+	return s.queue.Enqueue(ctx, request)
 }
 func (s *Service) EnqueueRestore(ctx context.Context, id, backupID string, confirmed bool, actor domain.User) (jobs.Job, error) {
 	if err := authorize(actor); err != nil {

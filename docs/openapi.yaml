@@ -7533,6 +7533,293 @@
           }
         }
       }
+    },
+    "/api/v1/system/update": {
+      "get": {
+        "operationId": "selfUpdateStatus",
+        "summary": "Administrator: selfUpdateStatus; explicit configured release trust required; schema-changing upgrades require manual maintenance.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfUpdateStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/update/check": {
+      "post": {
+        "operationId": "selfUpdateCheck",
+        "summary": "Administrator: selfUpdateCheck; explicit configured release trust required; schema-changing upgrades require manual maintenance.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfUpdateCheck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfUpdateVersionInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/update/stage": {
+      "post": {
+        "operationId": "selfUpdateStage",
+        "summary": "Administrator: selfUpdateStage; explicit configured release trust required; schema-changing upgrades require manual maintenance.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfUpdateStage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfUpdateVersionInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/update/apply": {
+      "post": {
+        "operationId": "selfUpdateApply",
+        "summary": "Administrator: selfUpdateApply; explicit configured release trust required; schema-changing upgrades require manual maintenance.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Native activation request accepted; service may disconnect during restart."
+          },
+          "401": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfUpdateApplyInput"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12046,6 +12333,11 @@
             },
             "description": "Task16 administrator upload IDs keyed by exact pack path",
             "maxProperties": 8192
+          },
+          "previous_preview_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "description": "Actor-owned earlier preview of the same exact verified pack; reuses only matching verified private member receipts."
           }
         },
         "additionalProperties": false
@@ -12057,7 +12349,8 @@
           "official_url",
           "name",
           "sha256",
-          "provenance"
+          "provenance",
+          "artifact_selection"
         ],
         "properties": {
           "selection": {
@@ -12092,6 +12385,9 @@
               }
             },
             "additionalProperties": false
+          },
+          "artifact_selection": {
+            "$ref": "#/components/schemas/ContentSelection"
           }
         },
         "additionalProperties": false
@@ -12371,7 +12667,7 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 3600,
-            "default": 300
+            "description": "Missing value defaults to 300 for restart actions; explicit zero is preserved."
           }
         },
         "required": [
@@ -12831,6 +13127,137 @@
           "java_major",
           "languages"
         ]
+      },
+      "SelfUpdateStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "current_version",
+          "schema",
+          "trust_configured",
+          "activation_available",
+          "disabled_reason",
+          "schema_policy"
+        ],
+        "properties": {
+          "current_version": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "trust_configured": {
+            "type": "boolean"
+          },
+          "activation_available": {
+            "type": "boolean"
+          },
+          "disabled_reason": {
+            "type": "string"
+          },
+          "schema_policy": {
+            "type": "string",
+            "enum": [
+              "unchanged_schema_only"
+            ]
+          }
+        }
+      },
+      "SelfUpdateCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "platform",
+          "published_at",
+          "expires_at",
+          "binary_sha256",
+          "schema"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "binary_sha256": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SelfUpdateStage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "version",
+          "platform",
+          "binary_sha256",
+          "schema"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "version": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "binary_sha256": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SelfUpdateVersionInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+          }
+        }
+      },
+      "SelfUpdateApplyInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage_id",
+          "confirm"
+        ],
+        "properties": {
+          "stage_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        }
       }
     },
     "parameters": {

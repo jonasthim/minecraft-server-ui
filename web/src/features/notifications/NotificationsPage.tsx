@@ -41,7 +41,7 @@ export function NotificationsPage() {
   }
   return <Stack style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
     <Group justify="space-between"><Title order={1}>Notifications</Title><Button variant="light" onClick={() => setVersion(v => v + 1)}>Refresh notifications</Button></Group>
-    <Text>Choose Discord, Slack, ntfy, Telegram, a generic webhook or email. New destinations are disabled; save first, then explicitly enable delivery. Events come from completed backup, restore, lifecycle and content jobs. Success notifications are optional.</Text>
+    <Text>Choose Discord, Slack, ntfy, Telegram, a generic webhook or email. New destinations are disabled; save first, then explicitly enable delivery. Events come from verified server crashes and completed backup, restore, lifecycle and content jobs. Success notifications are optional.</Text>
     <Text size="sm">Destination URLs, tokens, SMTP credentials and recipient details stay private. Replace supplies the complete destination; clear erases it and disables delivery. Changes cancel queued messages. No test message is sent by saving.</Text>
     {error && <Alert role="alert" color="red">{error}</Alert>}{success && <Alert role="status" color="green">{success}</Alert>}
     <SimpleGrid cols={{ base: 1, md: 2 }}>{channels.map(channel => <Paper key={channel.id} withBorder p="md"><Stack gap="xs"><Group justify="space-between"><Text fw={600}>{channel.label}</Text><Badge color={channel.enabled ? 'green' : 'gray'}>{channel.enabled ? 'Enabled' : 'Disabled'}</Badge></Group><Text size="sm">{channel.provider} · {channel.configured ? 'Destination stored (masked)' : 'Destination missing'} · {channel.events.join(', ') || 'No events selected'}</Text><Text size="xs">Credentials: {channel.secret_set ? 'stored (masked)' : 'none'} · Recipient: {channel.recipient_set ? 'stored (masked)' : 'none'}</Text><Group><Button variant="light" onClick={() => setSelected(channel)}>Edit {channel.label}</Button><Button color="red" variant="subtle" loading={busy} onClick={() => void remove(channel)}>Delete {channel.label}</Button></Group></Stack></Paper>)}</SimpleGrid>
@@ -60,6 +60,7 @@ function ChannelForm({ channel, onSaved }: { channel: Channel | null; onSaved: (
   const [label, setLabel] = useState(channel?.label || '');
   const [provider, setProvider] = useState<Provider>(channel?.provider || 'discord');
   const [enabled, setEnabled] = useState(channel?.enabled || false);
+  const [crashed, setCrashed] = useState(channel?.events.includes('server_crashed') ?? true);
   const [failed, setFailed] = useState(channel?.events.includes('job_failed') ?? true);
   const [succeeded, setSucceeded] = useState(channel?.events.includes('job_succeeded') ?? false);
   const [allowPrivate, setAllowPrivate] = useState(channel?.allow_private || false);
@@ -71,7 +72,7 @@ function ChannelForm({ channel, onSaved }: { channel: Channel | null; onSaved: (
   const change = <K extends keyof Destination>(key: K, value: Destination[K]) => setDestination(previous => ({ ...previous, [key]: value }));
   async function save(event: React.FormEvent) {
     event.preventDefault(); setBusy(true); setError('');
-    const input: Input = { label, provider, enabled: !!channel && enabled && !clear, events: [...(failed ? ['job_failed' as const] : []), ...(succeeded ? ['job_succeeded' as const] : [])], allow_private: allowPrivate, clear };
+    const input: Input = { label, provider, enabled: !!channel && enabled && !clear, events: [...(failed ? ['job_failed' as const] : []), ...(succeeded ? ['job_succeeded' as const] : []), ...(crashed ? ['server_crashed' as const] : [])], allow_private: allowPrivate, clear };
     if (replace && !clear) input.replace = provider === 'email' ? { smtp_host: destination.smtp_host, smtp_port: destination.smtp_port, smtp_user: destination.smtp_user, smtp_password: destination.smtp_password, recipient: destination.recipient, from: destination.from, tls_mode: destination.tls_mode } : { endpoint: destination.endpoint, secret: provider === 'webhook' || provider === 'ntfy' ? destination.secret : '', recipient: provider === 'telegram' ? destination.recipient : '' };
     try { await api<Channel>('/notifications/channels/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify(input) }); setDestination(empty()); onSaved(); }
     catch (error) { setError(message(error)); } finally { setBusy(false); }
@@ -82,6 +83,7 @@ function ChannelForm({ channel, onSaved }: { channel: Channel | null; onSaved: (
     <TextInput label="Destination ID" description="Lowercase letter, then up to 47 lowercase letters, digits, underscores or hyphens." required pattern={'[a-z][a-z0-9_\\-]{0,47}'} value={id} disabled={!!channel} onChange={e => setId(e.currentTarget.value)} />
     <TextInput label="Destination label" required maxLength={80} value={label} onChange={e => setLabel(e.currentTarget.value)} />
     <Select label="Provider" required data={providers} value={provider} onChange={value => { setProvider(value as Provider); setReplace(true); setDestination(empty()); }} />
+    <Checkbox label="Notify when a verified server crash occurs" checked={crashed} onChange={e => setCrashed(e.currentTarget.checked)} />
     <Checkbox label="Notify when an eligible job fails" checked={failed} onChange={e => setFailed(e.currentTarget.checked)} />
     <Checkbox label="Notify when an eligible job succeeds" checked={succeeded} onChange={e => setSucceeded(e.currentTarget.checked)} />
     <Checkbox label="Allow private network destination (administrator host scope)" description="Needed for self-hosted ntfy, webhooks or SMTP. Link-local metadata destinations remain blocked." checked={allowPrivate} onChange={e => setAllowPrivate(e.currentTarget.checked)} />

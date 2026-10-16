@@ -267,6 +267,9 @@ type commandRequest struct {
 }
 
 func (s *Service) EnqueueCommand(ctx context.Context, id, text string, actor domain.User) (jobs.Job, error) {
+	return s.enqueueCommand(ctx, "", id, text, actor)
+}
+func (s *Service) enqueueCommand(ctx context.Context, key, id, text string, actor domain.User) (jobs.Job, error) {
 	if actor.Disabled || actor.ID <= 0 {
 		return jobs.Job{}, domain.E(domain.CodeForbidden, "active operator access required")
 	}
@@ -291,7 +294,11 @@ func (s *Service) EnqueueCommand(ctx context.Context, id, text string, actor dom
 	if err != nil {
 		return jobs.Job{}, err
 	}
-	return s.queue.Enqueue(ctx, jobs.Request{InstanceID: id, Kind: "console_command", Payload: payload, RequestedBy: actor.ID, Cancellable: true})
+	request := jobs.Request{InstanceID: id, Kind: "console_command", Payload: payload, RequestedBy: actor.ID, Cancellable: true}
+	if key != "" {
+		return s.queue.EnqueueIdempotent(ctx, key, request)
+	}
+	return s.queue.Enqueue(ctx, request)
 }
 func (s *Service) runCommand(ctx context.Context, e *jobs.Execution) error {
 	var input commandRequest

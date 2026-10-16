@@ -5,9 +5,7 @@ package jobs
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -185,6 +183,9 @@ func (s *Service) Stop(ctx context.Context) error {
 	}
 }
 func (s *Service) Enqueue(ctx context.Context, r Request) (Job, error) {
+	return s.enqueue(ctx, r, "")
+}
+func (s *Service) enqueue(ctx context.Context, r Request, key string) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.started || s.stopping || s.ctx.Err() != nil {
@@ -215,21 +216,15 @@ func (s *Service) Enqueue(ctx context.Context, r Request) (Job, error) {
 			return Job{}, fmt.Errorf("check job instance: %w", err)
 		}
 	}
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return Job{}, fmt.Errorf("job id: %w", err)
-	}
-	id := hex.EncodeToString(raw[:])
-	var instance any
-	if r.InstanceID != "" {
-		instance = r.InstanceID
-	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs(id,instance_id,kind,state,created_at,payload,requested_by,cancellable) VALUES(?,?,?,'queued',?,?,?,?)`, id, instance, r.Kind, stamp(), string(r.Payload), r.RequestedBy, r.Cancellable)
+	id, err := s.insertAdmission(ctx, r, key)
 	if err != nil {
-		return Job{}, fmt.Errorf("enqueue job: %w", err)
+		return Job{}, err
 	}
 	j, err := s.Get(ctx, id)
 	if err != nil {
+		if key != "" && domain.AsError(err).Code == domain.CodeNotFound {
+			return j, domain.E(domain.CodeConflict, "admitted job history was retired; admission cannot be repeated")
+		}
 		return j, err
 	}
 	s.publish(j)
