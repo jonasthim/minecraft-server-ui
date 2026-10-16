@@ -66,3 +66,21 @@ Normal console cancellation errors are ignored only when the owning context was 
 Final scoped evidence: `go test ./internal/lifecycle ./internal/instance ./internal/launcher ./internal/supervisor ./internal/api ./cmd/minecraft-ui` passed after all startup/hook/diagnostic changes. Final `go test -race` and `go vet` over the same six packages passed. `GOOS=windows GOARCH=amd64 go build -o /home/thim/.cache/dilla-tmp/minecraft-ui-lifecycle-windows.exe ./cmd/minecraft-ui` passed; this is compilation only. Final UI `npm --prefix web run typecheck`, `npm --prefix web run lint`, and `npm --prefix web run build` passed after the pattern fix. The final embedded Linux preview binary was rebuilt at `/home/thim/.cache/dilla-tmp/minecraft-ui-lifecycle-preview`; actual browser follow-up and package acceptance remain integrator-owned.
 
 Final lifecycle-owned files: `internal/lifecycle/{service,operations,verify,config_activation,sync_linux,sync_other}.go`, associated journal/operation/config-activation tests; `internal/api/lifecycle_handlers{,_test}.go`; migration `00005_lifecycle.sql`; `docs/api/lifecycle.yaml`; `web/src/features/lifecycle/LifecyclePanel.tsx`; this report. Delegated cross-package files: `cmd/minecraft-ui/main.go`, `main_lifecycle_test.go`, `web/src/App.tsx`, `web/src/features/instances/InstancesPage.tsx`, `internal/instance/service.go`, `reconcile.go` (single startup guard route), new `activation.go`/`activation_test.go`, `internal/launcher/run.go`, new `activation.go`/`activation_test.go`, and the three-line pending check in `internal/supervisor/supervisor.go`. Jobs files and shared schema generation belong to their assigned owners.
+
+## Lifecycle review fix round 1 — SQLite commit durability
+
+BASE `a108fac`; one Important review finding addressed. The on-disk database used WAL with `synchronous=NORMAL`. SQLite explicitly permits a committed WAL transaction to be lost on power failure in this mode. That undermines the ordering between the SQL activation/config journal and the separately synced launch/blocker files. The change uses `synchronous=FULL`; existing lifecycle/config file ordering is unchanged. Primary reference: [SQLite synchronous pragma](https://www.sqlite.org/pragma.html#pragma_synchronous).
+
+Only `internal/db/db.go`, `internal/db/db_test.go`, and this report changed in this fix pass. No migration, dependency, API/UI, lifecycle state-machine, native service, or catalog changes were made by this worker. Integrator review remains required; no staging or commits were performed.
+
+`Open` now retains WAL, foreign keys ON and the 5000ms busy timeout, and requests FULL. A private connector wraps the existing installed SQLite connector and reads back actual `journal_mode=wal`, `synchronous=2`, `foreign_keys=1` and `busy_timeout=5000` before each physical disk connection enters the pool. Missing/unexpected pragma results or mismatched values close and reject that connection. Driver DSN configuration and verification both run on replacement connections. The one-open-connection contract remains intact. `OpenMemory` retains its original direct SQLite opening and isolated memory-journal behavior.
+
+Evidence:
+
+- RED: `go test ./internal/db -run '^TestOnDiskDurabilityAcrossConnectionReplacementAndReopen$' -count=1` failed against the old production setting with `synchronous=1 want2`.
+- GREEN: `go test ./internal/db -count=1` passed. The actual disk-file regression verifies WAL/FULL/foreign-key/busy-timeout and one connection; commits a row; forces `driver.ErrBadConn` and verifies the physical connection is replaced; verifies the settings again; closes/reopens and checks settings plus the committed row. Negative tests use actual disk files to refuse DELETE journaling, NORMAL synchronization, disabled foreign keys and an incorrect busy timeout. Memory-journal/single-connection/isolation regressions pass.
+- `go test -race ./internal/db -count=1`: PASS.
+- `go vet ./internal/db`: PASS.
+- `git diff --check`: PASS.
+
+This verifies SQLite's configured policy, rejection behavior, physical connection replacement and ordinary reopen persistence. It does not simulate or qualify power failure, filesystem/hardware flush guarantees, native Windows execution or real Minecraft behavior. UI and broad suites were not repeated for this database-only fix.
