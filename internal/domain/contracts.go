@@ -159,7 +159,10 @@ type InstanceRepository interface {
 type DistributionProvider interface {
 	Flavor() Flavor
 	Resolve(context.Context, VersionSelection) (InstallPlan, error)
-	Install(context.Context, string, InstallPlan, JavaRuntime, io.Writer) (LaunchSpec, error)
+	// Install accepts a validated instance ID, not a caller supplied directory.
+	// Providers derive canonical paths and return an activation proposal; the
+	// lifecycle coordinator owns stopped-state, backup, EULA and persistence gates.
+	Install(ctx context.Context, instanceID string, plan InstallPlan, runtime JavaRuntime, progress io.Writer) (LaunchSpec, error)
 }
 type ProcessSupervisor interface {
 	Start(context.Context, string, LaunchSpec) (ProcessIdentity, error)
