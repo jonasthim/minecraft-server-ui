@@ -1,7 +1,9 @@
 package players
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/jonasthim/minecraft-server-ui/internal/console"
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
@@ -333,5 +335,50 @@ func TestHistoryRejectsForeignInstanceCursorsWithGap(t *testing.T) {
 	page, err := s.History(t.Context(), "test", 2, 10)
 	if err != nil || !page.Gap || len(page.Sessions) != 2 {
 		t.Fatalf("foreign cursor silently skipped rows %+v %v", page, err)
+	}
+}
+
+func TestNullOperatorFieldsRejectReadsAndDoNotStageMutation(t *testing.T) {
+	for _, field := range []string{"level", "bypassesPlayerLimit"} {
+		t.Run(field, func(t *testing.T) {
+			dir := t.TempDir()
+			fields := map[string]any{"uuid": "00000000-0000-0000-0000-000000000001", "name": "Alex", "level": 4, "bypassesPlayerLimit": false}
+			fields[field] = nil
+			entry, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := append(append([]byte("["), entry...), ']')
+			file := filepath.Join(dir, "ops.json")
+			if err = os.WriteFile(file, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			root, err := os.OpenRoot(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			if _, err = savedList(t.Context(), root, "operators"); err == nil {
+				t.Error("null operator permission field accepted by saved read")
+			}
+			err = mutateSaved(t.Context(), root, console.PlayerMutation{Action: "op", UUID: "00000000-0000-0000-0000-000000000002", Name: "Steve"}, time.Now())
+			if err == nil {
+				t.Error("null operator permission field survived another OP mutation")
+			}
+			current, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(original, current) {
+				t.Errorf("malformed ops file changed: %s", current)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 {
+				t.Fatalf("null field rejection left staging artifacts: %+v", entries)
+			}
+		})
 	}
 }

@@ -140,15 +140,15 @@ func (s *Service) runMutation(ctx context.Context, e *jobs.Execution) (result er
 			if err != nil {
 				return err
 			}
-			root, err := os.OpenRoot(dirs.Server)
+			root, err := openPlayerServer(dirs.Server)
 			if err != nil {
 				return err
 			}
 			defer root.Close()
-			if err = mutateSaved(ctx, root, req.PlayerMutation, time.Now()); err != nil {
+			if err = root.mutate(ctx, req.PlayerMutation, time.Now()); err != nil {
 				return err
 			}
-			list, err := savedList(ctx, root, mutationKind(req.Action))
+			list, err := root.readList(ctx, mutationKind(req.Action))
 			if err != nil {
 				return domain.E(domain.CodeUnavailable, "list change may have applied; saved readback unavailable")
 			}
@@ -195,12 +195,12 @@ func (s *Service) runMutation(ctx context.Context, e *jobs.Execution) (result er
 				if err != nil {
 					return err
 				}
-				root, err := os.OpenRoot(dirs.Server)
+				root, err := openPlayerServer(dirs.Server)
 				if err != nil {
 					return domain.E(domain.CodeUnavailable, "operation acknowledged; saved list readback unavailable")
 				}
 				defer root.Close()
-				list, err := savedList(ctx, root, mutationKind(req.Action))
+				list, err := root.readList(ctx, mutationKind(req.Action))
 				if err != nil {
 					return domain.E(domain.CodeUnavailable, "operation acknowledged; saved list readback unavailable")
 				}
@@ -261,12 +261,12 @@ func (s *Service) Lists(ctx context.Context, id, kind string) (console.PlayerLis
 				return domain.E(domain.CodeUnavailable, "native generation unavailable for saved list snapshot")
 			}
 		}
-		root, err := os.OpenRoot(dirs.Server)
+		root, err := openPlayerServer(dirs.Server)
 		if err != nil {
 			return domain.E(domain.CodeUnavailable, "saved list directory unavailable")
 		}
 		defer root.Close()
-		list, err = savedList(ctx, root, kind)
+		list, err = root.readList(ctx, kind)
 		if err != nil {
 			return err
 		}

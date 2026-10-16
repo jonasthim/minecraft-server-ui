@@ -89,3 +89,28 @@ Artifacts: `/home/thim/.cache/dilla-tmp/task11-players-mobile390.png`, `task11-p
 ## Remaining review/qualification
 
 Independent integrator review and ledger acceptance are required. Real Minecraft/client evidence remains pending across the full required version/layout/flavor matrix, including actual successful player events/mutations, offline-mode UUID behavior and loader/plugin overrides. Native Linux service/systemd and Windows execution/durability qualification remain pending. Legacy parsers intentionally reject unfamiliar/localized/plugin feedback rather than reporting success. No positions are supplied to maps/telemetry, and no release support combination is claimed from fixtures or cross-compilation.
+
+## Fix round 1 — independent review findings (2026-10-16)
+
+Scope: two Important findings from independent review of `5a664de`. This round changes only `internal/players/**` and this report. Existing console/session/RPC files, API/generated types, shared composition, and peer world/map/backup work remain untouched. No staging, commit, subagents, Minecraft/EULA actions or host service changes occurred. These fixes are submitted for independent re-review, not package acceptance.
+
+1. **Ancestor replacement before player list root acquisition.** The three saved-list paths previously called `os.OpenRoot(dirs.Server)` after path validation. An instance ancestor replaced with a symlink in that gap could redirect viewer reads, legacy acknowledgement readback, or offline writes outside the instance. Regressions against that absolute-opening behavior reproduced exposure of an outside saved identity and a changed outside whitelist. `root.go` now follows the reviewed mapdata `42c5114` policy: anchor at the filesystem root/local Windows drive, traverse one pinned component at a time, compare pre-open/current/opened identities, retain ancestor handles and verify the full chain before returning the root. Symlink/reparse directories and UNC/device/extended volumes are refused. All three service paths use this boundary. Read results require verification before and after reading; offline mutation verifies before reading/staging, immediately before activation, and after mutation/readback. A swapped ancestor cannot retarget the pinned handles. If a change is observed, the operation fails honestly rather than exposing outside bytes or claiming a successful mutation.
+
+   Deterministic evidence covers substitution after `Paths.For` for both reads and offline writes; substitution after root opening (pinned reads still reach the original tree and final verification fails); substitution after staging before rename (activation is refused, inside/outside files stay byte-identical, staging is removed); and the actual `Service.Lists` boundary, using its existing native identity dependency to replace the ancestor after path validation and before opening. The initial regressions failed with `OutsideSecret` exposure, outside whitelist mutation, and missing final ancestor rejection; all now pass. Native Windows execution remains pending; the Windows directory policy checks reparse attributes and was cross-compiled only.
+
+2. **Null OP fields accepted as zero/false.** Separate regressions for `level:null` and `bypassesPlayerLimit:null` reproduced successful saved reads and activation of another OP entry while preserving the malformed original entry. Saved OP scalar decoding now uses presence/null-aware pointers and requires non-null, correctly typed values before staging. Each regression asserts read rejection, mutation rejection, unchanged original bytes and absence of staging artifacts. Both failed before the fix and pass afterward. Static inspection of the approved official 26.3 `ServerOpListEntry` confirmed that present native fields invoke `getAsInt`/`getAsBoolean`, rather than treating JSON null as a valid zero/false permission value. No game was executed.
+
+Files: `internal/players/root.go`, `root_nonwindows.go`, `root_windows.go`, `root_test.go`, `files.go`, `service.go`, `players_test.go`, and this report. The public API/DTO contract is unchanged.
+
+Scoped verification after both fixes:
+
+```text
+go test ./internal/players -run 'TestListsServiceRejectsSwap|TestSavedListsRejectAncestor|TestPlayerServerRootPins|TestOfflineActivation|TestNullOperator' -count=1
+go test ./internal/players -count=1
+go test -race ./internal/players -count=1
+go vet ./internal/players
+GOOS=windows GOARCH=amd64 go test -c -o /home/thim/.cache/dilla-tmp/task11-players-fix1-windows.test.exe ./internal/players
+git diff --check -- internal/players docs/reports/task11.md
+```
+
+No broad suite or repeat browser run was needed for these internal filesystem/decoder fixes; the existing browser evidence does not substitute for the new deterministic regressions. Integrator re-review and all existing real game/native platform qualification gates remain required.

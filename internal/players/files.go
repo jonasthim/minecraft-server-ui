@@ -128,19 +128,27 @@ func savedList(ctx context.Context, root *os.Root, kind string) (console.PlayerL
 	for _, p := range entries {
 		entry := console.PlayerListEntry{Player: console.PlayerIdentity{UUID: p.uuid, Name: p.name, Authority: "saved_uuid", Source: "saved_native_json"}}
 		if kind == "operators" {
-			var level int
-			var bypass bool
-			if json.Unmarshal(p.fields["level"], &level) != nil || level < 0 || level > 4 || json.Unmarshal(p.fields["bypassesPlayerLimit"], &bypass) != nil {
+			var level *int
+			var bypass *bool
+			if json.Unmarshal(p.fields["level"], &level) != nil || level == nil || *level < 0 || *level > 4 || json.Unmarshal(p.fields["bypassesPlayerLimit"], &bypass) != nil || bypass == nil {
 				return out, domain.E(domain.CodeUnavailable, "saved operator permission fields are malformed")
 			}
-			entry.PermissionLevel = &level
-			entry.BypassesPlayerLimit = &bypass
+			entry.PermissionLevel = level
+			entry.BypassesPlayerLimit = bypass
 		}
 		out.Entries = append(out.Entries, entry)
 	}
 	return out, nil
 }
-func mutateSaved(ctx context.Context, root *os.Root, m console.PlayerMutation, now time.Time) (resultErr error) {
+func mutateSaved(ctx context.Context, root *os.Root, m console.PlayerMutation, now time.Time) error {
+	return mutateSavedGuarded(ctx, root, m, now, nil)
+}
+func mutateSavedGuarded(ctx context.Context, root *os.Root, m console.PlayerMutation, now time.Time, verify func() error) (resultErr error) {
+	if verify != nil {
+		if err := verify(); err != nil {
+			return err
+		}
+	}
 	if e := console.ValidatePlayerMutation(m); e != nil {
 		return e
 	}
@@ -238,6 +246,11 @@ func mutateSaved(ctx context.Context, root *os.Root, m console.PlayerMutation, n
 	if bytes.Equal(original, out.Bytes()) || (!add && idx < 0) || (add && idx >= 0 && m.Action != "op") {
 		return nil
 	}
+	if verify != nil {
+		if err := verify(); err != nil {
+			return err
+		}
+	}
 	var nonce [12]byte
 	if _, e = rand.Read(nonce[:]); e != nil {
 		return e
@@ -269,6 +282,11 @@ func mutateSaved(ctx context.Context, root *os.Root, m console.PlayerMutation, n
 	}
 	if e = ctx.Err(); e != nil {
 		return e
+	}
+	if verify != nil {
+		if err := verify(); err != nil {
+			return err
+		}
 	}
 	if e = root.Rename(tmp, name); e != nil {
 		return fmt.Errorf("activate saved player list: %w", e)
