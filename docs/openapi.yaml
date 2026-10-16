@@ -1954,6 +1954,92 @@
           }
         }
       }
+    },
+    "/api/v1/instance-settings/capabilities": {
+      "get": {
+        "operationId": "instanceSettingsCapabilities",
+        "tags": [
+          "instances"
+        ],
+        "summary": "Viewer: reviewed version-family setting mappings; desired values are not applied/effective claims.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "flavor",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Flavor"
+            }
+          },
+          {
+            "name": "minecraft_version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reviewed mapping for requested version family",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "settings": {
+                      "$ref": "#/components/schemas/InstanceSettingsProjection"
+                    }
+                  },
+                  "required": [
+                    "settings"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role/token scope denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unsupported version/flavor family",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3412,13 +3498,17 @@
           "provisioning": {
             "type": "string",
             "description": "Truthful persisted provisioning state; creating metadata does not install a server."
+          },
+          "settings": {
+            "$ref": "#/components/schemas/InstanceSettingsProjection"
           }
         },
         "required": [
           "instance",
           "config",
           "eula",
-          "provisioning"
+          "provisioning",
+          "settings"
         ],
         "additionalProperties": false
       },
@@ -3432,6 +3522,148 @@
         },
         "required": [
           "confirmation"
+        ],
+        "additionalProperties": false
+      },
+      "InstanceSettingCapability": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "Whether the reviewed native setting mapping exists; does not assert runtime application."
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "server_property",
+              "runtime_gamerule",
+              "unsupported"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "available",
+          "method",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "InstanceDesiredRuntimeSetting": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "boolean_gamerule"
+            ]
+          },
+          "rule": {
+            "type": "string",
+            "description": "Exact version-specific native gamerule identifier; discover before use."
+          },
+          "value": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unverified"
+            ]
+          },
+          "supported": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "format": "uri"
+          },
+          "applicability": {
+            "type": "object",
+            "properties": {
+              "flavor": {
+                "$ref": "#/components/schemas/Flavor"
+              },
+              "minecraft_version": {
+                "type": "string"
+              },
+              "loader_version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "flavor",
+              "minecraft_version"
+            ],
+            "additionalProperties": false
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "all_discovered_worlds"
+            ]
+          },
+          "verification": {
+            "type": "string",
+            "enum": [
+              "native_rule_readback"
+            ]
+          },
+          "gameplay_effect": {
+            "type": "string",
+            "enum": [
+              "not_verified"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "rule",
+          "value",
+          "status",
+          "supported",
+          "reason",
+          "source",
+          "applicability",
+          "scope",
+          "verification",
+          "gameplay_effect"
+        ],
+        "additionalProperties": false
+      },
+      "InstanceSettingsProjection": {
+        "type": "object",
+        "properties": {
+          "legacy_numeric_enums": {
+            "type": "boolean"
+          },
+          "simulation_distance": {
+            "$ref": "#/components/schemas/InstanceSettingCapability"
+          },
+          "pvp": {
+            "$ref": "#/components/schemas/InstanceSettingCapability"
+          },
+          "desired_runtime": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceDesiredRuntimeSetting"
+            }
+          },
+          "seed_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "legacy_numeric_enums",
+          "simulation_distance",
+          "pvp",
+          "desired_runtime",
+          "seed_reason"
         ],
         "additionalProperties": false
       }

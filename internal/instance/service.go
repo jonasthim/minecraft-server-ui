@@ -42,16 +42,24 @@ type Detail struct {
 	Config       domain.InstanceConfig `json:"config"`
 	EULA         EULA                  `json:"eula"`
 	Provisioning string                `json:"provisioning"`
+	Settings     SettingsProjection    `json:"settings"`
 }
 type Service struct {
-	db    *sql.DB
-	paths Paths
-	guard MutationGuard
-	mu    sync.Mutex
+	db       *sql.DB
+	paths    Paths
+	guard    MutationGuard
+	jobGuard JobMutationGuard
+	mu       sync.Mutex
 }
 
-func New(database *sql.DB, paths Paths, guard MutationGuard) *Service {
-	return &Service{db: database, paths: paths, guard: guard}
+func New(database *sql.DB, paths Paths, guard MutationGuard, options ...Option) *Service {
+	s := &Service{db: database, paths: paths, guard: guard}
+	for _, option := range options {
+		if option != nil {
+			option(s)
+		}
+	}
+	return s
 }
 func adminOnly(u domain.User) error {
 	if u.Disabled || u.ID <= 0 || u.Role != domain.RoleAdmin {
@@ -133,7 +141,7 @@ func scanDetail(row scanner) (Detail, error) {
 		}
 		d.EULA.AcceptedAt = &t
 	}
-	return d, nil
+	return detailWithSettings(d), nil
 }
 func (s *Service) List(ctx context.Context) ([]Detail, error) {
 	rows, err := s.db.QueryContext(ctx, selectDetail+` ORDER BY i.created_at,i.id`)
@@ -293,7 +301,7 @@ func (s *Service) Create(ctx context.Context, actor domain.User, d Draft) (Detai
 		return Detail{}, fmt.Errorf("commit instance creation: %w", err)
 	}
 	committed = true
-	return Detail{d.Instance, d.Config, eula, "not_installed"}, nil
+	return detailWithSettings(Detail{Instance: d.Instance, Config: d.Config, EULA: eula, Provisioning: "not_installed"}), nil
 }
 func (s *Service) mutate(ctx context.Context, id string, fn func() error) error {
 	if err := validID(id); err != nil {
@@ -434,7 +442,7 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 			restoreErr := rollbackConfig(cleanup, root, originalFiles)
 			return errors.Join(fmt.Errorf("commit configuration: %w", err), restoreErr)
 		}
-		result = Detail{d.Instance, d.Config, eula, previous.Provisioning}
+		result = detailWithSettings(Detail{Instance: d.Instance, Config: d.Config, EULA: eula, Provisioning: previous.Provisioning})
 		return clearConfigIntent(root)
 	})
 	return result, err
@@ -568,3 +576,5 @@ func atomicFile(ctx context.Context, root *os.Root, path string, data []byte) er
 	}
 	return syncDirectory(root, filepath.Dir(path))
 }
+
+func detailWithSettings(d Detail) Detail { d.Settings = SettingsFor(d.Instance, d.Config); return d }

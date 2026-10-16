@@ -97,13 +97,40 @@ func propertyEscape(s string) string {
 	}
 	return b.String()
 }
+
+// Properties encodes reviewed vanilla-derived version semantics. Numeric enum
+// mappings were checked against the hash-verified official 1.12.2 server's tz
+// and ams enum constructors. Named values arrived in 1.14; independent simulation
+// distance in 1.18; native PVP moved to a runtime rule in 1.21.9. See primary
+// evidence and distribution caveats in docs/reports/task09-lifecycle-session.md.
 func Properties(i domain.Instance, c domain.InstanceConfig) []byte {
 	values := map[string]string{}
 	for k, v := range c.Extra {
-		values[k] = v
+		if !forbiddenProperty(k) {
+			values[k] = v
+		}
 	}
 	for k, v := range map[string]string{"motd": c.MOTD, "difficulty": c.Difficulty, "gamemode": c.GameMode, "max-players": strconv.Itoa(c.MaxPlayers), "online-mode": strconv.FormatBool(c.OnlineMode), "pvp": strconv.FormatBool(c.PVP), "view-distance": strconv.Itoa(c.ViewDistance), "simulation-distance": strconv.Itoa(c.SimulationDistance), "level-name": c.LevelName, "level-seed": c.LevelSeed, "server-port": strconv.Itoa(i.GamePort), "server-ip": "", "enable-rcon": "false", "enable-query": "false", "management-server-enabled": "false"} {
 		values[k] = v
+	}
+	version, valid := parseSettingsVersion(i.MinecraftVersion)
+	if valid {
+		if !version.atLeast(1, 14, 0) {
+			values["difficulty"] = map[string]string{"peaceful": "0", "easy": "1", "normal": "2", "hard": "3"}[c.Difficulty]
+			values["gamemode"] = map[string]string{"survival": "0", "creative": "1", "adventure": "2", "spectator": "3"}[c.GameMode]
+		}
+		if !version.atLeast(1, 18, 0) {
+			delete(values, "simulation-distance")
+		}
+		if version.atLeast(1, 21, 9) {
+			delete(values, "pvp")
+		} else {
+			delete(values, "management-server-enabled")
+		}
+	} else {
+		delete(values, "simulation-distance")
+		delete(values, "pvp")
+		delete(values, "management-server-enabled")
 	}
 	keys := make([]string, 0, len(values))
 	for k := range values {

@@ -470,6 +470,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instance-settings/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: reviewed version-family setting mappings; desired values are not applied/effective claims. */
+        get: operations["instanceSettingsCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -855,10 +872,49 @@ export interface components {
             eula: components["schemas"]["InstanceEULA"];
             /** @description Truthful persisted provisioning state; creating metadata does not install a server. */
             provisioning: string;
+            settings: components["schemas"]["InstanceSettingsProjection"];
         };
         InstanceDelete: {
             /** @description Exact instance id; confirms permanent removal of server, world, logs and local backups. */
             confirmation: string;
+        };
+        InstanceSettingCapability: {
+            /** @description Whether the reviewed native setting mapping exists; does not assert runtime application. */
+            available: boolean;
+            /** @enum {string} */
+            method: "server_property" | "runtime_gamerule" | "unsupported";
+            reason: string;
+        };
+        InstanceDesiredRuntimeSetting: {
+            /** @enum {string} */
+            kind: "boolean_gamerule";
+            /** @description Exact version-specific native gamerule identifier; discover before use. */
+            rule: string;
+            value: boolean;
+            /** @enum {string} */
+            status: "unverified";
+            supported: boolean;
+            reason: string;
+            /** Format: uri */
+            source: string;
+            applicability: {
+                flavor: components["schemas"]["Flavor"];
+                minecraft_version: string;
+                loader_version?: string;
+            };
+            /** @enum {string} */
+            scope: "all_discovered_worlds";
+            /** @enum {string} */
+            verification: "native_rule_readback";
+            /** @enum {string} */
+            gameplay_effect: "not_verified";
+        };
+        InstanceSettingsProjection: {
+            legacy_numeric_enums: boolean;
+            simulation_distance: components["schemas"]["InstanceSettingCapability"];
+            pvp: components["schemas"]["InstanceSettingCapability"];
+            desired_runtime: components["schemas"]["InstanceDesiredRuntimeSetting"][];
+            seed_reason: string;
         };
     };
     responses: never;
@@ -2610,6 +2666,58 @@ export interface operations {
             };
             /** @description Native lifecycle verification unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    instanceSettingsCapabilities: {
+        parameters: {
+            query: {
+                flavor: components["schemas"]["Flavor"];
+                minecraft_version: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reviewed mapping for requested version family */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        settings: components["schemas"]["InstanceSettingsProjection"];
+                    };
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role/token scope denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unsupported version/flavor family */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

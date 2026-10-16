@@ -10,6 +10,16 @@ import (
 
 // MountInstances belongs inside the authenticated /api/v1 group with CSRF.
 func MountInstances(r chi.Router, s *instance.Service) {
+	r.With(auth.RequireRole(domain.RoleViewer)).Get("/instance-settings/capabilities", func(w http.ResponseWriter, r *http.Request) {
+		selection := domain.VersionSelection{Flavor: domain.Flavor(r.URL.Query().Get("flavor")), MinecraftVersion: r.URL.Query().Get("minecraft_version")}
+		settings, err := instance.SettingsCapabilities(selection)
+		if err != nil {
+			WriteError(w, err)
+			return
+		}
+		WriteJSON(w, 200, map[string]any{"settings": settings})
+	})
+
 	r.With(auth.RequireRole(domain.RoleViewer)).Get("/instances", func(w http.ResponseWriter, r *http.Request) {
 		v, e := s.List(r.Context())
 		if e != nil {

@@ -102,3 +102,37 @@ func TestInstancesRoleMatrixAndEmptyDBCRUD(t *testing.T) {
 		t.Fatal(count, e)
 	}
 }
+
+func TestInstanceSettingsCapabilitiesRoleAndVersionAvailability(t *testing.T) {
+	database, err := db.OpenMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	paths, err := instance.NewPaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := instance.New(database, paths, instanceTestGuard{})
+	r := chi.NewRouter()
+	MountInstances(r, s)
+	for _, test := range []struct {
+		role    domain.Role
+		version string
+		want    int
+	}{{"", "1.12.2", 401}, {domain.RoleViewer, "1.12.2", 200}, {domain.RoleOperator, "1.18", 200}, {domain.RoleAdmin, "1.21.9", 200}, {domain.RoleViewer, "snapshot", 422}} {
+		var user *domain.User
+		if test.role != "" {
+			user = &domain.User{ID: 1, Role: test.role}
+		}
+		w := httptest.NewRecorder()
+		req := userRequest("GET", "/instance-settings/capabilities?flavor=vanilla&minecraft_version="+test.version, user)
+		r.ServeHTTP(w, req)
+		if w.Code != test.want {
+			t.Fatal(test, w.Code, w.Body.String())
+		}
+		if test.want == 200 && (!strings.Contains(w.Body.String(), `"settings"`) || strings.Contains(w.Body.String(), `"status":"applied"`)) {
+			t.Fatal(w.Body.String())
+		}
+	}
+}
