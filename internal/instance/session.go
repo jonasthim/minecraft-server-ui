@@ -2,12 +2,12 @@ package instance
 
 import (
 	"context"
-	"os"
 	"sync"
 	"sync/atomic"
 
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
+	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 )
 
 // JobMutationGuard must compose private execution.WithInstanceMutation followed
@@ -46,39 +46,44 @@ func (s *Service) WithStoppedJob(ctx context.Context, execution *jobs.Execution,
 		return err
 	}
 	return s.jobGuard.WithStoppedForJob(ctx, execution, func(id string) error {
-		if err := validID(id); err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := s.recoverDeletion(ctx, id); err != nil {
-			return err
-		}
-		if _, err := s.Get(ctx, id); err != nil {
-			return err
-		}
-		paths, err := s.paths.For(id)
-		if err != nil {
-			return err
-		}
-		root, err := os.OpenRoot(paths.Root)
-		if err != nil {
-			return err
-		}
-		err = s.verifyOwner(ctx, id, root)
-		root.Close()
-		if err != nil {
-			return err
-		}
-		session := &StoppedSession{}
-		scope := &stoppedScope{owner: session, ctx: ctx, service: s, id: id}
-		session.scope = scope
-		scope.active.Store(true)
-		defer func() { scope.active.Store(false); scope.mu.Lock(); scope.mu.Unlock() }()
-		return fn(session)
+		return s.withStoppedSession(ctx, id, fn)
 	})
 }
+
+func (s *Service) withStoppedSession(ctx context.Context, id string, fn func(*StoppedSession) error) error {
+	if err := validID(id); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.recoverDeletion(ctx, id); err != nil {
+		return err
+	}
+	if _, err := s.Get(ctx, id); err != nil {
+		return err
+	}
+	paths, err := s.paths.For(id)
+	if err != nil {
+		return err
+	}
+	root, err := safepath.OpenRoot(ctx, paths.Root)
+	if err != nil {
+		return err
+	}
+	err = s.verifyOwner(ctx, id, root)
+	root.Close()
+	if err != nil {
+		return err
+	}
+	session := &StoppedSession{}
+	scope := &stoppedScope{owner: session, ctx: ctx, service: s, id: id}
+	session.scope = scope
+	scope.active.Store(true)
+	defer func() { scope.active.Store(false); scope.mu.Lock(); scope.mu.Unlock() }()
+	return fn(session)
+}
+
 func (s *StoppedSession) enter(ctx context.Context) (*stoppedScope, func(), error) {
 	if s == nil || s.scope == nil || s.scope.owner != s || !s.scope.active.Load() {
 		return nil, nil, domain.E(domain.CodeForbidden, "stopped session is invalid or expired")

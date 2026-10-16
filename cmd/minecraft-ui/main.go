@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jonasthim/minecraft-server-ui/internal/api"
 	"github.com/jonasthim/minecraft-server-ui/internal/auth"
+	"github.com/jonasthim/minecraft-server-ui/internal/backup"
 	"github.com/jonasthim/minecraft-server-ui/internal/catalog"
 	"github.com/jonasthim/minecraft-server-ui/internal/config"
 	"github.com/jonasthim/minecraft-server-ui/internal/console"
@@ -123,6 +124,11 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	operations := lifecycle.New(lifecycle.Config{DB: database, DataDir: cfg.DataDir, Instances: instances, Jobs: queue, Native: native, Runtime: managedruntime.New(cfg.DataDir, nil), Console: control, Providers: []domain.DistributionProvider{vanilla.New(cfg.DataDir, nil), paper.New(cfg.DataDir, nil), fabric.New(cfg.DataDir, nil), forge.New(cfg.DataDir, nil), neoforge.New(cfg.DataDir, nil)}})
 	activation.operations = operations
 	worlds := world.New(database, instances, paths, queue)
+	backups := backup.New(backup.Config{DB: database, Paths: paths, Instances: instances, Jobs: queue, Console: control, Native: native, Worlds: worlds})
+	guard.ready = backups.CheckReady
+	if err := backups.Register(); err != nil {
+		return err
+	}
 	catalogs, err := catalog.New(catalog.Config{DB: database, ArtifactDir: filepath.Join(cfg.DataDir, "catalog", "artifacts"), UserAgent: "minecraft-server-ui/" + version + " (+https://github.com/jonasthim/minecraft-server-ui)"})
 	if err != nil {
 		return err
@@ -136,7 +142,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	if err := operations.RegisterJobs(); err != nil {
 		return err
 	}
-	if err := reconcileStartup(ctx, queue, native, instances, operations, worlds, guard, log, runtime.GOOS == "windows"); err != nil {
+	if err := reconcileStartup(ctx, queue, native, instances, operations, worlds, backups, guard, log, runtime.GOOS == "windows"); err != nil {
 		return err
 	}
 	handler := api.NewRouter(api.Dependencies{DB: database, Logger: log, Web: frontend, Mount: func(r chi.Router) {
@@ -145,6 +151,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 			api.MountConsole(r, control)
 			api.MountPlayers(r, playerService)
 			api.MountWorlds(r, worlds)
+			api.MountBackups(r, backups)
 			api.MountCatalog(r, catalogs)
 		})
 	}})
@@ -229,13 +236,23 @@ type stoppedMutationGuard struct {
 		WithStopped(context.Context, string, func() error) error
 	}
 	blocked error
+	ready   func(context.Context, string) error
 }
 
 func (g *stoppedMutationGuard) WithStopped(ctx context.Context, id string, fn func() error) error {
 	if g.blocked != nil {
 		return domain.E(domain.CodeUnavailable, "instance reconciliation requires administrator repair")
 	}
-	return g.queue.WithIdle(ctx, id, func() error { return g.withNativeStopped(ctx, id, fn) })
+	return g.queue.WithIdle(ctx, id, func() error {
+		return g.withNativeStopped(ctx, id, func() error {
+			if g.ready != nil {
+				if err := g.ready(ctx, id); err != nil {
+					return err
+				}
+			}
+			return fn()
+		})
+	})
 }
 
 // The active job already owns queue serialization; entering WithIdle here would
@@ -245,7 +262,14 @@ func (g *stoppedMutationGuard) WithStoppedForJob(ctx context.Context, execution 
 		return domain.E(domain.CodeUnavailable, "instance reconciliation requires administrator repair")
 	}
 	return execution.WithInstanceMutation(ctx, func(id string) error {
-		return g.withNativeStopped(ctx, id, func() error { return fn(id) })
+		return g.withNativeStopped(ctx, id, func() error {
+			if g.ready != nil {
+				if err := g.ready(ctx, id); err != nil {
+					return err
+				}
+			}
+			return fn(id)
+		})
 	})
 }
 
@@ -283,7 +307,12 @@ type startupNative interface {
 	Autostart(context.Context, map[string]domain.LaunchSpec) error
 }
 
-func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNative, instances *instance.Service, operations *lifecycle.Service, worlds *world.Service, guard *stoppedMutationGuard, log *slog.Logger, windows bool) error {
+type startupBackups interface {
+	ReconcileLeases(context.Context) error
+	ReconcileRestores(context.Context) error
+}
+
+func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNative, instances *instance.Service, operations *lifecycle.Service, worlds *world.Service, backups startupBackups, guard *stoppedMutationGuard, log *slog.Logger, windows bool) error {
 	// Recover durable work without dispatch until files and previous processes
 	// have been reconciled. Linux games keep running across manager restarts.
 	if err := queue.StartPaused(ctx); err != nil {
@@ -291,6 +320,15 @@ func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNa
 	}
 	if err := native.Autostart(ctx, nil); err != nil {
 		return fmt.Errorf("native prior-process reconciliation: %w", err)
+	}
+	if backups == nil {
+		return domain.E(domain.CodeUnavailable, "backup startup recovery is unavailable")
+	}
+	if err := backups.ReconcileLeases(ctx); err != nil {
+		return fmt.Errorf("backup saving recovery: %w", err)
+	}
+	if err := backups.ReconcileRestores(ctx); err != nil {
+		return fmt.Errorf("backup restore recovery: %w", err)
 	}
 	reconciled, reconcileErr := instances.Reconcile(ctx)
 	for _, pending := range reconciled.Deferred {

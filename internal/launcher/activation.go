@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
+	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 )
 
 const activationPendingName = "activation.pending.json"
@@ -23,12 +26,12 @@ type activationBlock struct {
 // activationRoot binds the fixed protected .manager directory without accepting
 // links. The marker is only a launch blocker; memory authority stays in the
 // committed instance/installation records and verified sealed specification.
-func activationRoot(dataDir, id string, create bool) (*os.Root, error) {
+func activationRoot(ctx context.Context, dataDir, id string, create bool) (*os.Root, error) {
 	paths, err := Paths(dataDir, id)
 	if err != nil {
 		return nil, err
 	}
-	server, err := os.OpenRoot(paths.Server)
+	server, err := safepath.OpenRoot(ctx, paths.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +52,7 @@ func activationRoot(dataDir, id string, create bool) (*os.Root, error) {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("unsafe protected activation directory")
 	}
-	root, err := server.OpenRoot(".manager")
+	root, err := safepath.OpenRoot(ctx, filepath.Join(paths.Server, ".manager"))
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +76,7 @@ func syncActivationDir(root *os.Root) error {
 }
 func readActivationBlock(root *os.Root, id string) (bool, error) {
 	info, err := root.Lstat(activationPendingName)
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
@@ -107,7 +110,7 @@ func MarkActivationPending(ctx context.Context, dataDir, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	root, err := activationRoot(dataDir, id, true)
+	root, err := activationRoot(ctx, dataDir, id, true)
 	if err != nil {
 		return err
 	}
@@ -163,11 +166,14 @@ func MarkActivationPending(ctx context.Context, dataDir, id string) error {
 // CheckActivationReady is enforced by Native.Start and independently by Run
 // after acquiring launcher admission, including systemd boot before the manager.
 func CheckActivationReady(ctx context.Context, dataDir, id string) error {
+	if err := checkBackupRestoreReady(ctx, dataDir, id); err != nil {
+		return domain.Wrap(domain.CodeUnavailable, "backup restore pending or unavailable; manager recovery required", err)
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	root, err := activationRoot(dataDir, id, false)
-	if os.IsNotExist(err) {
+	root, err := activationRoot(ctx, dataDir, id, false)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
@@ -187,8 +193,8 @@ func ClearActivationPending(ctx context.Context, dataDir, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	root, err := activationRoot(dataDir, id, false)
-	if os.IsNotExist(err) {
+	root, err := activationRoot(ctx, dataDir, id, false)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
@@ -213,7 +219,7 @@ func PendingConfig(dataDir, id string) (bool, error) {
 		return false, err
 	}
 	info, err := os.Lstat(filepath.Join(paths.State, "config.pending.json"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {

@@ -135,7 +135,7 @@ func TestStartupRecoversExportsAndDispatchesRetainedLifecycleJob(t *testing.T) {
 	}
 	worlds := world.New(database, instances, paths, queue)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if err = reconcileStartup(t.Context(), queue, native, instances, operations, worlds, guard, log, false); err != nil {
+	if err = reconcileStartup(t.Context(), queue, native, instances, operations, worlds, startupBackupStub{}, guard, log, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(orphan); !os.IsNotExist(err) {

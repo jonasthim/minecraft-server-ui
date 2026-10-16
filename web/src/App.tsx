@@ -10,6 +10,7 @@ const InstancePage = lazy(() => import('./features/instances').then(m => ({ defa
 const PlayersPage = lazy(() => import('./features/players/PlayersPage').then(m => ({ default: m.PlayersPage })))
 const ConsolePage = lazy(() => import('./features/console/ConsolePage').then(m => ({ default: m.ConsolePage })))
 const WorldsPage = lazy(() => import('./features/worlds').then(m => ({ default: m.WorldsPage })))
+const BackupsPage = lazy(() => import('./features/backups').then(m => ({ default: m.BackupsPage })))
 const CatalogPage = lazy(() => import('./features/catalog/CatalogPage').then(m => ({ default: m.CatalogPage })))
 const JobsPage = lazy(() => import('./features/jobs').then(m => ({ default: m.JobsPage })))
 const AuditPage = lazy(() => import('./features/auth/AuditPage').then(m => ({ default: m.AuditPage })))
@@ -27,6 +28,7 @@ export default function App() {
     <Route path="/instances/:instanceId/players" element={<PlayersPage />} />
     <Route path="/instances/:instanceId/console" element={<ConsolePage />} />
     <Route path="/instances/:instanceId/world" element={<WorldsPage />} />
+ <Route path="/instances/:instanceId/backups" element={<BackupsPage />} />
     <Route path="/catalog" element={<CatalogPage />} />
     <Route path="/jobs" element={<JobsPage />} />
     <Route path="/account" element={<AccountPage />} />

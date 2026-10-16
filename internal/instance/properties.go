@@ -15,7 +15,10 @@ import (
 // path or command. A bounded decoder preserves escaped separators, Unicode and
 // continued lines. Sensitive/manager-owned controls never enter Extra.
 func unknownProperties(root *os.Root) (map[string]string, error) {
-	f, err := root.Open("server/server.properties")
+	return unknownPropertiesAt(root, "server/server.properties")
+}
+func unknownPropertiesAt(root *os.Root, name string) (map[string]string, error) {
+	f, err := root.Open(name)
 	if os.IsNotExist(err) {
 		return map[string]string{}, nil
 	}
@@ -67,9 +70,19 @@ func unknownProperties(root *os.Root) (map[string]string, error) {
 	return out, nil
 }
 func parseProperty(line string, out map[string]string) error {
+	key, value, ok, err := decodeProperty(line)
+	if err != nil {
+		return err
+	}
+	if ok && !forbiddenProperty(key) {
+		out[key] = value
+	}
+	return nil
+}
+func decodeProperty(line string) (string, string, bool, error) {
 	line = strings.TrimLeft(line, " \t\f")
 	if line == "" || line[0] == '#' || line[0] == '!' {
-		return nil
+		return "", "", false, nil
 	}
 	end := len(line)
 	escape := false
@@ -99,16 +112,13 @@ func parseProperty(line string, out map[string]string) error {
 	}
 	key, err := unescapeProperty(line[:end])
 	if err != nil {
-		return err
+		return "", "", false, err
 	}
 	v, err := unescapeProperty(line[value:])
 	if err != nil {
-		return err
+		return "", "", false, err
 	}
-	if !forbiddenProperty(key) {
-		out[key] = v
-	}
-	return nil
+	return key, v, true, nil
 }
 func unescapeProperty(s string) (string, error) {
 	var units []uint16
