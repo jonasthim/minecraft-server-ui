@@ -39,8 +39,9 @@ type Request struct {
 }
 type Handler func(context.Context, *Execution) error
 type active struct {
-	instance string
-	cancel   context.CancelFunc
+	instance  string
+	cancel    context.CancelFunc
+	execution *executionIdentity
 }
 type Service struct {
 	db                *sql.DB
@@ -51,6 +52,7 @@ type Service struct {
 	running           map[string]active
 	idle              map[string]struct{}
 	started, stopping bool
+	paused            bool
 	ctx               context.Context
 	cancel            context.CancelFunc
 	wake              chan struct{}
@@ -87,6 +89,16 @@ func (s *Service) Register(kind string, handler Handler) error {
 // retains its exact private input. Running work is never automatically replayed;
 // future resumable workers must first supply explicit file reconciliation hooks.
 func (s *Service) Start(ctx context.Context) error {
+	if err := s.StartPaused(ctx); err != nil {
+		return err
+	}
+	return s.Resume()
+}
+
+// StartPaused performs durable recovery and opens admission without executing
+// queued handlers. Register all kinds first, reconcile stopped/native instance
+// state while paused, and call Resume only after composition is ready.
+func (s *Service) StartPaused(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.started || s.stopping {
@@ -101,9 +113,26 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	s.started = true
+	s.paused = true
 	go s.loop()
 	return nil
 }
+
+// Resume enables dispatch after StartPaused. Repeated Resume calls are
+// idempotent while the service is live. Before startup, after parent-context
+// cancellation, or once stopping begins it returns unavailable and never
+// reopens admission or dispatch.
+func (s *Service) Resume() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.started || s.stopping || s.ctx.Err() != nil {
+		return domain.E(domain.CodeUnavailable, "job service cannot resume")
+	}
+	s.paused = false
+	s.signal()
+	return nil
+}
+
 func (s *Service) signal() {
 	select {
 	case s.wake <- struct{}{}:
@@ -205,7 +234,7 @@ func (s *Service) Enqueue(ctx context.Context, r Request) (Job, error) {
 func (s *Service) dispatch() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stopping || s.ctx.Err() != nil {
+	if s.paused || s.stopping || s.ctx.Err() != nil {
 		return
 	}
 	pending, err := s.list(s.ctx, `WHERE state='queued' ORDER BY created_at,rowid`)
@@ -261,7 +290,7 @@ func (s *Service) run(ctx context.Context, id string, handler Handler) {
 		var payload []byte
 		payload, err = s.payload(ctx, id)
 		if err == nil {
-			e := &Execution{Job: j.Job, Payload: payload, service: s, secrets: payloadSecrets(payload)}
+			e := s.bindExecution(ctx, id, j.Job, payload)
 			err = invoke(ctx, handler, e)
 		}
 	}
@@ -301,8 +330,15 @@ func (s *Service) run(ctx context.Context, id string, handler Handler) {
 }
 func invoke(ctx context.Context, h Handler, e *Execution) (err error) {
 	defer func() {
-		if recover() != nil {
+		panicValue := recover()
+		// Close admission before publishing terminal state, and retain the slot
+		// until any callback admitted before handler return has actually finished.
+		drainErr := e.finishMutationAdmission()
+		if panicValue != nil {
 			err = errors.New("job worker panicked")
+		}
+		if drainErr != nil {
+			err = errors.Join(err, drainErr)
 		}
 	}()
 	return h(ctx, e)
