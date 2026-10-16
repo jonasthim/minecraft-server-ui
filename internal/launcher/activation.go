@@ -166,6 +166,9 @@ func MarkActivationPending(ctx context.Context, dataDir, id string) error {
 // CheckActivationReady is enforced by Native.Start and independently by Run
 // after acquiring launcher admission, including systemd boot before the manager.
 func CheckActivationReady(ctx context.Context, dataDir, id string) error {
+	if err := checkContentTransactionReady(ctx, dataDir, id); err != nil {
+		return domain.Wrap(domain.CodeUnavailable, "content transaction pending or unavailable; manager recovery required", err)
+	}
 	if err := checkBackupRestoreReady(ctx, dataDir, id); err != nil {
 		return domain.Wrap(domain.CodeUnavailable, "backup restore pending or unavailable; manager recovery required", err)
 	}

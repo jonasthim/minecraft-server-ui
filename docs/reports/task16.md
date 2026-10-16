@@ -1,0 +1,91 @@
+# Task 16 — managed mods/plugins and addon configuration
+
+Status: implemented and frozen for independent review; integrator acceptance, successful installed-addon browser workflows and game/native qualification remain separate. No package-complete claim is made here. Base assignment: `e302b67`; owned catalog contract includes reviewed `618c4fa` corrections. No staging, commits, new dependency, game download/execution, EULA acceptance or host service installation performed by this worker.
+
+## Owned implementation
+
+- `internal/content/**`: installed manifests, immutable filesystem staging and quota admission, exact-tuple previews, queued content/config mutations, durable preimage/commit journals, independent boot marker, startup recovery and readiness, bounded inert descriptors and safe editor.
+- `internal/db/migrations/00010_content.sql`: installed metadata, stage metadata, previews and transaction journal. Artifact/config preimage bytes are private filesystem blobs, never SQLite blobs.
+- `internal/api/content_handlers*.go`: authenticated role/scoped-token handlers and tests.
+- `docs/api/content.yaml`: generated-type source fragment. Root merged/regenerated the central schema; this worker did not edit central schema or generated output.
+- `web/src/features/content/**`: generated-type React/Mantine content page and panel.
+- Root's additional assignments: `internal/launcher/content_transaction.go`, its tests and one check in `CheckActivationReady`; central main construction/startup/API composition, startup callsite tests, `main_content_test.go`, App route and the content-only server-detail link.
+- `docs/reports/task16-contract.md`: frozen consumer contract and future transaction-participant requirements.
+
+## Behavior and authorization
+
+Viewers can read installed/source metadata and bounded config filename/size lists. Operators can browse/select catalog artifacts, preview/install/update/disable/enable/uninstall, read addon text and preview config writes. Administrator scope is required for uploads and unknown trials, including when applying a previously prepared administrator preview. Private action inspection makes the apply route enforce the original action's token scope. The worker rechecks current account role/disabled state, manifest revision, current tuple, installation readiness, publisher version metadata and actual file/stage hashes before publication; it rechecks account authority again before the SQL commit.
+
+All active file writes run through `Instances.WithStoppedJob` exactly once. Running or unknown native states are rejected by that existing admission. There is no implicit stop/restart or hot-reload promise. Install/update/enable require an installed server/loader marker; content cannot create a loader. Package test fixtures seed that reviewed lifecycle marker to isolate content logic; this is explicitly not provider installation or game evidence.
+
+Catalog selection consists only of provider/project/version/file identifiers. Download paths come only from the catalog service's returned verified artifact and are read through the reviewed safe bootstrap; requests cannot supply paths, URLs or trusted hashes. Revalidated source metadata, filenames, versions, SHA-256, owned paths, pins and enable/disable state are retained. Updates and uninstall touch only recorded, unchanged JAR files. Other addon files and configuration remain in place. Conflicting local bytes, unsafe links or portable filename collisions block publication. Disabled JARs use `.jar.disabled` and retain manifests/configuration.
+
+Publisher-required dependencies must already be explicitly installed at their required identity/version. Missing requirements become visible blockers; optional and incompatible metadata remain visible. Descriptor and publisher dependency removal/update checks prevent known reverse-dependency breakage. This service does not silently recursively fetch dependencies; thus it does not enter unbounded depth/cycles. Direct dependency/descriptor lists are bounded at 128. A future pack coordinator must resolve its full bounded graph before activation.
+
+Manual-download previews retain official links and published digests. An administrator stages bytes and creates a resumed preview against the exact publisher selection. Every usable published digest and declared positive size must match; hashless uploads remain separate unknown trials. Explicit trial acknowledgment is bound to the current Minecraft/server/loader tuple. Unknown status persists, including while disabled, and blocks automatic updates and version upgrades. Enabling on another tuple is blocked. Matching publisher bytes and descriptor compatibility are distinct from tested game support.
+
+`Snapshot` rechecks owned active/disabled JAR hashes and identifies unmanaged JARs; unknown items, file conflicts, pending transactions/boot markers and unresolved/manual/unknown previews appear in automatic-update blockers.
+
+## Durability and filesystem boundaries
+
+Stages use random IDs under `instances/<id>/state/content/<id>.blob`, synchronized bytes/directories and read-only protection. Stage quota is durably reserved in SQL before file creation, so a crash cannot leave unaccounted successful stage bytes. Completed stages are rehashed on every use and opened as regular, single-link files. Initial roots use `safepath.OpenRoot`; descendant parents and opened files receive link/identity checks. Publication uses a same-directory temporary file, fsync, expected-hash recheck, rename and directory sync. Canonical server-root identity is rechecked before SQL commit and before recovery clears its blocker.
+
+Limits: 2 GiB/artifact; 256 stage artifacts and 8 GiB/instance; 16 GiB global stage bytes; 2048 installed items; 32 previews/instance; 24-hour preview/upload TTL; two upload admissions globally; 10-minute upload context/read deadline. A service mutex conservatively serializes owned staging/quota publication. Unknown upload length reserves the full 2 GiB bound while streaming, so admission can conservatively refuse a smaller upload near quota. Queued job payloads contain only the preview reference and actor ID. Stage/preimage references are retained for active journals; only unreferenced expired owned stages are automatically cleaned. Explicit clear-unused staging is actor-owned. Discarding one preview does not destroy a newly staged manual-resolution upload.
+
+Transaction ordering is: verified immutable preimages -> durable SQL intent -> synced exact instance/preview `state/content-transaction.json` blocker -> file changes/readback -> installed-manifest SQL commit. Independent launcher `Run` and native `Start` both reach `CheckActivationReady`, which refuses any content blocker presence or unsafe marker directory. `Service.CheckReady` checks both SQL and the marker for ordinary mutation composition.
+
+Recovery never touches world data. An uncommitted operation restores only matching postimages to captured executable/config preimages. A competing local change is retained with its journal, preimages and boot blocker. Committed SQL is never converted into an automatic rollback. Verified rollback gets durable `rolled_back` SQL state; verified committed or rolled-back recovery clears the exact marker with directory sync, then removes the journal. This order prevents an orphan marker caused by deleting SQL first. Malformed, foreign, mismatched or orphan markers fail closed and remain for review. Startup `Reconcile` audits all instance markers and requires paused stopped recovery admission. Native Windows rename/power-loss semantics remain unqualified.
+
+## Editor policy and frontend
+
+Roots: `config/**`, `defaultconfigs/**`, `plugins/<portable-addon>/**`; extensions `.toml`, `.json`, `.json5`, `.yaml`, `.yml`, `.properties`, `.cfg`, `.conf`, `.txt`. Maximum eight path components, 1 MiB/file and 1000 visited listing entries. Hidden/reserved/control/manager/runtime/world areas, traversal, links/hardlinks/specials, binary/NUL and non-UTF-8 files are refused. Listing discloses truncation and omitted unsupported entries. `server.properties` remains instance-owned. Config reads are operator-only; previews store new text in private stages and jobs/audit never receive contents. Whole-file replacement plus expected SHA-256 preserves submitted unrelated keys/comments and rejects stale edits.
+
+`ContentPage` / `ContentPanel` use the centrally generated Content DTOs. They expose current-tuple catalog search, project releases/files, source/hash/pin/unknown metadata, all lifecycle controls, reviewed preview/apply/discard, admin raw upload/trial and manual digest resume, actual job state/output links and error/success feedback. The editor hides contents from viewers and uses CAS previews. Mantine groups wrap and forms stack at small widths. Search/release displays disclose their first-20-results bound. Delegated central composition mounts the service and UI route/link. Type/lint checks pass. The actual shipped 390 px empty/admin/operator/viewer workflow and native-unavailable refusal were checked as recorded below; successful installed-addon UI and game support remain unqualified.
+
+## Descriptor compatibility limits requiring follow-up
+
+Inert JAR inspection bounds the ZIP end/central directory before parser allocation (single-volume, <=10000 entries, <=4 MiB directory), rejects unsafe/duplicate/link entries without extraction, and bounds descriptor reads to 256 KiB and JAR manifests to 64 KiB. Supported descriptor readers: Fabric `fabric.mod.json`; Paper `plugin.yml` / `paper-plugin.yml`; Forge `META-INF/mods.toml`; NeoForge `META-INF/neoforge.mods.toml`. Standard Forge `${file.jarVersion}` resolves only through bounded `Implementation-Version` JAR manifest metadata. Complex unproved dependency expressions/descriptor forms, multi-mod JARs, nontrivial Paper dependency maps and ambiguous multiple descriptors fail conservatively rather than claiming compatibility.
+
+The current shared installed tuple does not expose separately verified FML language-loader API identity. Any Forge/NeoForge root `loaderVersion` requirement other than absent or `*` is therefore explicitly unknown: a verified catalog artifact cannot be activated as proven compatible, while a separately uploaded administrator current-tuple trial remains unknown and keeps automatic upgrades blocked. Explicit Minecraft/loader/dependency contradictions still block trials. Common examples include Forge `modLoader="javafml", loaderVersion="[47,)"` and NeoForge language-loader requirements whose numbering differs from the NeoForge distribution version. The own Forge/NeoForge dependency range is separately checked against the exact configured distribution loader version; it does not prove FML API compatibility.
+
+A trusted resolution must come from the reviewed installed distribution manifest plus hash-verified FML language-provider artifact metadata. Candidate sources are the recorded Forge FML language-provider or NeoForge `fancymodloader` language-loader JAR manifests/version metadata, with paths derived from the verified installer file manifest. An arbitrary filesystem glob, filename, catalog listing or client-supplied version is insufficient. No existing Task 08 public contract currently supplies that evidence. Root has the gap and proposed evidence interface for the upcoming Task 17/18 composition; this report does not claim those common combinations supported.
+
+Task 17/18 must own one coordinator journal/commit under one current-job/native-stopped admission. Calling independent content enqueue/apply inside that coordinator would nest admission and cannot provide a pack/update transaction. The required future scoped participant is documented in the contract note; it is not exposed prematurely here.
+
+## Verification evidence
+
+- `go test -race ./internal/content ./internal/launcher ./internal/api` — PASS (`content` 5.389 s, `launcher` 8.839 s, `api` 5.115 s at the marker boundary run; final rerun recorded below).
+- `go vet ./internal/content ./internal/launcher ./internal/api` — PASS.
+- `GOOS=windows GOARCH=amd64 go test -c -o /home/thim/.cache/dilla-tmp/content-windows.test.exe ./internal/content` — PASS; compilation only, no native Windows qualification.
+- `cd web && npm run typecheck && npm run lint` — PASS using root-generated schema types.
+- `git diff --check` — PASS.
+
+Deterministic, network-free tests use actual temporary files and SQL. They exercise unknown trial lifecycle/config/pin preservation; verified operator catalog installation; published-digest manual resolution and mismatch refusal; running rejection with one native guard; actor revocation of retained queued jobs; local edits/stale previews; injected interrupted publication and immutable preimage rollback; competing-edit and committed-state recovery; database close/reopen recovery; canonical parent replacement; config CAS/roles/traversal/size/binary/symlink/hardlink/depth/list bounds; upload name/quota/stage tampering; uninstalled loader refusal; ZIP traversal/link/duplicate/oversize entries; descriptor families/constraints; token scope and role matrix; direct independent launcher refusal; orphan markers, SQL-only intents and failed-recovery blocker/preimage retention. No real mod/plugin, game client, native Windows, systemd boot/power-loss or integrated browser support evidence is substituted by these fixtures.
+
+Final frozen verification: `go test -race ./internal/content ./internal/launcher ./internal/api` PASS (5.318 s / 8.835 s / 5.034 s); scoped vet PASS; Windows content test cross-compile PASS; generated-type frontend typecheck/lint PASS after explicitly carrying content kind into Hangar/plugin release queries; `git diff --check` PASS. The tree remains unstaged by this worker.
+
+Root integration handoff: export `ContentPage` from `web/src/features/content/index.ts`, route `/instances/:instanceId/content`; construct/register/mount content before queue dispatch. Compose ordinary readiness as backup readiness then content readiness. Run content startup reconciliation with a separate paused/native-stopped guard after lease/restore recovery and before instance/lifecycle/autostart. Content's internal readiness check is read-only and never reacquires queue/native admission. A preexisting cross-feature recovery that changes owned pre/postimages fails closed with retained content marker/journal; no world rollback is attempted.
+
+
+## Delegated central composition and actual shipping browser evidence
+
+Root explicitly delegated sole main/App ownership after backup/map integration froze. Main now constructs content with catalogs and the existing stopped guard, registers before `StartPaused`, mounts inside the authenticated/CSRF feature group, and composes ordinary readiness as backup readiness followed by content readiness inside the existing native-stopped callback. Startup requires `startupContent`, runs saving leases then restores then content recovery before instance/lifecycle/export recovery, Windows autostart and queue dispatch. Recovery failure retains paused queued work and never reaches later reconciliation or autostart. No new admission or nested guard is acquired by the readiness function. Existing map mounting, player/console loops and shutdown remain intact. `main_content_test.go` tests ordering, failure/missing-service refusal, retained queued jobs, and readiness inside one held native boundary. Existing backup/lifecycle startup tests received only the new required argument.
+
+Actual local shipping binary served its embedded production build at `127.0.0.1:18166` with an isolated new data directory. Isolated standalone Playwright contexts were used after the Browser runtime reported no connected browser; root explicitly selected this fallback. No existing user profile/tab/session was accessed. The first administrator, first Fabric 1.21.1 instance and viewer/operator accounts were created using shipping UI. No domain rows, content fixtures, EULA acceptance, game downloads/execution or native host units were introduced for this browser check.
+
+At 390 x 844:
+
+- New database -> first administrator -> first instance succeeded with EULA unchecked.
+- Server-detail link reached the content page and its real empty installed/config states.
+- Administrator upload UI was visible; viewer/operator upload UI was absent.
+- Viewer saw the operator-access notice; forced config-content request was 403.
+- Operator saw no viewer restriction; requesting an absent config returned typed 404.
+- Enter on focused Refresh content produced HTTP 200 and retained keyboard focus after the loading cycle. This check exposed and fixed disabling the focused refresh button during loading.
+- Content pages had no horizontal document overflow and no uncaught page errors for all three roles; screenshots were visually inspected.
+- Edit settings reached the real native-unavailable boundary and showed the authored repair guidance. EULA stayed unchecked and the failed proposed name change did not persist.
+
+Browser checking exposed and fixed raw missing-file errors becoming HTTP 500; missing operator config files now return `not_found` / 404, with API regression coverage.
+
+Evidence: `/home/thim/.cache/dilla-tmp/task16-browser/integrated-evidence.json`, `shipping-create.json`, `shipping-create390.png`, `content-admin390.png`, `content-viewer390.png`, `content-operator390.png`, `native-failure390.png`. Browser scripts are isolated local artifacts in `/home/thim/.cache/dilla-tmp/task16-browser-*.mjs`. The instance remains not installed; actual addon activation/editor success in a game-generated installation is not claimed from this empty-state browser run.
+
+Final integrated checks: `go test -race ./cmd/minecraft-ui ./internal/content ./internal/launcher ./internal/api` PASS (main 4.644 s / content 9.470 s / launcher cached / API 9.116 s); scoped vet PASS; `cd web && npm run build && npm run lint` PASS; Linux shipping build PASS; Windows shipping cross-build PASS (compilation only); `git diff --check` PASS. The worker left changes unstaged.

@@ -12,6 +12,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/catalog"
 	"github.com/jonasthim/minecraft-server-ui/internal/config"
 	"github.com/jonasthim/minecraft-server-ui/internal/console"
+	"github.com/jonasthim/minecraft-server-ui/internal/content"
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
@@ -128,12 +129,24 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	worlds := world.New(database, instances, paths, queue)
 	maps := mapview.New(mapdata.New(worlds, paths), control)
 	backups := backup.New(backup.Config{DB: database, Paths: paths, Instances: instances, Jobs: queue, Console: control, Native: native, Worlds: worlds})
-	guard.ready = backups.CheckReady
 	if err := backups.Register(); err != nil {
 		return err
 	}
 	catalogs, err := catalog.New(catalog.Config{DB: database, ArtifactDir: filepath.Join(cfg.DataDir, "catalog", "artifacts"), UserAgent: "minecraft-server-ui/" + version + " (+https://github.com/jonasthim/minecraft-server-ui)"})
 	if err != nil {
+		return err
+	}
+	contents, err := content.New(content.Config{DB: database, Paths: paths, Instances: instances, Queue: queue, Catalog: catalogs, Recovery: guard})
+	if err != nil {
+		return err
+	}
+	guard.ready = func(ctx context.Context, id string) error {
+		if err := backups.CheckReady(ctx, id); err != nil {
+			return err
+		}
+		return contents.CheckReady(ctx, id)
+	}
+	if err := contents.Register(); err != nil {
 		return err
 	}
 	if err := playerService.Register(); err != nil {
@@ -145,7 +158,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	if err := operations.RegisterJobs(); err != nil {
 		return err
 	}
-	if err := reconcileStartup(ctx, queue, native, instances, operations, worlds, backups, guard, log, runtime.GOOS == "windows"); err != nil {
+	if err := reconcileStartup(ctx, queue, native, instances, operations, worlds, backups, contents, guard, log, runtime.GOOS == "windows"); err != nil {
 		return err
 	}
 	handler := api.NewRouter(api.Dependencies{DB: database, Logger: log, Web: frontend, Mount: func(r chi.Router) {
@@ -157,6 +170,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 			api.MountMap(r, maps)
 			api.MountBackups(r, backups)
 			api.MountCatalog(r, catalogs)
+			api.MountContent(r, contents)
 		})
 	}})
 	server := &http.Server{Addr: cfg.Address, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
@@ -316,7 +330,9 @@ type startupBackups interface {
 	ReconcileRestores(context.Context) error
 }
 
-func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNative, instances *instance.Service, operations *lifecycle.Service, worlds *world.Service, backups startupBackups, guard *stoppedMutationGuard, log *slog.Logger, windows bool) error {
+type startupContent interface{ Reconcile(context.Context) error }
+
+func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNative, instances *instance.Service, operations *lifecycle.Service, worlds *world.Service, backups startupBackups, contents startupContent, guard *stoppedMutationGuard, log *slog.Logger, windows bool) error {
 	// Recover durable work without dispatch until files and previous processes
 	// have been reconciled. Linux games keep running across manager restarts.
 	if err := queue.StartPaused(ctx); err != nil {
@@ -333,6 +349,12 @@ func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNa
 	}
 	if err := backups.ReconcileRestores(ctx); err != nil {
 		return fmt.Errorf("backup restore recovery: %w", err)
+	}
+	if contents == nil {
+		return domain.E(domain.CodeUnavailable, "content startup recovery is unavailable")
+	}
+	if err := contents.Reconcile(ctx); err != nil {
+		return fmt.Errorf("content recovery: %w", err)
 	}
 	reconciled, reconcileErr := instances.Reconcile(ctx)
 	for _, pending := range reconciled.Deferred {

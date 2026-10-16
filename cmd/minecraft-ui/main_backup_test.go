@@ -86,7 +86,7 @@ func TestStartupBackupOrderingAndFailuresRetainQueuedWork(t *testing.T) {
 			operations := lifecycle.New(lifecycle.Config{DB: database, DataDir: dir, Instances: instances, Jobs: queue, Native: native})
 			worlds := world.New(database, instances, paths, queue)
 			log := slog.New(slog.NewTextHandler(io.Discard, nil))
-			err = reconcileStartup(t.Context(), queue, native, instances, operations, worlds, backups, guard, log, true)
+			err = reconcileStartup(t.Context(), queue, native, instances, operations, worlds, backups, startupContentStub{}, guard, log, true)
 			if failure != "" {
 				if err == nil {
 					t.Fatal("failed backup recovery admitted startup")
