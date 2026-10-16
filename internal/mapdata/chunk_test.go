@@ -36,8 +36,17 @@ func TestIndependentTerrainFixtures(t *testing.T) {
 			if c := out.Cells[1]; !c.Empty {
 				t.Fatalf("air is not empty: %+v", c)
 			}
-			if c := out.Cells[12]; c.Known || c.Empty || c.Y != tc.base || c.Block == "minecraft:air" {
-				t.Fatalf("unknown/add/boundary: %+v", c)
+			wantBoundary, wantAdjacent := "example:boundary", "example:ore"
+			if tc.format == "legacy" {
+				wantBoundary, wantAdjacent = "legacy:769:7", "legacy:770:5"
+			}
+			for _, want := range []struct {
+				index int
+				block string
+			}{{12, wantBoundary}, {13, wantAdjacent}} {
+				if c := out.Cells[want.index]; c.Known || c.Empty || c.Y != tc.base || c.Block != want.block {
+					t.Fatalf("cell%d unknown/add/boundary: %+v want %s at Y%d", want.index, c, want.block, tc.base)
+				}
 			}
 			y := tc.base + 4
 			out, e = decodeChunk(context.Background(), b, Request{MaxY: &y})

@@ -3,9 +3,12 @@ package mapdata
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -22,24 +25,55 @@ type source struct {
 	root     *os.Root
 }
 
+// openSource anchors at the filesystem root (or local Windows drive root),
+// then pins every path component. A final-path Lstat/OpenRoot pair alone would
+// accept an ancestor replaced with a symlink before that first Lstat.
 func openSource(absolute string) (*source, error) {
-	before, e := os.Lstat(absolute)
+	if !filepath.IsAbs(absolute) {
+		return nil, errCorrupt
+	}
+	volume := filepath.VolumeName(absolute)
+	// UNC, device and extended-volume paths need their own trusted-root policy;
+	// reject them rather than treating an arbitrary share as a drive root.
+	if volume != "" && (len(volume) != 2 || volume[1] != ':' || !(volume[0] >= 'a' && volume[0] <= 'z' || volume[0] >= 'A' && volume[0] <= 'Z')) {
+		return nil, errUnsupported
+	}
+	anchor := volume + string(filepath.Separator)
+	relative := strings.TrimPrefix(absolute, anchor)
+	if relative == absolute {
+		return nil, errCorrupt
+	}
+	before, e := os.Lstat(anchor)
 	if e != nil {
 		return nil, e
 	}
 	if !before.IsDir() || !safeInfo(before) {
 		return nil, errCorrupt
 	}
-	r, e := os.OpenRoot(absolute)
+	r, e := os.OpenRoot(anchor)
 	if e != nil {
 		return nil, e
 	}
-	s := &source{absolute: absolute, initial: before, roots: []*os.Root{r}, root: r}
+	s := &source{absolute: anchor, initial: before, roots: []*os.Root{r}, root: r}
 	after, e := r.Stat(".")
-	current, ce := os.Lstat(absolute)
-	if e != nil || ce != nil || !os.SameFile(before, after) || !os.SameFile(before, current) || !safeInfo(current) {
+	current, ce := os.Lstat(anchor)
+	if e != nil {
+		s.Close()
+		return nil, fmt.Errorf("stat source root: %w", e)
+	}
+	if ce != nil {
+		s.Close()
+		return nil, observedLookupError("recheck source root", ce)
+	}
+	if !os.SameFile(before, after) || !os.SameFile(before, current) || !safeInfo(current) {
 		s.Close()
 		return nil, errStale
+	}
+	if relative != "" {
+		if e := s.descend(filepath.ToSlash(relative)); e != nil {
+			s.Close()
+			return nil, e
+		}
 	}
 	return s, nil
 }
@@ -66,7 +100,15 @@ func (s *source) descend(relative string) error {
 		}
 		after, e := r.Stat(".")
 		current, ce := s.root.Lstat(name)
-		if e != nil || ce != nil || !os.SameFile(before, after) || !os.SameFile(before, current) || !safeInfo(current) {
+		if e != nil {
+			r.Close()
+			return fmt.Errorf("stat source directory: %w", e)
+		}
+		if ce != nil {
+			r.Close()
+			return observedLookupError("recheck source directory", ce)
+		}
+		if !os.SameFile(before, after) || !os.SameFile(before, current) || !safeInfo(current) {
 			r.Close()
 			return errStale
 		}
@@ -78,12 +120,18 @@ func (s *source) descend(relative string) error {
 }
 func (s *source) verify() error {
 	current, e := os.Lstat(s.absolute)
-	if e != nil || !safeInfo(current) || !os.SameFile(s.initial, current) {
+	if e != nil {
+		return observedLookupError("verify source root", e)
+	}
+	if !safeInfo(current) || !os.SameFile(s.initial, current) {
 		return errStale
 	}
 	for _, link := range s.links {
 		current, e := link.parent.Lstat(link.name)
-		if e != nil || !safeInfo(current) || !os.SameFile(link.info, current) {
+		if e != nil {
+			return observedLookupError("verify source directory", e)
+		}
+		if !safeInfo(current) || !os.SameFile(link.info, current) {
 			return errStale
 		}
 	}
@@ -115,7 +163,15 @@ func (s *source) open(name string, maxSize int64) (*savedFile, error) {
 	}
 	after, e := f.Stat()
 	current, ce := s.root.Lstat(name)
-	if e != nil || ce != nil || !after.Mode().IsRegular() || !safeInfo(current) || !os.SameFile(before, after) || !os.SameFile(before, current) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+	if e != nil {
+		f.Close()
+		return nil, fmt.Errorf("stat saved file: %w", e)
+	}
+	if ce != nil {
+		f.Close()
+		return nil, observedLookupError("recheck saved file", ce)
+	}
+	if !after.Mode().IsRegular() || !safeInfo(current) || !os.SameFile(before, after) || !os.SameFile(before, current) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
 		f.Close()
 		return nil, errStale
 	}
@@ -144,7 +200,10 @@ func (f *savedFile) readAt(ctx context.Context, offset int64, n int) ([]byte, er
 		end := min(pos+32768, n)
 		_, e := f.f.ReadAt(b[pos:end], offset+int64(pos))
 		if e != nil {
-			return nil, fmt.Errorf("saved data read: %w", errStale)
+			if errors.Is(e, io.EOF) || errors.Is(e, io.ErrUnexpectedEOF) {
+				return nil, fmt.Errorf("saved data truncated during read: %w", errors.Join(errStale, e))
+			}
+			return nil, fmt.Errorf("saved data read: %w", e)
 		}
 		pos = end
 	}
@@ -169,8 +228,23 @@ func (f *savedFile) verify(ctx context.Context, spans []span) error {
 	}
 	opened, e := f.f.Stat()
 	current, ce := f.root.Lstat(f.name)
-	if e != nil || ce != nil || !safeInfo(current) || !os.SameFile(f.info, opened) || !os.SameFile(f.info, current) || opened.Size() != f.info.Size() || current.Size() != f.info.Size() || !opened.ModTime().Equal(f.info.ModTime()) || !current.ModTime().Equal(f.info.ModTime()) {
+	if e != nil {
+		return fmt.Errorf("verify opened saved file: %w", e)
+	}
+	if ce != nil {
+		return observedLookupError("verify saved file path", ce)
+	}
+	if !safeInfo(current) || !os.SameFile(f.info, opened) || !os.SameFile(f.info, current) || opened.Size() != f.info.Size() || current.Size() != f.info.Size() || !opened.ModTime().Equal(f.info.ModTime()) || !current.ModTime().Equal(f.info.ModTime()) {
 		return errStale
 	}
 	return nil
+}
+
+// Disappearance of a previously pinned object is an observed change. Other
+// lookup failures (permissions, closed handles, device errors) remain host errors.
+func observedLookupError(operation string, err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%s: %w", operation, errors.Join(errStale, err))
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }

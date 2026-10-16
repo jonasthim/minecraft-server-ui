@@ -161,3 +161,62 @@ pinned539b4a3a7f030332eb58b8a946116ae7907630d2, under
 Root approved bounded inspection. It was not vendored because an independently
 known terrain oracle and game-generation provenance were not established; a
 mere decoder-success smoke would not add the required evidence.
+
+## Independent review fix round1 — reviewed base a4ff30d
+
+The independent review found two Important gaps and one Minor error-reporting
+defect. This bounded revision addresses all three and awaits integrator re-review.
+The public consumer contract, shared instance path helpers, schema, UI and
+module dependencies were not changed. No staging or commits were performed.
+
+1. **Ancestor substitution:** final-path Lstat/OpenRoot identity checks could
+   accept an already-substituted ancestor symlink and then read an outside server
+   directory with every final identity check passing. `openSource` now opens the
+   filesystem root (or a local Windows drive root), then descends every absolute
+   component using the existing rooted directory checks. The complete chain of
+   handles/identities remains open through the final source verification. UNC,
+   device and extended-volume Windows forms are explicitly unsupported until a
+   separate trusted-anchor policy exists. Paths still derive from instance.Paths
+   and Task12 discovery; no second layout or adoption policy was added.
+
+   `TestSourceRejectsAncestorSwapAfterInstancePathValidation` deterministically
+   calls Paths.For, renames the validated instance ancestor, substitutes a symlink
+   to an outside/server directory and invokes the real opener. RED before the fix:
+   `ancestor substitution admitted an outside server directory`. It now refuses
+   the traversal. `TestSourceRetainsAndRechecksAncestorAfterOpen` swaps an ancestor
+   after acquisition, proves reads stay on the original inside descriptor and
+   requires stale when the retained chain is rechecked.
+
+2. **Exact Add and packing evidence:** the initial generic unknown-block assertion
+   did not prove Add nibble decoding. The independent fixture test now requires
+   the exact labels `legacy:769:7` and `legacy:770:5`, testing the low/high Add and
+   metadata nibbles. Dense and padded fixtures require `example:boundary` and
+   `example:ore` at their literal expected positions/Y. Two temporary Go overlays
+   verified these assertions can fail without modifying production files: removing
+   Add decoding failed with actual `legacy:1:7` versus expected `legacy:769:7`;
+   removing dense cross-long carry failed with air versus `example:boundary`.
+   The original production algorithms needed no correction for this finding.
+
+3. **Host I/O errors:** ReadAt formerly replaced every failure with stale, losing
+   causes such as a closed descriptor/device error. Reads now wrap the original
+   host error; EOF/UnexpectedEOF against the captured size is classified as
+   observed truncation/stale while retaining its cause. Directory and file
+   identity rechecks also preserve stat/lookup host errors; disappearance of a
+   previously pinned object remains stale. Real closed-handle regressions verify
+   errors.Is(os.ErrClosed), absence of errStale for host failures and retention
+   through the consumer status conversion. Before the fix the read and verification
+   regressions both reported stale instead of retaining os.ErrClosed.
+
+Fresh scoped verification after the implementation corrections:
+
+- `go test ./internal/mapdata -count=1`: PASS,0.051s.
+- `go test -race ./internal/mapdata -count=1`: PASS,1.593s.
+- `go vet ./internal/mapdata`: PASS.
+- `GOOS=windows GOARCH=amd64 go test -c ./internal/mapdata -o /home/thim/.cache/dilla-tmp/mapdata-task21-review1.test.exe`: PASS; cross-compilation only.
+- `git diff --check`: PASS at the final implementation check.
+
+Native Windows traversal/reparse/volume execution and real game qualification
+remain pending. No broad suites or additional fuzz qualification were run in
+this fix round. All implementation changes are confined to source.go,
+source_test.go and chunk_test.go under internal/mapdata; this report is the only
+other owned change.
