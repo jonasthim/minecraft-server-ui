@@ -7596,6 +7596,36 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -7655,6 +7685,36 @@
           },
           "503": {
             "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
             "content": {
               "application/json": {
                 "schema": {
@@ -7738,6 +7798,36 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -7766,7 +7856,14 @@
         ],
         "responses": {
           "202": {
-            "description": "Native activation request accepted; service may disconnect during restart."
+            "description": "Native activation request accepted; service may disconnect during restart.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfUpdateAccepted"
+                }
+              }
+            }
           },
           "401": {
             "description": "Authentication, authorization, validation or update availability failure",
@@ -7807,6 +7904,36 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -7815,6 +7942,173 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SelfUpdateApplyInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/modpack/archives": {
+      "post": {
+        "operationId": "uploadModpackArchive",
+        "summary": "Administrator: verify exact official pack/server-pack archive acquisition",
+        "description": "Requires administrator role and admin PAT scope. Catalog resolves original and official server-pack mappings; an absent CurseForge key remains unavailable. Size and published hashes are authoritative; no arbitrary ZIP import or URL input. Receipt expires after24hours.",
+        "tags": [
+          "modpacks"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ModpackInstanceId"
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 128,
+              "enum": [
+                "modrinth",
+                "curseforge"
+              ]
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 2147483648
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Digest-verified private archive receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModpackArchiveReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
               }
             }
           }
@@ -12338,6 +12632,11 @@
             "type": "string",
             "pattern": "^[0-9a-f]{32}$",
             "description": "Actor-owned earlier preview of the same exact verified pack; reuses only matching verified private member receipts."
+          },
+          "archive_receipt_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "description": "Actor-bound, expiring receipt for the exact official original/resolved server archive"
           }
         },
         "additionalProperties": false
@@ -12613,6 +12912,9 @@
           "summary": {
             "type": "string",
             "maxLength": 2048
+          },
+          "archive_manual": {
+            "$ref": "#/components/schemas/ModpackArchiveManual"
           }
         },
         "additionalProperties": false
@@ -13141,7 +13443,8 @@
         ],
         "properties": {
           "current_version": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 64
           },
           "schema": {
             "type": "integer",
@@ -13154,7 +13457,8 @@
             "type": "boolean"
           },
           "disabled_reason": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 512
           },
           "schema_policy": {
             "type": "string",
@@ -13177,21 +13481,27 @@
         ],
         "properties": {
           "version": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 64
           },
           "platform": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 64
           },
           "published_at": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "maxLength": 64
           },
           "expires_at": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "maxLength": 64
           },
           "binary_sha256": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 64
           },
           "schema": {
             "type": "integer",
@@ -13212,16 +13522,22 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^[a-f0-9]{64}$"
+            "pattern": "^[a-f0-9]{64}$",
+            "maxLength": 64,
+            "minLength": 64
           },
           "version": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 64
           },
           "platform": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 64
           },
           "binary_sha256": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 64
           },
           "schema": {
             "type": "integer",
@@ -13238,7 +13554,8 @@
         "properties": {
           "version": {
             "type": "string",
-            "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+            "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+            "maxLength": 64
           }
         }
       },
@@ -13252,10 +13569,95 @@
         "properties": {
           "stage_id": {
             "type": "string",
-            "pattern": "^[a-f0-9]{64}$"
+            "pattern": "^[a-f0-9]{64}$",
+            "maxLength": 64,
+            "minLength": 64
           },
           "confirm": {
             "type": "boolean"
+          }
+        }
+      },
+      "ModpackArchiveManual": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "selection",
+          "filename",
+          "size",
+          "hashes",
+          "official_url",
+          "reason"
+        ],
+        "properties": {
+          "selection": {
+            "$ref": "#/components/schemas/ContentSelection"
+          },
+          "filename": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 2147483648
+          },
+          "hashes": {
+            "type": "object",
+            "maxProperties": 8,
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "official_url": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        }
+      },
+      "ModpackArchiveReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "sha256",
+          "size"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 2147483648
+          }
+        }
+      },
+      "SelfUpdateAccepted": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "accepted"
+            ]
           }
         }
       }

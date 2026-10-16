@@ -1330,6 +1330,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{instanceId}/modpack/archives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Administrator: verify exact official pack/server-pack archive acquisition
+         * @description Requires administrator role and admin PAT scope. Catalog resolves original and official server-pack mappings; an absent CurseForge key remains unavailable. Size and published hashes are authoritative; no arbitrary ZIP import or URL input. Receipt expires after24hours.
+         */
+        post: operations["uploadModpackArchive"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2479,6 +2499,8 @@ export interface components {
             };
             /** @description Actor-owned earlier preview of the same exact verified pack; reuses only matching verified private member receipts. */
             previous_preview_id?: string;
+            /** @description Actor-bound, expiring receipt for the exact official original/resolved server archive */
+            archive_receipt_id?: string;
         };
         ModpackSource: {
             selection: components["schemas"]["ContentSelection"];
@@ -2540,6 +2562,7 @@ export interface components {
             blockers: string[];
             excluded: string[];
             summary: string;
+            archive_manual?: components["schemas"]["ModpackArchiveManual"];
         };
         ScheduleInput: {
             name: string;
@@ -2702,6 +2725,27 @@ export interface components {
         SelfUpdateApplyInput: {
             stage_id: string;
             confirm: boolean;
+        };
+        ModpackArchiveManual: {
+            selection: components["schemas"]["ContentSelection"];
+            filename: string;
+            /** Format: int64 */
+            size: number;
+            hashes: {
+                [key: string]: string;
+            };
+            official_url: string;
+            reason: string;
+        };
+        ModpackArchiveReceipt: {
+            id: string;
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+        };
+        SelfUpdateAccepted: {
+            /** @enum {string} */
+            status: "accepted";
         };
     };
     responses: never;
@@ -8639,8 +8683,35 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Authentication, authorization, validation or update availability failure */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8699,8 +8770,35 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Authentication, authorization, validation or update availability failure */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8759,8 +8857,35 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Authentication, authorization, validation or update availability failure */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8797,7 +8922,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["SelfUpdateAccepted"];
+                };
             };
             /** @description Authentication, authorization, validation or update availability failure */
             401: {
@@ -8817,6 +8944,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Authentication, authorization, validation or update availability failure */
             422: {
                 headers: {
@@ -8826,7 +8971,119 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Authentication, authorization, validation or update availability failure */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    uploadModpackArchive: {
+        parameters: {
+            query: {
+                provider: "modrinth" | "curseforge";
+                project_id: string;
+                version_id: string;
+                file_id: string;
+            };
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["ModpackInstanceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Digest-verified private archive receipt */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModpackArchiveReceipt"];
+                };
+            };
+            /** @description Structured operation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
             503: {
                 headers: {
                     [name: string]: unknown;
