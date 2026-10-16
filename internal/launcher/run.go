@@ -196,6 +196,9 @@ func run(ctx context.Context, cfg Config, parentStdin io.Reader, verify func(con
 	if err = prepare(p); err != nil {
 		return err
 	}
+	if err = CheckActivationReady(ctx, cfg.DataDir, cfg.InstanceID); err != nil {
+		return err
+	}
 	var disk diskSpec
 	if err = ReadJSON(filepath.Join(p.State, "launch.json"), &disk); err != nil {
 		return fmt.Errorf("read launch specification: %w", err)

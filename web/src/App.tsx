@@ -7,6 +7,8 @@ const UsersPage = lazy(() => import('./features/auth/UsersPage').then(m => ({ de
 const OIDCSettingsPage = lazy(() => import('./features/auth/OIDCSettingsPage').then(m => ({ default: m.OIDCSettingsPage })))
 const InstancesPage = lazy(() => import('./features/instances').then(m => ({ default: m.InstancesPage })))
 const InstancePage = lazy(() => import('./features/instances').then(m => ({ default: m.InstancePage })))
+const ConsolePage = lazy(() => import('./features/console/ConsolePage').then(m => ({ default: m.ConsolePage })))
+const WorldsPage = lazy(() => import('./features/worlds').then(m => ({ default: m.WorldsPage })))
 const JobsPage = lazy(() => import('./features/jobs').then(m => ({ default: m.JobsPage })))
 const AuditPage = lazy(() => import('./features/auth/AuditPage').then(m => ({ default: m.AuditPage })))
 import { Shell } from './layout/Shell'
@@ -20,6 +22,8 @@ export default function App() {
   return <BrowserRouter><AuthGate><Shell><Suspense fallback={<Center mih={240}><Loader aria-label="Loading page" /></Center>}><Routes>
     <Route path="/" element={<InstancesPage />} />
     <Route path="/instances/:instanceId" element={<InstancePage />} />
+    <Route path="/instances/:instanceId/console" element={<ConsolePage />} />
+    <Route path="/instances/:instanceId/world" element={<WorldsPage />} />
     <Route path="/jobs" element={<JobsPage />} />
     <Route path="/account" element={<AccountPage />} />
     <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />

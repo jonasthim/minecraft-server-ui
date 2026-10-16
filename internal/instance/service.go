@@ -45,11 +45,13 @@ type Detail struct {
 	Settings     SettingsProjection    `json:"settings"`
 }
 type Service struct {
-	db       *sql.DB
-	paths    Paths
-	guard    MutationGuard
-	jobGuard JobMutationGuard
-	mu       sync.Mutex
+	db            *sql.DB
+	paths         Paths
+	guard         MutationGuard
+	jobGuard      JobMutationGuard
+	activation    ActivationCoordinator
+	recoveryGuard RecoveryMutationGuard
+	mu            sync.Mutex
 }
 
 func New(database *sql.DB, paths Paths, guard MutationGuard, options ...Option) *Service {
@@ -333,7 +335,7 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 		return Detail{}, err
 	}
 	var result Detail
-	err := s.mutate(ctx, id, func() error {
+	err := s.mutate(ctx, id, func() (updateErr error) {
 		if err := s.recoverDeletion(ctx, id); err != nil {
 			return err
 		}
@@ -385,6 +387,20 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 		if err != nil {
 			return err
 		}
+		activation, err := s.prepareConfigActivation(ctx, previous, d.Instance.MemoryMiB)
+		if err != nil {
+			return err
+		}
+		configReady := true
+		defer func() {
+			if activation != nil && configReady {
+				cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := activation.Finish(cleanup); err != nil {
+					updateErr = errors.Join(updateErr, domain.Wrap(domain.CodeUnavailable, "configuration activation pending; manager recovery required", err))
+				}
+			}
+		}()
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
@@ -434,20 +450,34 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 		if err = persistConfigIntent(ctx, root, configIntent{OwnerToken: token, BeforeUpdatedAt: previous.Instance.UpdatedAt, AfterUpdatedAt: d.Instance.UpdatedAt, Before: originalFiles}); err != nil {
 			return err
 		}
+		configReady = false
 		if err = writeManaged(ctx, root, d.Instance, d.Config, eula, management); err != nil {
 			cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			restoreErr := rollbackConfig(cleanup, root, originalFiles)
+			configReady = restoreErr == nil
 			return errors.Join(err, restoreErr)
+		}
+		if activation != nil {
+			if err = activation.Apply(ctx, tx); err != nil {
+				cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				restoreErr := rollbackConfig(cleanup, root, originalFiles)
+				configReady = restoreErr == nil
+				return errors.Join(domain.Wrap(domain.CodeUnavailable, "configuration activation pending; settings were not committed", err), restoreErr)
+			}
 		}
 		if err = tx.Commit(); err != nil {
 			cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			restoreErr := rollbackConfig(cleanup, root, originalFiles)
+			configReady = restoreErr == nil
 			return errors.Join(fmt.Errorf("commit configuration: %w", err), restoreErr)
 		}
 		result = detailWithSettings(Detail{Instance: d.Instance, Config: d.Config, EULA: eula, Provisioning: previous.Provisioning})
-		return clearConfigIntent(root)
+		err = clearConfigIntent(root)
+		configReady = err == nil
+		return err
 	})
 	return result, err
 }

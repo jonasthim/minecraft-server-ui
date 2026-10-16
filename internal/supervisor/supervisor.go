@@ -112,6 +112,9 @@ func (s *Supervisor) Start(ctx context.Context, id string, spec domain.LaunchSpe
 	if err = s.requireStopped(ctx, id); err != nil {
 		return domain.ProcessIdentity{}, err
 	}
+	if err = launcher.CheckActivationReady(ctx, s.cfg.DataDir, id); err != nil {
+		return domain.ProcessIdentity{}, err
+	}
 	admission, err := launcher.AcquireAdmission(s.cfg.DataDir, id)
 	if err != nil {
 		return domain.ProcessIdentity{}, domain.Wrap(domain.CodeInstanceRunning, "launcher active", err)

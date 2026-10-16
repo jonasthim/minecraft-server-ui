@@ -48,7 +48,7 @@ func (s *Service) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	}
 	deferred := map[string]bool{}
 	handle := func(id string, operation func() error) error {
-		err := s.mutate(ctx, id, operation)
+		err := s.reconcileMutation(ctx, id, operation)
 		if err == nil {
 			result.Recovered = append(result.Recovered, id)
 			return nil

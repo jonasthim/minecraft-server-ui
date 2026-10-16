@@ -9,12 +9,21 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/api"
 	"github.com/jonasthim/minecraft-server-ui/internal/auth"
 	"github.com/jonasthim/minecraft-server-ui/internal/config"
+	"github.com/jonasthim/minecraft-server-ui/internal/console"
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"github.com/jonasthim/minecraft-server-ui/internal/launcher"
+	"github.com/jonasthim/minecraft-server-ui/internal/lifecycle"
+	managedruntime "github.com/jonasthim/minecraft-server-ui/internal/runtime"
+	"github.com/jonasthim/minecraft-server-ui/internal/server/fabric"
+	"github.com/jonasthim/minecraft-server-ui/internal/server/forge"
+	"github.com/jonasthim/minecraft-server-ui/internal/server/neoforge"
+	"github.com/jonasthim/minecraft-server-ui/internal/server/paper"
+	"github.com/jonasthim/minecraft-server-ui/internal/server/vanilla"
 	"github.com/jonasthim/minecraft-server-ui/internal/supervisor"
+	"github.com/jonasthim/minecraft-server-ui/internal/world"
 	"github.com/jonasthim/minecraft-server-ui/web"
 	"io"
 	"log/slog"
@@ -22,6 +31,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -104,29 +114,40 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 		runErr = errors.Join(runErr, <-results, <-results)
 	}()
 	guard := &stoppedMutationGuard{queue: queue, native: native}
-	instances := instance.New(database, paths, guard)
-	// Feature packages register their approved durable handlers before Start.
-	if err := queue.Start(ctx); err != nil {
+	activation := &activationCoordinator{}
+	instances := instance.New(database, paths, guard, instance.WithJobMutationGuard(guard), instance.WithActivationCoordinator(activation), instance.WithRecoveryMutationGuard(guard))
+	control := console.New(database, paths, native, instances, queue)
+	operations := lifecycle.New(lifecycle.Config{DB: database, DataDir: cfg.DataDir, Instances: instances, Jobs: queue, Native: native, Runtime: managedruntime.New(cfg.DataDir, nil), Console: control, Providers: []domain.DistributionProvider{vanilla.New(cfg.DataDir, nil), paper.New(cfg.DataDir, nil), fabric.New(cfg.DataDir, nil), forge.New(cfg.DataDir, nil), neoforge.New(cfg.DataDir, nil)}})
+	activation.operations = operations
+	worlds := world.New(database, instances, paths, queue)
+	if err := control.Register(); err != nil {
 		return err
 	}
-	reconciled, reconcileErr := instances.Reconcile(ctx)
-	for _, pending := range reconciled.Deferred {
-		log.Warn("instance reconciliation deferred", "instance_id", pending.InstanceID, "code", pending.Code)
+	if err := operations.RegisterJobs(); err != nil {
+		return err
 	}
-	if reconcileErr != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		guard.blocked = reconcileErr
-		log.Error("instance reconciliation requires administrator repair; mutations blocked", "error", reconcileErr)
+	if err := reconcileStartup(ctx, queue, native, instances, operations, worlds, guard, log, runtime.GOOS == "windows"); err != nil {
+		return err
 	}
-	// Providers do not yet supply validated installed LaunchSpecs. An empty map
-	// reconciles previous Windows JVMs and waits, without pretending to autostart.
-	if err := native.Autostart(ctx, nil); err != nil {
-		return fmt.Errorf("native startup reconciliation: %w", err)
-	}
-	handler := api.NewRouter(api.Dependencies{DB: database, Logger: log, Web: frontend, Mount: func(r chi.Router) { mountAPI(r, identity, queue, instances) }})
+	handler := api.NewRouter(api.Dependencies{DB: database, Logger: log, Web: frontend, Mount: func(r chi.Router) {
+		mountAPIWithFeatures(r, identity, queue, instances, func(r chi.Router) {
+			api.MountLifecycle(r, operations)
+			api.MountConsole(r, control)
+			api.MountWorlds(r, worlds)
+		})
+	}})
 	server := &http.Server{Addr: cfg.Address, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
+	consoleCtx, cancelConsole := context.WithCancel(ctx)
+	consoleDone := make(chan error, 1)
+	go func() {
+		consoleDone <- watchConsole(consoleCtx, control.Run, func(shutdown context.Context) error {
+			if err := server.Shutdown(shutdown); err != nil {
+				return errors.Join(err, server.Close())
+			}
+			return nil
+		}, log)
+	}()
+	defer func() { cancelConsole(); runErr = errors.Join(runErr, <-consoleDone) }()
 	done := make(chan struct{})
 	shutdownDone := make(chan struct{})
 	go func() {
@@ -156,12 +177,23 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 }
 
 func mountAPI(r chi.Router, identity *auth.Service, queue *jobs.Service, instances ...*instance.Service) {
+	var current *instance.Service
+	if len(instances) > 0 {
+		current = instances[0]
+	}
+	mountAPIWithFeatures(r, identity, queue, current)
+}
+
+func mountAPIWithFeatures(r chi.Router, identity *auth.Service, queue *jobs.Service, instances *instance.Service, features ...func(chi.Router)) {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(identity.Authenticate, identity.CSRF)
 		identity.MountRoutes(r)
 		api.MountJobs(r, queue)
-		if len(instances) > 0 && instances[0] != nil {
-			api.MountInstances(r, instances[0])
+		if instances != nil {
+			api.MountInstances(r, instances)
+		}
+		for _, mount := range features {
+			mount(r)
 		}
 	})
 }
@@ -169,8 +201,10 @@ func mountAPI(r chi.Router, identity *auth.Service, queue *jobs.Service, instanc
 // Global queue admission wraps native lifecycle exclusion. The callback must not
 // enqueue jobs or re-enter either guard. Startup sets blocked before HTTP starts.
 type stoppedMutationGuard struct {
-	queue   *jobs.Service
-	native  *supervisor.Supervisor
+	queue  *jobs.Service
+	native interface {
+		WithStopped(context.Context, string, func() error) error
+	}
 	blocked error
 }
 
@@ -178,5 +212,110 @@ func (g *stoppedMutationGuard) WithStopped(ctx context.Context, id string, fn fu
 	if g.blocked != nil {
 		return domain.E(domain.CodeUnavailable, "instance reconciliation requires administrator repair")
 	}
-	return g.queue.WithIdle(ctx, id, func() error { return g.native.WithStopped(ctx, id, fn) })
+	return g.queue.WithIdle(ctx, id, func() error { return g.withNativeStopped(ctx, id, fn) })
+}
+
+// The active job already owns queue serialization; entering WithIdle here would
+// reject its own slot. Keep native stopped admission held exactly once.
+func (g *stoppedMutationGuard) WithStoppedForJob(ctx context.Context, execution *jobs.Execution, fn func(string) error) error {
+	if g.blocked != nil {
+		return domain.E(domain.CodeUnavailable, "instance reconciliation requires administrator repair")
+	}
+	return execution.WithInstanceMutation(ctx, func(id string) error {
+		return g.withNativeStopped(ctx, id, func() error { return fn(id) })
+	})
+}
+
+// A dead observation loop must not leave a seemingly healthy HTTP service.
+// Drain the listener on unexpected exit and return a safe failure to the host.
+func watchConsole(ctx context.Context, run func(context.Context) error, shutdown func(context.Context) error, log *slog.Logger) error {
+	err := run(ctx)
+	if ctx.Err() != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil
+		}
+		return err
+	}
+	log.Error("Console observation stopped unexpectedly; shutting down manager", "code", domain.CodeUnavailable)
+	cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return errors.Join(domain.E(domain.CodeUnavailable, "console observation stopped unexpectedly"), shutdown(cleanup))
+}
+
+type startupNative interface {
+	Autostart(context.Context, map[string]domain.LaunchSpec) error
+}
+
+func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNative, instances *instance.Service, operations *lifecycle.Service, worlds *world.Service, guard *stoppedMutationGuard, log *slog.Logger, windows bool) error {
+	// Recover durable work without dispatch until files and previous processes
+	// have been reconciled. Linux games keep running across manager restarts.
+	if err := queue.StartPaused(ctx); err != nil {
+		return err
+	}
+	if err := native.Autostart(ctx, nil); err != nil {
+		return fmt.Errorf("native prior-process reconciliation: %w", err)
+	}
+	reconciled, reconcileErr := instances.Reconcile(ctx)
+	for _, pending := range reconciled.Deferred {
+		log.Warn("instance reconciliation deferred", "instance_id", pending.InstanceID, "code", pending.Code)
+	}
+	if reconcileErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		guard.blocked = reconcileErr
+		log.Error("instance reconciliation requires administrator repair; mutations blocked", "error", reconcileErr)
+	}
+	if reconcileErr == nil {
+		if err := operations.Reconcile(ctx); err != nil {
+			return fmt.Errorf("lifecycle recovery: %w", err)
+		}
+		if err := worlds.ReconcileExports(ctx); err != nil {
+			return fmt.Errorf("world export recovery: %w", err)
+		}
+		if windows {
+			plans, err := operations.AutostartPlans(ctx)
+			if err != nil {
+				return fmt.Errorf("validate autostart: %w", err)
+			}
+			if err := native.Autostart(ctx, plans); err != nil {
+				return fmt.Errorf("native autostart: %w", err)
+			}
+		}
+		if err := operations.VerifyRunningAfterReconcile(ctx); err != nil {
+			return fmt.Errorf("queue startup readiness: %w", err)
+		}
+		if err := queue.Resume(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+type activationCoordinator struct{ operations *lifecycle.Service }
+
+func (c *activationCoordinator) PrepareConfigActivation(ctx context.Context, id string, memoryMiB int) (instance.ConfigActivation, error) {
+	if c.operations == nil {
+		return nil, domain.E(domain.CodeUnavailable, "configuration activation coordination is unavailable")
+	}
+	return c.operations.PrepareConfigActivation(ctx, id, memoryMiB)
+}
+
+func (g *stoppedMutationGuard) WithStoppedForRecovery(ctx context.Context, id string, fn func() error) error {
+	if g.blocked != nil {
+		return domain.E(domain.CodeUnavailable, "instance reconciliation requires administrator repair")
+	}
+	return g.queue.WithPausedInstance(ctx, id, func() error { return g.withNativeStopped(ctx, id, fn) })
+}
+
+// Distinguish a failed native admission from an error inside the callback so
+// provider/config errors never get mislabeled as host service failures.
+func (g *stoppedMutationGuard) withNativeStopped(ctx context.Context, id string, fn func() error) error {
+	entered := false
+	err := g.native.WithStopped(ctx, id, func() error { entered = true; return fn() })
+	if err != nil && !entered && ctx.Err() == nil && domain.AsError(err).Code != domain.CodeInstanceRunning {
+		return domain.E(domain.CodeUnavailable, "Native service is unavailable or does not match this manager configuration. Install or repair the approved native service before retrying.")
+	}
+	return err
 }
