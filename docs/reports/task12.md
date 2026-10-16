@@ -1,0 +1,50 @@
+# Task 12 — configured world discovery and download
+
+Date: 2026-10-16. Implementation submitted for integrator review. Package acceptance remains pending integrated browser evidence and real saved-world/platform qualification; the integrator owns the ledger. No staging or commits were performed.
+
+## Implemented behavior
+
+`world.New(db, instances, paths, queue)` exposes `Discover(ctx, instanceID)`, `Capture(ctx, actor, instanceID) (*Archive, error)`, and `ReconcileExports(ctx) error`. Archive implements Read/ReadAt/Seek/Close and provides Size, SHA256 and Filename. The configured level name comes from the instance service. All filesystem roots derive from instance.Paths; responses contain relative paths only.
+
+Discovery distinguishes absent, present, ambiguous and unsupported saves. It observes legacy Vanilla/Fabric/Forge layouts, Paper's associated `_nether`/`_the_end` roots, 26.1 namespaced standard dimensions and player directories, namespaced custom dimensions and conservative unknown mod dimensions. It reports configured version/flavor plus observed-layout provenance. Mixed legacy/new layouts refuse capture. This is directory discovery, not NBT/region decoding or proof of server compatibility.
+
+Capture holds queue.WithIdle during inventory/copy/validation/audit, allowing an already-running JVM. The reservation ends before the HTTP transfer. Source identity/size/mtime and a second digest pass detect changing files, including same-size writes whose timestamp is restored; replacement links and unsafe portable paths fail. The copy is explicitly best effort and never acquires a save lease or stops a server. Cross-file point-in-time consistency is not claimed.
+
+The ZIP preserves associated world/dimension/player paths and ordinary hidden mod saves, `.yml` and `.properties` data. It omits only transient `session.lock`, reserved `.manager`, exact `manager.db` sidecars, `server.properties`, `.env` and `.env.*`, with path/reason disclosure in API/UI/manifest. `.key`/`.pem` candidates refuse capture. Manifest hashes cover exported files. Validation checks the exact expected file and directory inventory, zero-length directory entries, regular file modes, safe names and SHA256 before HTTP success. Audit records the prepared archive's hash/bytes, without source contents or credentials.
+
+Root-reviewed bounds: 100000 entries, 256 dimensions, depth32, component255 bytes, relative path4096 bytes, aggregate relative paths8MiB, per-file8GiB, source16GiB, archive16GiB+32MiB, discovery15seconds, capture10minutes and transfer10minutes. Two global exports retain admission until Archive.Close; failed/canceled capture and completed/failed HTTP transfers clean their staging files.
+
+Startup ReconcileExports requires the manager lock and paused queue dispatch, holds global world-export admission exclusion and refuses any active capture/transfer across service objects. It visits only persisted instance IDs, opens backups/.exports through rooted directory identity checks and removes only exact `[0-9a-f]{32}.zip` regular single-link staging files after opened/current identity checks. Partial ZIPs are eligible because a crash may interrupt creation. Unknown names/directories, symlinks, hard links and special files are preserved. Cleanup uses the discovery deadline and a global entry budget, is repeatable, and reports errors. Durable queued work is preserved without taking WithIdle, which would otherwise reject queued jobs and prevent startup forever. Lifecycle composition calls it before HTTP admission.
+
+Viewer/operator/admin can discover; only operator/admin can download. Existing GET/read personal token semantics apply subject to current owner role. Expired/revoked tokens and disabled owners are rejected. The owned API fragment has two GET operations and no upload/import endpoint. Console integration owns fragment merging and generated TypeScript regeneration.
+
+The Mantine world page uses generated API types, shows absent/ambiguous states, dimensions and omissions, wraps long paths, gates the attachment action by role, and exposes loading/error/status feedback plus the live-copy caveat. Downloads use browser-managed attachment navigation through a named same-origin frame; multi-gigabyte archives are not buffered into JavaScript Blobs. A failed JSON capture response is surfaced in the page. Native attachment/error behavior still needs integrated browser verification.
+
+## Evidence from this resumed worker
+
+Ordinary owned touch/remove succeeded without sandbox_permissions after the permission transition. Existing implementation was retained.
+
+- RED: ZIP tampering test accepted unexpected/traversal/duplicate/missing directories and symlink-marked files before the validation patch. The test now rejects all those cases, duplicate files and changed content while accepting the reviewed inventory.
+- RED: recovery tests initially failed to compile because ReconcileExports did not exist. Tests now exercise orphan deletion/idempotence, unknown instance/name/directory preservation, link/target preservation, active transfer refusal, new-capture exclusion across services, canceled/bounded cleanup and linked staging-root refusal.
+- RED: integrator review identified that per-instance WithIdle blocked startup for persisted queued jobs. A real paused jobs queue and durable queued job reproduced `instance_busy`; cleanup now succeeds after an active Archive closes, removes the orphan and leaves the job queued. Startup-only cleanup retains global capture/transfer exclusion.
+- `go test -race ./internal/world -count=1`: PASS after the startup admission fix, 4.864 seconds.
+- `go test -race ./internal/api -run '^TestWorldHTTP' -count=1`: PASS. Exercises real instance/SQLite/queue/auth service routing, anonymous/all-role access, read/operate/admin token scopes, revoked/expired/disabled users, ZIP headers/body, queue reservation release before transfer, busy reservation refusal and unsafe capture failure before success.
+- `go vet ./internal/world`: PASS.
+- `GOOS=windows GOARCH=amd64 go test -c ./internal/world -o /home/thim/.cache/dilla-tmp/minecraft-world-task12.test.exe`: PASS. Cross-compilation only; no native Windows execution claim.
+- `go test ./...`: PASS across the shared working tree after main composition appeared; some existing package results used Go's cache. No observed failures were omitted.
+- `npm run typecheck` and `npm run lint` in web: PASS after console2 merged the API fragments and regenerated schema.d.ts.
+
+Package fixtures use real temporary directories and malformed names/links, but synthetic file contents. Coverage includes 1.12.2 legacy,1.20.5 custom paths,1.21.9 Paper split roots,26.1 standard/player folders, bounds/cancellation/audit failure, reserved/unsafe paths and names with spaces, source replacement/change, archive completeness, digest checks and global transfer admission.
+
+## Primary layout evidence reviewed
+
+These publisher sources were read on2026-10-16. Their documented layouts informed discovery; they are not executed game qualification.
+
+- [Mojang26.1 release notes](https://www.minecraft.net/en-us/article/minecraft-java-edition-26-1) document standard dimension data under `dimensions/minecraft/` and the `players/` directory reorganization.
+- [Paper26.1 announcement](https://papermc.io/news/26-1/) shows the modern shared world structure, Paper dimension data and player directories.
+- [Paper migration reference](https://docs.papermc.io/paper/migration/) documents legacy Paper split roots, the pre26.1 Vanilla/Paper comparison and Fabric/Forge's use of Vanilla structure.
+- [Forge Saved Data reference](https://docs.minecraftforge.net/en/latest/datastorage/saveddata/) documents dimension-specific mod persistence and shared Overworld data.
+
+## Remaining qualification
+
+Root owns integrated390px/mobile keyboard/visible feedback review and a native browser attachment/error check after composition. No actual Minecraft process, EULA acceptance, real client connection, service install or production-host change occurred in this package. Real saved-world coverage and native Windows junction/reparse/filesystem execution remain required for release claims. Other release-matrix codecs and map decoding belong to their respective packages. World downloads remain a best-effort export and do not substitute for Task13 online backups.

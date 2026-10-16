@@ -1,0 +1,388 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Configured world discovery and download",
+    "version": "0.0.0"
+  },
+  "paths": {
+    "/api/v1/instances/{instanceId}/world": {
+      "get": {
+        "operationId": "worldDiscover",
+        "tags": [
+          "worlds"
+        ],
+        "summary": "Viewer: discover the one configured saved world and standard/custom dimension paths. Observed directories and configured version are provenance, not compatibility qualification.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instanceId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Discovery succeeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldDiscoveryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required; includes expired/revoked token or disabled owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Viewer cannot export",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance or saved world absent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instance/export busy, ambiguous layout, or source changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unsafe path/link/special file, credential candidate, or export bounds exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Archive or required audit failed before HTTP success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "World export is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/world/download": {
+      "get": {
+        "operationId": "worldDownload",
+        "tags": [
+          "worlds"
+        ],
+        "summary": "Operator: download a validated ZIP of configured world roots, preserving observed layout and player/custom dimension data, with explicit omissions in world-export.json. Live best-effort copy, not a point-in-time or save-lease backup. Stage and validate before HTTP success; queue reservation ends before transfer. Two global active exports; 100000 entries, 256 dimensions, depth32, component255 bytes, path4096 bytes, aggregate relative paths8MiB, per-file8GiB, source16GiB, archive16GiB+32MiB, capture10min, transfer10min. Read PAT scope permits GET subject to current owner operator/admin role.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instanceId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated world ZIP",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "headers": {
+              "X-Archive-SHA256": {
+                "description": "SHA256 of the validated ZIP",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-World-Consistency": {
+                "description": "Always best-effort-live-copy",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "best-effort-live-copy"
+                  ]
+                }
+              },
+              "Content-Disposition": {
+                "description": "Attachment with safe instance-derived filename",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required; includes expired/revoked token or disabled owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Viewer cannot export",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance or saved world absent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instance/export busy, ambiguous layout, or source changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unsafe path/link/special file, credential candidate, or export bounds exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Archive or required audit failed before HTTP success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "World export is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "WorldOmission": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "reason"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "WorldDimension": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "path",
+          "state",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "Validated path relative to the instance server root. Never an absolute filesystem path."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "present",
+              "absent"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "custom",
+              "unknown"
+            ]
+          }
+        }
+      },
+      "WorldDiscovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "level_name",
+          "state",
+          "layout",
+          "minecraft_version",
+          "flavor",
+          "provenance",
+          "dimensions",
+          "warnings",
+          "omitted",
+          "consistency"
+        ],
+        "properties": {
+          "level_name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "absent",
+              "present",
+              "ambiguous",
+              "unsupported"
+            ]
+          },
+          "layout": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "paper_legacy",
+              "namespaced_26_1",
+              "unknown"
+            ]
+          },
+          "minecraft_version": {
+            "type": "string"
+          },
+          "flavor": {
+            "type": "string"
+          },
+          "provenance": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorldDimension"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "omitted": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorldOmission"
+            }
+          },
+          "consistency": {
+            "type": "string"
+          }
+        }
+      },
+      "WorldDiscoveryResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "world"
+        ],
+        "properties": {
+          "world": {
+            "$ref": "#/components/schemas/WorldDiscovery"
+          }
+        }
+      }
+    }
+  }
+}
