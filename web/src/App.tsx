@@ -11,6 +11,8 @@ const PlayersPage = lazy(() => import('./features/players/PlayersPage').then(m =
 const ConsolePage = lazy(() => import('./features/console/ConsolePage').then(m => ({ default: m.ConsolePage })))
 const WorldsPage = lazy(() => import('./features/worlds').then(m => ({ default: m.WorldsPage })))
 const MapPage = lazy(() => import('./features/map').then(m => ({ default: m.MapPage })))
+const MetricsPage = lazy(() => import('./features/metrics/MetricsPanel').then(m => ({ default: m.MetricsPage })))
+const NotificationsPage = lazy(() => import('./features/notifications/NotificationsPage').then(m => ({ default: m.NotificationsPage })))
 const ContentPage = lazy(() => import('./features/content').then(m => ({ default: m.ContentPage })))
 const BackupsPage = lazy(() => import('./features/backups').then(m => ({ default: m.BackupsPage })))
 const CatalogPage = lazy(() => import('./features/catalog/CatalogPage').then(m => ({ default: m.CatalogPage })))
@@ -31,6 +33,7 @@ export default function App() {
     <Route path="/instances/:instanceId/console" element={<ConsolePage />} />
     <Route path="/instances/:instanceId/world" element={<WorldsPage />} />
     <Route path="/instances/:instanceId/map" element={<MapPage />} />
+    <Route path="/instances/:instanceId/metrics" element={<MetricsPage />} />
     <Route path="/instances/:instanceId/backups" element={<BackupsPage />} />
     <Route path="/instances/:instanceId/content" element={<ContentPage />} />
     <Route path="/catalog" element={<CatalogPage />} />
@@ -38,6 +41,7 @@ export default function App() {
     <Route path="/account" element={<AccountPage />} />
     <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
     <Route path="/settings/auth" element={<AdminOnly><OIDCSettingsPage /></AdminOnly>} />
+    <Route path="/settings/notifications" element={<AdminOnly><NotificationsPage /></AdminOnly>} />
     <Route path="/audit" element={<AdminOnly><AuditPage /></AdminOnly>} />
     <Route path="/login" element={<Navigate to="/" replace />} />
     <Route path="/setup" element={<Navigate to="/" replace />} />

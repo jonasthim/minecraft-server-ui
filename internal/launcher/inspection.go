@@ -9,14 +9,15 @@ import (
 // NativeInspection is the bounded read-only broker result. No environment,
 // command line, credentials or caller-selected file contents are returned.
 type NativeInspection struct {
-	InstanceID    string `json:"instance_id"`
-	PID           int    `json:"pid"`
-	LauncherPID   int    `json:"launcher_pid"`
-	StartIdentity string `json:"start_identity"`
-	Executable    string `json:"executable"`
-	WorkingDir    string `json:"working_dir"`
-	UserNamespace string `json:"user_namespace"`
-	InvocationID  string `json:"invocation_id"`
+	InstanceID    string           `json:"instance_id"`
+	PID           int              `json:"pid"`
+	LauncherPID   int              `json:"launcher_pid"`
+	StartIdentity string           `json:"start_identity"`
+	Executable    string           `json:"executable"`
+	WorkingDir    string           `json:"working_dir"`
+	UserNamespace string           `json:"user_namespace"`
+	InvocationID  string           `json:"invocation_id"`
+	Counters      *ProcessCounters `json:"counters,omitempty"`
 }
 
 // ReadNativeInspection only reads native process metadata. The root broker must
@@ -29,5 +30,10 @@ func ReadNativeInspection(id string, pid, launcherPID int) (NativeInspection, er
 	if err != nil {
 		return NativeInspection{}, fmt.Errorf("read scoped JVM identity: %w", err)
 	}
-	return NativeInspection{InstanceID: id, PID: pid, LauncherPID: launcherPID, StartIdentity: start, Executable: exe, WorkingDir: cwd}, nil
+	counters := readProcessCounters(pid, start)
+	again, againExe, againCwd, err := processIdentity(pid)
+	if err != nil || again != start || againExe != exe || againCwd != cwd {
+		return NativeInspection{}, fmt.Errorf("scoped JVM identity changed during inspection")
+	}
+	return NativeInspection{InstanceID: id, PID: pid, LauncherPID: launcherPID, StartIdentity: start, Executable: exe, WorkingDir: cwd, Counters: &counters}, nil
 }

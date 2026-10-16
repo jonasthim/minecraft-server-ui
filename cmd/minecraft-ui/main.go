@@ -21,6 +21,8 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/lifecycle"
 	"github.com/jonasthim/minecraft-server-ui/internal/mapdata"
 	"github.com/jonasthim/minecraft-server-ui/internal/mapview"
+	"github.com/jonasthim/minecraft-server-ui/internal/metrics"
+	"github.com/jonasthim/minecraft-server-ui/internal/notify"
 	"github.com/jonasthim/minecraft-server-ui/internal/players"
 	managedruntime "github.com/jonasthim/minecraft-server-ui/internal/runtime"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/fabric"
@@ -128,6 +130,8 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	activation.operations = operations
 	worlds := world.New(database, instances, paths, queue)
 	maps := mapview.New(mapdata.New(worlds, paths), control)
+	metricService := metrics.New(metrics.Config{DB: database, Paths: paths, Instances: instances, Native: native, Players: playerService})
+	notificationService := notify.New(notify.Config{DB: database})
 	backups := backup.New(backup.Config{DB: database, Paths: paths, Instances: instances, Jobs: queue, Console: control, Native: native, Worlds: worlds})
 	if err := backups.Register(); err != nil {
 		return err
@@ -171,6 +175,8 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 			api.MountBackups(r, backups)
 			api.MountCatalog(r, catalogs)
 			api.MountContent(r, contents)
+			api.MountMetrics(r, metricService)
+			api.MountNotifications(r, notificationService)
 		})
 	}})
 	server := &http.Server{Addr: cfg.Address, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
@@ -196,6 +202,23 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 		}, log)
 	}()
 	defer func() { cancelPlayers(); runErr = errors.Join(runErr, <-playerDone) }()
+	observationCtx, cancelObservations := context.WithCancel(ctx)
+	observationDone := make(chan error, 2)
+	for _, loop := range []struct {
+		name string
+		run  func(context.Context) error
+	}{{"metrics", metricService.Run}, {"notifications", notificationService.Run}} {
+		go func(name string, run func(context.Context) error) {
+			observationDone <- watchObservability(observationCtx, name, run, func(shutdown context.Context) error {
+				if err := server.Shutdown(shutdown); err != nil {
+					return errors.Join(err, server.Close())
+				}
+				return nil
+			}, log)
+		}(loop.name, loop.run)
+	}
+	defer func() { cancelObservations(); runErr = errors.Join(runErr, <-observationDone, <-observationDone) }()
+
 	done := make(chan struct{})
 	shutdownDone := make(chan struct{})
 	go func() {
@@ -319,6 +342,22 @@ func watchPlayers(ctx context.Context, run func(context.Context) error, shutdown
 	cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return errors.Join(domain.E(domain.CodeUnavailable, "player observation stopped unexpectedly"), shutdown(cleanup))
+}
+
+// watchObservability fails the manager visibly if a durable observation loop
+// exits unexpectedly. Cancellation returns only after the service has drained.
+func watchObservability(ctx context.Context, name string, run func(context.Context) error, shutdown func(context.Context) error, log *slog.Logger) error {
+	err := run(ctx)
+	if ctx.Err() != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil
+		}
+		return err
+	}
+	log.Error("Observation service stopped unexpectedly; shutting down manager", "service", name, "code", domain.CodeUnavailable)
+	cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return errors.Join(domain.E(domain.CodeUnavailable, name+" observation stopped unexpectedly"), shutdown(cleanup))
 }
 
 type startupNative interface {
