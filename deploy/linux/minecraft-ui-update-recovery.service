@@ -1,0 +1,21 @@
+[Unit]
+Description=Recover interrupted Minecraft UI executable activation
+Before=minecraft-ui.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/lib/minecraft-ui/selfupdate recover
+TimeoutStartSec=4min
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/usr/local/bin /var/lib/minecraft-ui-update /var/lib/minecraft-ui
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+NoNewPrivileges=true

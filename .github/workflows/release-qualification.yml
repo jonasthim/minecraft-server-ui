@@ -1,0 +1,25 @@
+name: Release qualification gate
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact stable version with reviewed evidence (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse unqualified stable release
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: python3 release/check_qualification.py "$REQUESTED_VERSION"
+      - name: Publication requires a separately reviewed signing and publishing workflow
+        run: |
+          echo 'No signing private key, production trust or publishing credential is configured.' >&2
+          exit 1
+# This workflow has no tag trigger, contents write permission, publishing step,
+# signing key generation, shared credentials or claim of native qualification.

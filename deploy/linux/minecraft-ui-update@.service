@@ -1,0 +1,24 @@
+[Unit]
+Description=Verified Minecraft UI executable activation and recovery
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/lib/minecraft-ui/selfupdate run %i
+TimeoutStartSec=9min
+UMask=0077
+# Independent from minecraft-ui.service: this worker must survive its stop.
+# It controls only the fixed manager unit and fixed executable. No caller paths.
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/usr/local/bin /var/lib/minecraft-ui-update /var/lib/minecraft-ui
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+NoNewPrivileges=true

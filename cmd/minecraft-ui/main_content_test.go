@@ -107,7 +107,7 @@ func TestStartupContentOrderingFailureAndRetainedJob(t *testing.T) {
 			operations := lifecycle.New(lifecycle.Config{DB: database, DataDir: dir, Instances: instances, Jobs: queue, Native: native})
 			worlds := world.New(database, instances, paths, queue)
 			log := slog.New(slog.NewTextHandler(io.Discard, nil))
-			e = reconcileStartup(t.Context(), queue, native, instances, operations, worlds, backups, contents, guard, log, true)
+			e = reconcileStartup(t.Context(), queue, native, instances, operations, worlds, backups, contents, startupContentStub{}, startupContentStub{}, guard, log, true)
 			if failure != "" {
 				if e == nil {
 					t.Fatal("failed content recovery admitted startup")

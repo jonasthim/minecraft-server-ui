@@ -13,7 +13,7 @@ EnvironmentFile=-/etc/minecraft-ui/environment
 ExecStart=/usr/local/bin/minecraft-ui serve
 Restart=on-failure
 RestartSec=5s
-TimeoutStopSec=120s
+TimeoutStopSec=150s
 UMask=0077
 ProtectSystem=strict
 ProtectHome=true
@@ -25,7 +25,8 @@ ProtectKernelLogs=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 # NoNewPrivileges is intentionally absent: the only sudo grant is the fixed,
-# root-owned unitctl helper. Games have NoNewPrivileges=true in their own units.
+# root-owned unitctl and separately installed signed-update helper. Games have
+# NoNewPrivileges=true in their own units.
 
 [Install]
 WantedBy=multi-user.target

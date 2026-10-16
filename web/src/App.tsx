@@ -14,7 +14,10 @@ const WorldsPage = lazy(() => import('./features/worlds').then(m => ({ default: 
 const MapPage = lazy(() => import('./features/map').then(m => ({ default: m.MapPage })))
 const MetricsPage = lazy(() => import('./features/metrics/MetricsPanel').then(m => ({ default: m.MetricsPage })))
 const NotificationsPage = lazy(() => import('./features/notifications/NotificationsPage').then(m => ({ default: m.NotificationsPage })))
+const SelfUpdatePage = lazy(() => import('./features/selfupdate/SelfUpdatePage').then(m => ({ default: m.SelfUpdatePage })))
 const ContentPage = lazy(() => import('./features/content').then(m => ({ default: m.ContentPage })))
+const ModpacksPage = lazy(() => import('./features/modpacks').then(m => ({ default: m.ModpacksPage })))
+const SchedulesPage = lazy(() => import('./features/schedules').then(m => ({ default: m.SchedulesPage })))
 const BackupsPage = lazy(() => import('./features/backups').then(m => ({ default: m.BackupsPage })))
 const CatalogPage = lazy(() => import('./features/catalog/CatalogPage').then(m => ({ default: m.CatalogPage })))
 const JobsPage = lazy(() => import('./features/jobs').then(m => ({ default: m.JobsPage })))
@@ -38,12 +41,15 @@ export default function App() {
     <Route path="/instances/:instanceId/metrics" element={<MetricsPage />} />
     <Route path="/instances/:instanceId/backups" element={<BackupsPage />} />
     <Route path="/instances/:instanceId/content" element={<ContentPage />} />
+    <Route path="/instances/:instanceId/modpack" element={<ModpacksPage />} />
+    <Route path="/instances/:instanceId/schedules" element={<SchedulesPage />} />
     <Route path="/catalog" element={<CatalogPage />} />
     <Route path="/jobs" element={<JobsPage />} />
     <Route path="/account" element={<AccountPage />} />
     <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
     <Route path="/settings/auth" element={<AdminOnly><OIDCSettingsPage /></AdminOnly>} />
     <Route path="/settings/notifications" element={<AdminOnly><NotificationsPage /></AdminOnly>} />
+    <Route path="/settings/update" element={<AdminOnly><SelfUpdatePage /></AdminOnly>} />
     <Route path="/audit" element={<AdminOnly><AuditPage /></AdminOnly>} />
     <Route path="/login" element={<Navigate to="/" replace />} />
     <Route path="/setup" element={<Navigate to="/" replace />} />

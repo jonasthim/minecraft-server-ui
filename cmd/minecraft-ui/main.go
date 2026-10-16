@@ -23,9 +23,12 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/mapdata"
 	"github.com/jonasthim/minecraft-server-ui/internal/mapview"
 	"github.com/jonasthim/minecraft-server-ui/internal/metrics"
+	"github.com/jonasthim/minecraft-server-ui/internal/modpack"
 	"github.com/jonasthim/minecraft-server-ui/internal/notify"
 	"github.com/jonasthim/minecraft-server-ui/internal/players"
 	managedruntime "github.com/jonasthim/minecraft-server-ui/internal/runtime"
+	"github.com/jonasthim/minecraft-server-ui/internal/scheduler"
+	"github.com/jonasthim/minecraft-server-ui/internal/selfupdate"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/fabric"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/forge"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/neoforge"
@@ -41,6 +44,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -56,6 +60,9 @@ func main() {
 	}
 }
 func run(ctx context.Context, args []string, out io.Writer) error {
+	if handled, err := runSelfUpdateProbe(ctx, args, out); handled {
+		return err
+	}
 	command := "serve"
 	if len(args) > 0 {
 		command = args[0]
@@ -105,11 +112,29 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		var receipt *selfupdate.DrainReceipt
+		var receiptErr error
+		if runErr == nil {
+			receipt, receiptErr = selfupdate.PrepareDrainReceipt(cleanup, database, cfg.DataDir, version)
+		}
+		runErr = errors.Join(runErr, receiptErr, database.Close())
+		if runErr == nil {
+			runErr = selfupdate.PublishDrainReceipt(cleanup, cfg.DataDir, receipt)
+		}
+	}()
 	frontend, err := web.Dist()
 	if err != nil {
 		return fmt.Errorf("embedded frontend: %w", err)
 	}
+	trust, trustErr := selfupdate.LoadNativeTrust(ctx)
+	if trustErr != nil {
+		log.Warn("Manager updates disabled: native release trust is unavailable")
+		trust = selfupdate.Trust{}
+	}
+	managerUpdates := selfupdate.New(selfupdate.Config{Trust: trust, CurrentVersion: version, Schema: db.LatestVersion(), StageDir: filepath.Join(cfg.DataDir, "selfupdate", "stages"), DB: database, Native: selfupdate.NewNative(cfg.DataDir, cfg.Address)})
 	identity := auth.NewService(database, auth.Config{BaseURL: cfg.BaseURL, InsecureCookies: cfg.InsecureCookies}, log)
 	queue := jobs.New(database, log)
 	// Services drain before DB Close; the manager lock is released last. Closing
@@ -128,7 +153,13 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	control := console.New(database, paths, native, instances, queue)
 	playerService := players.New(database, paths, instances, control, queue, native)
 	gameEvents := game.New(database, control, instances)
-	operations := lifecycle.New(lifecycle.Config{DB: database, DataDir: cfg.DataDir, Instances: instances, Jobs: queue, Native: native, Runtime: managedruntime.New(cfg.DataDir, nil), Console: control, Providers: []domain.DistributionProvider{vanilla.New(cfg.DataDir, nil), paper.New(cfg.DataDir, nil), fabric.New(cfg.DataDir, nil), forge.New(cfg.DataDir, nil), neoforge.New(cfg.DataDir, nil)}})
+	var schedules *scheduler.Service
+	operations := lifecycle.New(lifecycle.Config{StopIntent: func(ctx context.Context, id string, actor domain.User) error {
+		if schedules == nil {
+			return domain.E(domain.CodeUnavailable, "crash recovery coordination unavailable")
+		}
+		return schedules.CancelRecovery(ctx, id, actor)
+	}, DB: database, DataDir: cfg.DataDir, Instances: instances, Jobs: queue, Native: native, Runtime: managedruntime.New(cfg.DataDir, nil), Console: control, Providers: []domain.DistributionProvider{vanilla.New(cfg.DataDir, nil), paper.New(cfg.DataDir, nil), fabric.New(cfg.DataDir, nil), forge.New(cfg.DataDir, nil), neoforge.New(cfg.DataDir, nil)}})
 	activation.operations = operations
 	worlds := world.New(database, instances, paths, queue)
 	maps := mapview.New(mapdata.New(worlds, paths), control)
@@ -142,15 +173,31 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	if err != nil {
 		return err
 	}
-	contents, err := content.New(content.Config{DB: database, Paths: paths, Instances: instances, Queue: queue, Catalog: catalogs, Recovery: guard})
+	contents, err := content.New(content.Config{LanguageEvidence: operations.LanguageEvidence, DB: database, Paths: paths, Instances: instances, Queue: queue, Catalog: catalogs, Recovery: guard})
 	if err != nil {
+		return err
+	}
+	packs, err := modpack.New(modpack.Config{DB: database, Paths: paths, Instances: instances, Queue: queue, Catalog: catalogs, Content: contents, Recovery: guard})
+	if err != nil {
+		return err
+	}
+	schedules = scheduler.New(scheduler.Config{DB: database, Commands: control, Backups: backups, Restarts: operations, Native: native, Lifecycle: operations, Jobs: queue, Log: log, OnCrash: func(ctx context.Context, event scheduler.CrashEvent) error {
+		return notificationService.EnqueueServerCrash(ctx, event.ID, event.InstanceID, event.OccurredAt)
+	}})
+	if err := packs.Register(); err != nil {
+		return err
+	}
+	if err := schedules.RegisterJobs(); err != nil {
 		return err
 	}
 	guard.ready = func(ctx context.Context, id string) error {
 		if err := backups.CheckReady(ctx, id); err != nil {
 			return err
 		}
-		return contents.CheckReady(ctx, id)
+		if err := contents.CheckReady(ctx, id); err != nil {
+			return err
+		}
+		return packs.CheckReady(ctx, id)
 	}
 	if err := contents.Register(); err != nil {
 		return err
@@ -164,10 +211,20 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	if err := operations.RegisterJobs(); err != nil {
 		return err
 	}
-	if err := reconcileStartup(ctx, queue, native, instances, operations, worlds, backups, contents, guard, log, runtime.GOOS == "windows"); err != nil {
+	if err := reconcileStartup(ctx, queue, native, instances, operations, worlds, backups, contents, packs, schedules, guard, log, runtime.GOOS == "windows"); err != nil {
 		return err
 	}
+	var ready atomic.Bool
+	updateReadiness := selfupdate.NewReadiness(cfg.DataDir, version, db.LatestVersion(), func() bool {
+		if !ready.Load() || guard.blocked != nil {
+			return false
+		}
+		probe, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return database.PingContext(probe) == nil
+	})
 	handler := api.NewRouter(api.Dependencies{DB: database, Logger: log, Web: frontend, Mount: func(r chi.Router) {
+		r.Method("GET", "/internal/update-ready", updateReadiness)
 		mountAPIWithFeatures(r, identity, queue, instances, func(r chi.Router) {
 			api.MountLifecycle(r, operations)
 			api.MountConsole(r, control)
@@ -178,8 +235,11 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 			api.MountBackups(r, backups)
 			api.MountCatalog(r, catalogs)
 			api.MountContent(r, contents)
+			api.MountModpacks(r, packs)
+			api.MountSchedules(r, schedules)
 			api.MountMetrics(r, metricService)
 			api.MountNotifications(r, notificationService)
+			api.MountSelfUpdate(r, managerUpdates)
 		})
 	}})
 	server := &http.Server{Addr: cfg.Address, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
@@ -209,7 +269,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	observationLoops := []struct {
 		name string
 		run  func(context.Context) error
-	}{{"metrics", metricService.Run}, {"notifications", notificationService.Run}, {"game events", gameEvents.Run}}
+	}{{"metrics", metricService.Run}, {"notifications", notificationService.Run}, {"game events", gameEvents.Run}, {"schedules", schedules.Run}}
 	observationDone := make(chan error, len(observationLoops))
 	for _, loop := range observationLoops {
 		go func(name string, run func(context.Context) error) {
@@ -229,31 +289,38 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	}()
 
 	done := make(chan struct{})
-	shutdownDone := make(chan struct{})
+	shutdownDone := make(chan error, 1)
 	go func() {
-		defer close(shutdownDone)
 		select {
 		case <-ctx.Done():
+			ready.Store(false)
 			shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if err := server.Shutdown(shutdown); err != nil {
-				log.Error("HTTP shutdown", "error", err)
-				_ = server.Close()
+				shutdownDone <- fmt.Errorf("drain HTTP: %w", errors.Join(err, server.Close()))
+				return
 			}
 		case <-done:
 		}
+		shutdownDone <- nil
 	}()
 	log.Info("Minecraft manager listening", "address", cfg.Address, "version", version)
+	ready.Store(guard.blocked == nil)
 	serveErr := server.ListenAndServe()
+	ready.Store(false)
 	close(done)
-	<-shutdownDone // Finish draining HTTP before closing the shared database.
+	// A failed drain must reach the deferred cleanup and prevent an update receipt.
+	return httpServeResult(serveErr, <-shutdownDone)
+}
+
+func httpServeResult(serveErr, shutdownErr error) error {
 	if errors.Is(serveErr, http.ErrServerClosed) {
 		serveErr = nil
 	}
 	if serveErr != nil {
 		serveErr = fmt.Errorf("serve HTTP: %w", serveErr)
 	}
-	return serveErr
+	return errors.Join(serveErr, shutdownErr)
 }
 
 func mountAPI(r chi.Router, identity *auth.Service, queue *jobs.Service, instances ...*instance.Service) {
@@ -380,7 +447,7 @@ type startupBackups interface {
 
 type startupContent interface{ Reconcile(context.Context) error }
 
-func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNative, instances *instance.Service, operations *lifecycle.Service, worlds *world.Service, backups startupBackups, contents startupContent, guard *stoppedMutationGuard, log *slog.Logger, windows bool) error {
+func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNative, instances *instance.Service, operations *lifecycle.Service, worlds *world.Service, backups startupBackups, contents, packs, schedules startupContent, guard *stoppedMutationGuard, log *slog.Logger, windows bool) error {
 	// Recover durable work without dispatch until files and previous processes
 	// have been reconciled. Linux games keep running across manager restarts.
 	if err := queue.StartPaused(ctx); err != nil {
@@ -404,6 +471,12 @@ func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNa
 	if err := contents.Reconcile(ctx); err != nil {
 		return fmt.Errorf("content recovery: %w", err)
 	}
+	if packs == nil {
+		return domain.E(domain.CodeUnavailable, "modpack startup recovery is unavailable")
+	}
+	if err := packs.Reconcile(ctx); err != nil {
+		return fmt.Errorf("modpack recovery: %w", err)
+	}
 	reconciled, reconcileErr := instances.Reconcile(ctx)
 	for _, pending := range reconciled.Deferred {
 		log.Warn("instance reconciliation deferred", "instance_id", pending.InstanceID, "code", pending.Code)
@@ -421,6 +494,12 @@ func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNa
 		}
 		if err := worlds.ReconcileExports(ctx); err != nil {
 			return fmt.Errorf("world export recovery: %w", err)
+		}
+		if schedules == nil {
+			return domain.E(domain.CodeUnavailable, "schedule startup recovery is unavailable")
+		}
+		if err := schedules.Reconcile(ctx); err != nil {
+			return fmt.Errorf("schedule recovery: %w", err)
 		}
 		if windows {
 			plans, err := operations.AutostartPlans(ctx)

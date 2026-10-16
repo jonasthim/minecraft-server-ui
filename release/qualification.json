@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "product_version": "0.0.0-dev",
+  "stable_publish_enabled": false,
+  "release_repository": null,
+  "trusted_public_keys": {},
+  "required_evidence": {
+    "independent_whole_branch_review": null,
+    "linux_debian_fresh_database_admin_install_start_client_backup_restore": null,
+    "linux_ubuntu_fresh_database_admin_install_start_client_backup_restore": null,
+    "windows_native_fresh_database_admin_install_start_client_backup_restore": null,
+    "linux_manager_update_health_rollback_recovery": null,
+    "windows_manager_update_health_rollback_recovery": null,
+    "minecraft_1_12_legacy": null,
+    "minecraft_1_16_packing": null,
+    "minecraft_1_18_negative_y": null,
+    "minecraft_1_20_5_mixed_codecs": null,
+    "minecraft_1_21_9_authenticated_msmp": null,
+    "minecraft_26_1_folders": null,
+    "minecraft_26_3_logs": null,
+    "archive_traversal_hash_failure": null,
+    "online_save_lease_watchdog_crash_recovery": null,
+    "instance_update_recovery_competing_writes": null,
+    "roles_audit_redaction": null,
+    "mobile_390_keyboard_first_use": null,
+    "dependency_license_notice_review": null
+  }
+}
