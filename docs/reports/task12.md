@@ -48,3 +48,18 @@ These publisher sources were read on2026-10-16. Their documented layouts informe
 ## Remaining qualification
 
 Root owns integrated390px/mobile keyboard/visible feedback review and a native browser attachment/error check after composition. No actual Minecraft process, EULA acceptance, real client connection, service install or production-host change occurred in this package. Real saved-world coverage and native Windows junction/reparse/filesystem execution remain required for release claims. Other release-matrix codecs and map decoding belong to their respective packages. World downloads remain a best-effort export and do not substitute for Task13 online backups.
+
+## Independent review fix round 1 — base b4f27bf
+
+The failed-capture cleanup defer discarded Archive.Close errors. It now joins the original capture failure with a wrapped cleanup error before clearing the archive reference. Archive.Close also joins file-close, staged-remove and root-close errors so each failed cleanup step remains inspectable with errors.Is/errors.As. Cleanup still makes one bounded removal attempt and releases transfer admission. A failed removal can leave a staged file requiring the existing startup reconciliation or operator repair; that failure is now returned to the service caller. No automatic removal of unknown paths or retry loop was introduced.
+
+World warning strings are deduplicated at render time, preserving first occurrence order and giving each rendered warning a unique text key.
+
+Focused regression: `internal/world/archive_test.go:TestCaptureReportsOriginalAndCleanupFailures` injects an original source-refresh failure after staging, moves the real open staged file into a nonempty directory at its original name and thereby causes rooted removal to fail. It verifies no archive is returned, the original sentinel survives errors.Is, the failed staging path survives errors.As and the staged bytes actually remain. The test uses real filesystem operations rather than a production injection hook.
+
+- RED: `go test ./internal/world -run '^TestCaptureReportsOriginalAndCleanupFailures$' -count=1` failed with `staged removal failure lost injected source refresh failure` before the patch.
+- The first post-patch assertion assumed the platform operation name `remove`; rooted Linux removal reports `removeat`. The assertion was corrected to inspect the actual staging path, retaining the failure-cause assertion without depending on the operation spelling.
+- GREEN: `go test -race ./internal/world -run '^(TestCaptureReportsOriginalAndCleanupFailures|TestCaptureRejectsBoundsCancelAndUnprivilegedWithoutArchive|TestCaptureGlobalAdmissionEndsOnClose)$' -count=1` passed: `ok github.com/jonasthim/minecraft-server-ui/internal/world 2.472s`.
+- `go vet ./internal/world`, `git diff --check` and web `npm run typecheck`: PASS.
+
+No broad test suites, staging or commits were run for this fix round. Native Windows cleanup failure execution and browser warning rendering remain outside this focused evidence.

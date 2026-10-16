@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
+	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 )
 
 func exportFixture(t *testing.T) (*Service, string) {
@@ -31,6 +33,64 @@ func exportFixture(t *testing.T) (*Service, string) {
 }
 
 var operator = domain.User{ID: 7, Username: "operator", Role: domain.RoleOperator}
+
+type captureFailureStore struct {
+	get func(context.Context, string) (instance.Detail, error)
+}
+
+func (s captureFailureStore) Get(ctx context.Context, id string) (instance.Detail, error) {
+	return s.get(ctx, id)
+}
+
+// A source refresh failure after staging must not hide a simultaneous failure
+// to remove the staged export. Inject both through real filesystem operations.
+func TestCaptureReportsOriginalAndCleanupFailures(t *testing.T) {
+	s, base := exportFixture(t)
+	store := s.instances
+	captureFailure := errors.New("injected source refresh failure")
+	var retained, stagedName string
+	calls := 0
+	s.instances = captureFailureStore{get: func(ctx context.Context, id string) (instance.Detail, error) {
+		calls++
+		if calls == 1 {
+			return store.Get(ctx, id)
+		}
+		dir := filepath.Join(filepath.Dir(base), "backups", ".exports")
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("staged archive absent: %v %v", entries, err)
+		}
+		stagedName = entries[0].Name()
+		staged := filepath.Join(dir, stagedName)
+		moved := staged + ".retained"
+		if err := os.Rename(staged, moved); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(staged, 0700); err != nil {
+			t.Fatal(err)
+		}
+		retained = filepath.Join(staged, "retained.zip")
+		if err := os.Rename(moved, retained); err != nil {
+			t.Fatal(err)
+		}
+		return instance.Detail{}, captureFailure
+	}}
+	a, err := s.Capture(context.Background(), operator, "alpha")
+	if a != nil {
+		a.Close()
+		t.Fatal("failed capture returned archive")
+	}
+	if !errors.Is(err, captureFailure) {
+		t.Fatal("original capture failure lost", err)
+	}
+	var cleanupFailure *os.PathError
+	if !errors.As(err, &cleanupFailure) || filepath.Base(cleanupFailure.Path) != stagedName {
+		t.Fatal("staged removal failure lost", err)
+	}
+	if info, statErr := os.Stat(retained); statErr != nil || info.Size() == 0 {
+		t.Fatal("fixture did not retain staged export", info, statErr)
+	}
+}
 
 func TestCapturePreservesAssociatedRootsAndValidatesDigest(t *testing.T) {
 	s, base := exportFixture(t)

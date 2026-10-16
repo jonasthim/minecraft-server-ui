@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -42,13 +43,10 @@ func (a *Archive) ReadAt(p []byte, off int64) (int, error)   { return a.file.Rea
 func (a *Archive) Seek(off int64, whence int) (int64, error) { return a.file.Seek(off, whence) }
 func (a *Archive) Close() error {
 	a.once.Do(func() {
-		a.closeErr = a.file.Close()
-		if e := a.staging.Remove(a.name); e != nil && a.closeErr == nil {
-			a.closeErr = e
-		}
-		if e := a.staging.Close(); e != nil && a.closeErr == nil {
-			a.closeErr = e
-		}
+		fileErr := a.file.Close()
+		removeErr := a.staging.Remove(a.name)
+		rootErr := a.staging.Close()
+		a.closeErr = errors.Join(fileErr, removeErr, rootErr)
 		<-exportSlots
 	})
 	return a.closeErr
@@ -317,7 +315,7 @@ func (s *Service) Capture(ctx context.Context, actor domain.User, id string) (*A
 	ctx, cancel := context.WithTimeout(ctx, s.limits.capture)
 	defer cancel()
 	var a *Archive
-	e := s.reservation.WithIdle(ctx, id, func() error {
+	e := s.reservation.WithIdle(ctx, id, func() (captureErr error) {
 		d, roots, e := s.discover(ctx, id, true)
 		if e != nil {
 			return e
@@ -340,7 +338,9 @@ func (s *Service) Capture(ctx context.Context, actor domain.User, id string) (*A
 		success := false
 		defer func() {
 			if !success {
-				a.Close()
+				if cleanupErr := a.Close(); cleanupErr != nil {
+					captureErr = errors.Join(captureErr, fmt.Errorf("cleanup failed world export: %w", cleanupErr))
+				}
 				a = nil
 			}
 		}()
