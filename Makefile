@@ -29,6 +29,6 @@ gen:
 dev:
 	@echo 'Run make dev-backend and make dev-web in separate terminals.'
 dev-backend:
-	MINECRAFT_UI_DATA_DIR=./devdata $(GO) run ./cmd/minecraft-ui serve
+	MINECRAFT_UI_ADDR=127.0.0.1:8080 MINECRAFT_UI_BASE_URL=http://127.0.0.1:5173 MINECRAFT_UI_DATA_DIR=./devdata $(GO) run ./cmd/minecraft-ui serve
 dev-web:
 	cd web && $(NPM) run dev

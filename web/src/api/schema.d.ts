@@ -331,6 +331,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: latest 100 jobs; optional instance_id filter. */
+        get: operations["jobsList"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: durable public metadata; payload is never returned. */
+        get: operations["jobsGet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{jobId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Operator: cancel own cancellable job; administrator: any cancellable job. Running work remains running until cleanup completes. */
+        post: operations["jobsCancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{jobId}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: durable redacted log page; after cursor, limit up to 500. */
+        get: operations["jobsLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{jobId}/logs/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: download up to 5 MiB of redacted job output; truncation is explicit. */
+        get: operations["jobsLogDownload"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{jobId}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: bounded live SSE progress/log events; reconnect reloads job and durable logs. Heartbeat every 15 seconds; closes on shutdown or slow reader; reconnect reauthorizes. */
+        get: operations["jobsEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -420,6 +522,7 @@ export interface components {
             /** @enum {string} */
             state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
             phase: string;
+            progress: number;
             error?: string;
             /** Format: date-time */
             created_at: string;
@@ -427,6 +530,9 @@ export interface components {
             started_at?: string;
             /** Format: date-time */
             finished_at?: string;
+            requested_by: number;
+            cancellable: boolean;
+            cancel_requested: boolean;
         };
         AuthUser: {
             id: number;
@@ -556,6 +662,114 @@ export interface components {
                 [key: string]: unknown;
             };
             ip?: string;
+        };
+        JobLog: {
+            id: number;
+            job_id: string;
+            /** Format: date-time */
+            created_at: string;
+            message: string;
+        };
+        JobEvent: {
+            /** @enum {string} */
+            type: "progress" | "log";
+            job_id: string;
+            job?: components["schemas"]["Job"];
+            log?: components["schemas"]["JobLog"];
+        };
+        VersionSelection: {
+            flavor: components["schemas"]["Flavor"];
+            minecraft_version: string;
+            loader_version?: string;
+        };
+        /** @enum {string} */
+        BackupKind: "world" | "full";
+        /** @enum {string} */
+        BackupTrigger: "manual" | "automatic" | "safety";
+        /** @enum {string} */
+        BackupState: "staging" | "ready" | "failed";
+        Backup: {
+            id: string;
+            instance_id: string;
+            kind: components["schemas"]["BackupKind"];
+            trigger: components["schemas"]["BackupTrigger"];
+            state: components["schemas"]["BackupState"];
+            protected: boolean;
+            size_bytes: number;
+            checksum: components["schemas"]["Checksum"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            validated_at?: string;
+            warnings: string[];
+        };
+        SaveLease: {
+            id: string;
+            instance_id: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        /** @enum {string} */
+        ScheduleAction: "backup" | "command" | "announcement" | "restart" | "update";
+        Schedule: {
+            id: string;
+            instance_id: string;
+            name: string;
+            enabled: boolean;
+            action: components["schemas"]["ScheduleAction"];
+            expression: string;
+            timezone: string;
+            command?: string;
+            announcement?: string;
+            backup_kind?: components["schemas"]["BackupKind"];
+            countdown_seconds: number;
+            /** Format: date-time */
+            next_run_at?: string;
+        };
+        TelemetrySource: {
+            kind: string;
+            /** Format: date-time */
+            observed_at: string;
+            gap_reason?: string;
+        };
+        MetricSample: {
+            instance_id: string;
+            /** Format: date-time */
+            collected_at: string;
+            cpu_percent: number | null;
+            resident_bytes: number | null;
+            heap_used_bytes: number | null;
+            heap_max_bytes: number | null;
+            disk_bytes: number | null;
+            players: number | null;
+            sources: components["schemas"]["TelemetrySource"][];
+        };
+        /** @enum {string} */
+        CatalogProvider: "modrinth" | "curseforge" | "hangar";
+        /** @enum {string} */
+        CatalogKind: "mod" | "plugin" | "modpack" | "datapack";
+        CatalogProject: {
+            provider: components["schemas"]["CatalogProvider"];
+            id: string;
+            name: string;
+            description: string;
+            kind: components["schemas"]["CatalogKind"];
+            /** Format: uri */
+            url: string;
+        };
+        CatalogPage: {
+            projects: components["schemas"]["CatalogProject"][];
+            next_cursor?: string;
+        };
+        CatalogVersion: {
+            provider: components["schemas"]["CatalogProvider"];
+            project_id: string;
+            id: string;
+            name: string;
+            declared_minecraft_versions: string[];
+            declared_flavors: components["schemas"]["Flavor"][];
+            artifacts: components["schemas"]["Artifact"][];
+            required_project_ids: string[];
         };
     };
     responses: never;
@@ -1558,6 +1772,362 @@ export interface operations {
                 content?: never;
             };
             /** @description Invalid request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    jobsList: {
+        parameters: {
+            query?: {
+                instance_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        jobs: components["schemas"]["Job"][];
+                    };
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, token scope, ownership, or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Job not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cancellation is unsafe or unavailable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identifier or cursor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    jobsGet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        job: components["schemas"]["Job"];
+                    };
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, token scope, ownership, or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Job not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cancellation is unsafe or unavailable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identifier or cursor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    jobsCancel: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for browser sessions; from /auth/me. */
+                "X-CSRF-Token"?: string;
+            };
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        job: components["schemas"]["Job"];
+                    };
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, token scope, ownership, or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Job not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cancellation is unsafe or unavailable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identifier or cursor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    jobsLogs: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        logs: components["schemas"]["JobLog"][];
+                    };
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, token scope, ownership, or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Job not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cancellation is unsafe or unavailable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identifier or cursor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    jobsLogDownload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, token scope, ownership, or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Job not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cancellation is unsafe or unavailable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identifier or cursor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    jobsEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["JobEvent"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, token scope, ownership, or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Job not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cancellation is unsafe or unavailable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identifier or cursor */
             422: {
                 headers: {
                     [name: string]: unknown;

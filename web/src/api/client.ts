@@ -1,4 +1,5 @@
-export type FieldError = {field:string;message:string};
+import type {components} from './schema';
+export type FieldError = NonNullable<components['schemas']['ErrorResponse']['error']['fields']>[number];
 export class APIError extends Error { code:string; fields:FieldError[]; constructor(code:string,message:string,fields:FieldError[]=[]){super(message);this.code=code;this.fields=fields} }
 let csrfToken='';
 export function setCSRFToken(value:string){csrfToken=value}
@@ -6,7 +7,7 @@ export async function api<T=unknown>(path:string, options:RequestInit={}):Promis
  const url=path.startsWith('/api/')?path:'/api/v1'+(path.startsWith('/')?path:'/'+path);
  const method=(options.method??'GET').toUpperCase();
  if(!['GET','HEAD','OPTIONS'].includes(method)&&!csrfToken&&!['/api/v1/auth/login','/api/v1/auth/setup'].includes(url)){
-  const me=await fetch('/api/v1/auth/me',{credentials:'same-origin'});if(me.ok){const value=await me.json();csrfToken=value.csrf_token??''}
+  const me=await fetch('/api/v1/auth/me',{credentials:'same-origin'});if(me.ok){const value:components['schemas']['AuthUserResponse']=await me.json();csrfToken=value.csrf_token??''}
  }
  const headers=new Headers(options.headers);if(options.body!==undefined&&!headers.has('Content-Type'))headers.set('Content-Type','application/json');
  if(csrfToken)headers.set('X-CSRF-Token',csrfToken);

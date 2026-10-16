@@ -9,7 +9,11 @@ import (
 )
 
 func (s *Service) audit(r *http.Request, action, target string) {
-	e := domain.AuditEntry{Action: action, Target: target, IP: ClientIP(r)}
+	s.recordAudit(r, action, "", target, nil)
+}
+
+func (s *Service) recordAudit(r *http.Request, action, instance, target string, details map[string]any) {
+	e := domain.AuditEntry{Action: action, InstanceID: instance, Target: target, Details: RedactAuditDetails(details), IP: ClientIP(r)}
 	if u := UserFrom(r.Context()); u != nil {
 		e.UserID = &u.ID
 		e.Username = u.Username
@@ -259,5 +263,5 @@ func (s *Service) mountRoutes(r chi.Router) {
 type serviceAuditor struct{ s *Service }
 
 func (a serviceAuditor) Record(r *http.Request, action, instance, target string, details map[string]any) {
-	a.s.audit(r, action, target)
+	a.s.recordAudit(r, action, instance, target, details)
 }

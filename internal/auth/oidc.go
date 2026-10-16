@@ -245,12 +245,15 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// failure is not fatal since the ID token alone was verified.
 	s.mergeUserInfo(ctx, rt, tok, claims)
 
-	usr, linked, err := s.resolveOIDCUser(ctx, rt.settings, idToken.Subject, claims)
+	usr, linked, err := s.resolveOIDCUser(r, rt.settings, idToken.Subject, claims)
 	if err != nil {
 		s.log.Warn("oidc login rejected", "err", err)
 		fail(domain.AsError(err).Code)
 		return
 	}
+	// Attribute verified OIDC actions to the authenticated identity, even when
+	// the callback arrived without a session or with another account's cookie.
+	r = r.WithContext(WithUser(r.Context(), usr))
 	if linked && s.auditor != nil {
 		s.auditor.Record(r, "auth.oidc.link", "", usr.Username, map[string]any{"issuer": rt.settings.IssuerURL, "method": "email"})
 	}
@@ -281,7 +284,8 @@ func TestOIDCDiscovery(ctx context.Context, issuerURL string) (ok bool, issuer, 
 
 // resolveOIDCUser maps a verified token to a local user: link an existing
 // identity, auto-create on first login, apply/sync role mapping.
-func (s *Service) resolveOIDCUser(ctx context.Context, settings domain.OIDCSettings, subject string, claims map[string]any) (usr *domain.User, linked bool, err error) {
+func (s *Service) resolveOIDCUser(r *http.Request, settings domain.OIDCSettings, subject string, claims map[string]any) (usr *domain.User, linked bool, err error) {
+	ctx := r.Context()
 	role, allowed := mapRole(settings.RoleMapping, extractGroups(claims[groupsClaimOrDefault(settings)]), settings.DefaultRole)
 	if !allowed {
 		return nil, false, domain.E(domain.CodeForbidden, "no role mapped for this account")
@@ -329,6 +333,7 @@ func (s *Service) resolveOIDCUser(ctx context.Context, settings domain.OIDCSetti
 		if err != nil {
 			return nil, false, err
 		}
+		s.auditOIDCMutation(r, created, settings, subject, "user.create", map[string]any{"new_role": string(role)})
 		if err := s.users.AddIdentity(ctx, created.ID, settings.IssuerURL, subject); err != nil {
 			return nil, false, err
 		}
@@ -343,6 +348,7 @@ func (s *Service) resolveOIDCUser(ctx context.Context, settings domain.OIDCSetti
 		if err != nil {
 			return nil, false, err
 		}
+		s.auditOIDCMutation(r, updated, settings, subject, "user.role.sync", map[string]any{"previous_role": string(usr.Role), "new_role": string(updated.Role)})
 		usr = updated
 	}
 	return usr, linked, nil
@@ -577,4 +583,18 @@ func (s *Service) verifyOIDCState(value string) ([]byte, error) {
 		return nil, fmt.Errorf("invalid state")
 	}
 	return payload, nil
+}
+
+// OIDC mutations come from validated provider claims. Record the verified
+// initiating user and the provider source; never copy the raw claim payload.
+// This runs at mutation time, before session creation can fail.
+func (s *Service) auditOIDCMutation(r *http.Request, user *domain.User, settings domain.OIDCSettings, subject, action string, details map[string]any) {
+	if s.auditor == nil {
+		return
+	}
+	details["method"] = "oidc"
+	details["source"] = "oidc_provider"
+	details["issuer"] = settings.IssuerURL
+	details["subject"] = subject
+	s.auditor.Record(r.WithContext(WithUser(r.Context(), user)), action, "", user.Username, details)
 }

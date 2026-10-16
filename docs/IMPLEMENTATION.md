@@ -2,16 +2,16 @@
 
 # Implementation Ledger
 
-All work is **pending**. Scaffolding, plans, mocks, and package-local tests are not evidence that a product workflow is complete. The integrator marks a row complete only after review of its acceptance evidence and required cross-package integration.
+No package has final acceptance yet. Scaffolding, plans, mocks, and package-local tests are not evidence that a product workflow is complete. The integrator marks a row complete only after review of its acceptance evidence and required cross-package integration.
 
 | ID | Work package | Depends on | Owner / boundaries | Acceptance evidence | Status |
 |---|---|---|---|---|---|
-| 01 | Foundation, contracts, build | — | Scaffold owner; shared contracts/build/router | Empty DB migration, Linux build/check, generated API types, frozen reviewed interfaces | In Progress |
-| 02 | Identity, OIDC, tokens, authorization, audit | 01 interfaces; can start before review without shared wiring | `internal/auth`, `internal/audit`, identity handlers/migrations | First-admin flow, local/OIDC auth, scoped token revoke/expiry, role matrix, redacted audit | In Progress |
-| 03 | Jobs, events, streaming | 01 | `internal/jobs`, `internal/events`, job/event handlers | Durable states, authorized streaming, cancellation/recovery/slow subscriber evidence | Pending |
+| 01 | Foundation, contracts, build | — | Scaffold owner; shared contracts/build/router | Empty DB migration, Linux build/check, generated API types, frozen reviewed interfaces | Reviewed; fixes pending |
+| 02 | Identity, OIDC, tokens, authorization, audit | 01 interfaces; can start before review without shared wiring | `internal/auth`, `internal/audit`, identity handlers/migrations | First-admin flow, local/OIDC auth, scoped token revoke/expiry, role matrix, redacted audit | Reviewed; fixes pending |
+| 03 | Jobs, events, streaming | 01 | `internal/jobs`, `internal/events`, job/event handlers | Durable states, authorized streaming, cancellation/recovery/slow subscriber evidence | In Progress |
 | 04 | Linux supervision | 01, 03, 06 | Linux supervisor and deploy files | Real systemd lifecycle, survives manager restart, deliberate stop never retries | Pending |
 | 05 | Windows supervision | 01, 03, 06 | Windows supervisor and deploy files | Real qualification on Windows 10/11 and Server 2019+; graceful stop/wait/autostart | Pending |
-| 06 | Temurin runtime manager | 01, 03 | `internal/runtime` | Official hash-verified runtime, atomic activation, compatibility matrix and failure tests | Pending |
+| 06 | Temurin runtime manager | 01, 03 | `internal/runtime` | Official hash-verified runtime, atomic activation, compatibility matrix and failure tests | Implemented; review pending |
 | 07 | Vanilla and Paper | 01, 03, 06 | `internal/server/vanilla`, `paper` | Real tested install/launch/update and recovery for supported tuples | Pending |
 | 08 | Fabric, Forge, NeoForge | 01, 03, 06 | `internal/server/fabric`, `forge`, `neoforge` | Tested tuple matrix, version floors, pre-mutation rejection, recoverable activation | Pending |
 | 09 | Instances, ports, config | 01, 03 | `internal/instance`, instance handlers/UI | Multiple isolated instances, validation, safe paths, role gates | Pending |
@@ -40,3 +40,11 @@ All work is **pending**. Scaffolding, plans, mocks, and package-local tests are 
 - Windows runtime qualification is currently unestablished. Task 05 remains pending until real Windows evidence exists.
 - World uploads, remote backups, and existing-server imports are excluded even if a reference project implements them.
 - Each package must name actual commands and results in its completion report. A green mock or build does not replace real workflow evidence required by the design.
+
+## Integrator review and evidence — 2026-10-16
+
+- Root reviewed foundation/identity commit `9a4ff7e`; Tasks 01 and 02 require review fixes before acceptance. Task 01 fixes add missing shared contracts and align Vite/backend development origins; identity fixes remain with Task 02's owner. Applying a fix does not itself close review.
+- Task 03 is in progress. Jobs/events own their durable service and richer public job projection. Shared `domain.Event`/`EventLog` are aliased by the event package, and the jobs OpenAPI fragment is merged centrally. No jobs runtime wiring is claimed before its owner reports ready.
+- Task 06 implementation is commit `abacb69`, awaiting independent review. Root ran `env MINECRAFT_UI_RUNTIME_SMOKE=1 go test ./internal/runtime -run '^TestOfficialTemurinSmoke$' -v -count=1 -timeout=20m`: PASS in 9.10 seconds. Official Temurin 17.0.20.1+1 linux/x64 archive: 193252603 bytes, SHA-256 `3808d1d15e3ec6bd5b84057fb5d84c33d8a1536a258146bcea2e603fc726e08e`. Vendor/version/architecture execution and fresh-manager verified reuse passed. This verifies that runtime tuple; it does not qualify Minecraft combinations or Windows execution.
+- Development uses the exact browser origin `http://127.0.0.1:5173`, fixed Vite port and loopback binding. Production origin/CSRF rules remain strict. Environment examples distinguish standalone embedded serving from the two-process development command.
+- Future backup/schedule/metrics/catalog service boundaries are DTO/interface contracts only. No unimplemented endpoints or successful placeholder operations are exposed by adding these contracts.

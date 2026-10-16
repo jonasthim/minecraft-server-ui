@@ -3,7 +3,7 @@
   "info": {
     "title": "Minecraft Server UI API",
     "version": "0.0.0-dev",
-    "description": "Foundation health, identity and shared domain contract. Resource contracts are expanded with each implementation task. Cookie mutations require X-CSRF-Token from /auth/me. Servers and content are created through managed provider catalogs; world imports and uploads are not supported."
+    "description": "Health, identity and jobs API contracts with shared domain DTOs. Cookie mutations require X-CSRF-Token from /auth/me. Future feature schemas define reviewed handoff shapes only; they do not expose unimplemented endpoints. World uploads and existing-server imports are excluded."
   },
   "paths": {
     "/healthz": {
@@ -1028,6 +1028,401 @@
           }
         ]
       }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "operationId": "jobsList",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Viewer: latest 100 jobs; optional instance_id filter.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Job"
+                      }
+                    }
+                  },
+                  "required": [
+                    "jobs"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{jobId}": {
+      "get": {
+        "operationId": "jobsGet",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Viewer: durable public metadata; payload is never returned.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job": {
+                      "$ref": "#/components/schemas/Job"
+                    }
+                  },
+                  "required": [
+                    "job"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{jobId}/cancel": {
+      "post": {
+        "operationId": "jobsCancel",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Operator: cancel own cancellable job; administrator: any cancellable job. Running work remains running until cleanup completes.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job": {
+                      "$ref": "#/components/schemas/Job"
+                    }
+                  },
+                  "required": [
+                    "job"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for browser sessions; from /auth/me."
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{jobId}/logs": {
+      "get": {
+        "operationId": "jobsLogs",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Viewer: durable redacted log page; after cursor, limit up to 500.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "logs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/JobLog"
+                      }
+                    }
+                  },
+                  "required": [
+                    "logs"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{jobId}/logs/download": {
+      "get": {
+        "operationId": "jobsLogDownload",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Viewer: download up to 5 MiB of redacted job output; truncation is explicit.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{jobId}/events": {
+      "get": {
+        "operationId": "jobsEvents",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Viewer: bounded live SSE progress/log events; reconnect reloads job and durable logs. Heartbeat every 15 seconds; closes on shutdown or slow reader; reconnect reauthorizes.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobEvent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1344,6 +1739,11 @@
           "phase": {
             "type": "string"
           },
+          "progress": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
           "error": {
             "type": "string"
           },
@@ -1358,6 +1758,15 @@
           "finished_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "requested_by": {
+            "type": "integer"
+          },
+          "cancellable": {
+            "type": "boolean"
+          },
+          "cancel_requested": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -1365,8 +1774,13 @@
           "kind",
           "state",
           "phase",
-          "created_at"
-        ]
+          "progress",
+          "created_at",
+          "requested_by",
+          "cancellable",
+          "cancel_requested"
+        ],
+        "additionalProperties": false
       },
       "AuthUser": {
         "type": "object",
@@ -1864,6 +2278,436 @@
           "id",
           "ts",
           "action"
+        ]
+      },
+      "JobLog": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "job_id",
+          "created_at",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "JobEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "progress",
+              "log"
+            ]
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          },
+          "log": {
+            "$ref": "#/components/schemas/JobLog"
+          }
+        },
+        "required": [
+          "type",
+          "job_id"
+        ],
+        "additionalProperties": false
+      },
+      "VersionSelection": {
+        "type": "object",
+        "properties": {
+          "flavor": {
+            "$ref": "#/components/schemas/Flavor"
+          },
+          "minecraft_version": {
+            "type": "string"
+          },
+          "loader_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "flavor",
+          "minecraft_version"
+        ]
+      },
+      "BackupKind": {
+        "type": "string",
+        "enum": [
+          "world",
+          "full"
+        ]
+      },
+      "BackupTrigger": {
+        "type": "string",
+        "enum": [
+          "manual",
+          "automatic",
+          "safety"
+        ]
+      },
+      "BackupState": {
+        "type": "string",
+        "enum": [
+          "staging",
+          "ready",
+          "failed"
+        ]
+      },
+      "Backup": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/BackupKind"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/BackupTrigger"
+          },
+          "state": {
+            "$ref": "#/components/schemas/BackupState"
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "size_bytes": {
+            "type": "integer"
+          },
+          "checksum": {
+            "$ref": "#/components/schemas/Checksum"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "validated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "instance_id",
+          "kind",
+          "trigger",
+          "state",
+          "protected",
+          "size_bytes",
+          "checksum",
+          "created_at",
+          "warnings"
+        ]
+      },
+      "SaveLease": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "instance_id",
+          "expires_at"
+        ]
+      },
+      "ScheduleAction": {
+        "type": "string",
+        "enum": [
+          "backup",
+          "command",
+          "announcement",
+          "restart",
+          "update"
+        ]
+      },
+      "Schedule": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "action": {
+            "$ref": "#/components/schemas/ScheduleAction"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "announcement": {
+            "type": "string"
+          },
+          "backup_kind": {
+            "$ref": "#/components/schemas/BackupKind"
+          },
+          "countdown_seconds": {
+            "type": "integer"
+          },
+          "next_run_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "instance_id",
+          "name",
+          "enabled",
+          "action",
+          "expression",
+          "timezone",
+          "countdown_seconds"
+        ]
+      },
+      "TelemetrySource": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "gap_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "observed_at"
+        ]
+      },
+      "MetricSample": {
+        "type": "object",
+        "properties": {
+          "instance_id": {
+            "type": "string"
+          },
+          "collected_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cpu_percent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "resident_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "heap_used_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "heap_max_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disk_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "players": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TelemetrySource"
+            }
+          }
+        },
+        "required": [
+          "instance_id",
+          "collected_at",
+          "cpu_percent",
+          "resident_bytes",
+          "heap_used_bytes",
+          "heap_max_bytes",
+          "disk_bytes",
+          "players",
+          "sources"
+        ]
+      },
+      "CatalogProvider": {
+        "type": "string",
+        "enum": [
+          "modrinth",
+          "curseforge",
+          "hangar"
+        ]
+      },
+      "CatalogKind": {
+        "type": "string",
+        "enum": [
+          "mod",
+          "plugin",
+          "modpack",
+          "datapack"
+        ]
+      },
+      "CatalogProject": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/CatalogProvider"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CatalogKind"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "provider",
+          "id",
+          "name",
+          "description",
+          "kind",
+          "url"
+        ]
+      },
+      "CatalogPage": {
+        "type": "object",
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogProject"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projects"
+        ]
+      },
+      "CatalogVersion": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/CatalogProvider"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "declared_minecraft_versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "declared_flavors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Flavor"
+            }
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Artifact"
+            }
+          },
+          "required_project_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "provider",
+          "project_id",
+          "id",
+          "name",
+          "declared_minecraft_versions",
+          "declared_flavors",
+          "artifacts",
+          "required_project_ids"
         ]
       }
     }
