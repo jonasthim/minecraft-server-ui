@@ -16,7 +16,6 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 	managedruntime "github.com/jonasthim/minecraft-server-ui/internal/runtime"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/launchargs"
-	"github.com/jonasthim/minecraft-server-ui/internal/server/providerutil"
 )
 
 func FabricLaunch(ctx context.Context, root *os.Root, plan domain.InstallPlan, final, main string, reuse bool) ([]string, error) {
@@ -202,7 +201,7 @@ func VerifyLaunch(ctx context.Context, dataDir, id string, spec domain.LaunchSpe
 		return e
 	}
 	var m receipt
-	if json.Unmarshal(b, &m) != nil || m.Schema != 2 || m.VerifiedAt.IsZero() || providerutil.PlanID(m.Plan) != name {
+	if json.Unmarshal(b, &m) != nil || m.Schema != 2 || m.VerifiedAt.IsZero() || generationID(m.Plan, m.Runtime) != name {
 		return errors.New("invalid immutable loader receipt")
 	}
 	req, e := managedruntime.Select(m.Plan.Selection)

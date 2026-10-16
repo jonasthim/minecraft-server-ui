@@ -37,6 +37,19 @@ func NewPublisher(dataDir string, c *Client) *Publisher {
 	return &Publisher{dataDir: dataDir, client: c, getRuntime: managedruntime.New(dataDir, c.http).Get}
 }
 
+// generationID binds immutable executable layout to both the pinned loader plan
+// and the exact managed Java installation whose identity the receipt retains.
+func generationID(plan domain.InstallPlan, r domain.JavaRuntime) string {
+	key := struct {
+		PlanID       string          `json:"plan_id"`
+		RuntimeID    string          `json:"runtime_id"`
+		JavaChecksum domain.Checksum `json:"java_checksum"`
+	}{providerutil.PlanID(plan), r.ID, r.Artifact.Checksum}
+	encoded, _ := json.Marshal(key)
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
 type fileRecord struct {
 	Path   string `json:"path"`
 	Size   int64  `json:"size"`
@@ -264,7 +277,7 @@ func (p *Publisher) Publish(ctx context.Context, id string, plan domain.InstallP
 		return fail(e)
 	}
 	defer parent.Close()
-	name := providerutil.PlanID(plan)
+	name := generationID(plan, r)
 	final := filepath.Join(base, name)
 	spec := domain.LaunchSpec{Executable: r.Executable, WorkingDir: dirs.Server, JavaRuntimeID: r.ID, JavaChecksum: r.Artifact.Checksum}
 	verify := func() (domain.LaunchSpec, error) {
@@ -298,6 +311,9 @@ func (p *Publisher) Publish(ctx context.Context, id string, plan domain.InstallP
 		}
 		if !reflect.DeepEqual(args, m.Args) {
 			return fail(errors.New("loader launch arguments changed"))
+		}
+		if e := syncPublicationAncestors(parent, server); e != nil {
+			return fail(e)
 		}
 		spec.Args = args
 		return spec, nil
@@ -355,7 +371,7 @@ func (p *Publisher) Publish(ctx context.Context, id string, plan domain.InstallP
 		}
 		return fail(e)
 	}
-	if e = syncDir(parent, "."); e != nil {
+	if e = syncPublicationAncestors(parent, server); e != nil {
 		return fail(e)
 	}
 	if w != nil {
@@ -395,6 +411,20 @@ func syncTree(ctx context.Context, root *os.Root) error {
 	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
 	for _, dir := range dirs {
 		if e = syncDir(root, dir); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// Sync bottom-up so the generation rename and newly created loaders/.manager
+// entries are durable before returning a launch proposal, including reuse races.
+func syncPublicationAncestors(parent, server *os.Root) error {
+	for _, point := range []struct {
+		root *os.Root
+		name string
+	}{{parent, "."}, {server, ".manager"}, {server, "."}} {
+		if e := syncDir(point.root, point.name); e != nil {
 			return e
 		}
 	}

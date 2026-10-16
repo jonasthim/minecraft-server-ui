@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -332,7 +334,7 @@ func TestOfflineVerifierRebuildsArgsAndBindsRuntime(t *testing.T) {
 		}
 		plan.Artifacts = append(plan.Artifacts, a)
 	}
-	spec, e := p.Publish(context.Background(), "test", plan, r, nil, nil, func(ctx context.Context, root *os.Root, stage, final string, reuse bool) ([]string, error) {
+	build := func(ctx context.Context, root *os.Root, stage, final string, reuse bool) ([]string, error) {
 		if !reuse {
 			for n, a := range plan.Artifacts {
 				name := "server.jar"
@@ -349,13 +351,37 @@ func TestOfflineVerifierRebuildsArgsAndBindsRuntime(t *testing.T) {
 			}
 		}
 		return FabricLaunch(ctx, root, plan, final, main, true)
-	})
+	}
+	spec, e := p.Publish(context.Background(), "test", plan, r, nil, nil, build)
 	if e != nil {
 		t.Fatal(e)
 	}
 	if e = VerifyLaunch(context.Background(), dir, "test", spec); e != nil {
 		t.Fatal(e)
 	}
+
+	first := spec
+	r.ID = "managed-new-build"
+	r.Version = "17-new-build"
+	r.Executable = filepath.Join(dir, "java-new-build")
+	r.Artifact.Checksum.Value = strings.Repeat("b", 64)
+	second, e := p.Publish(context.Background(), "test", plan, r, nil, nil, build)
+	if e != nil {
+		t.Fatalf("publish newer verified runtime: %v", e)
+	}
+	if first.Args[0] == second.Args[0] {
+		t.Fatal("distinct runtime generations reused an executable release")
+	}
+	for _, generation := range []domain.LaunchSpec{first, second} {
+		if e := VerifyLaunch(context.Background(), dir, "test", generation); e != nil {
+			t.Fatalf("independent runtime generation verification: %v", e)
+		}
+	}
+	again, e := p.Publish(context.Background(), "test", plan, r, nil, nil, build)
+	if e != nil || !reflect.DeepEqual(again, second) {
+		t.Fatal("new runtime generation was not reusable", e)
+	}
+	spec = second
 	spec.Args = append([]string{"-Xms512M", "-Xmx1024M"}, spec.Args...)
 	if e = VerifyLaunch(context.Background(), dir, "test", spec); e != nil {
 		t.Fatal(e)
@@ -480,5 +506,32 @@ func TestLegacySignedManifestLargerThan64KiB(t *testing.T) {
 	}
 	if _, e = LegacyLaunch(root, "forge.jar", "/immutable"); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestPublicationRejectsMissingAncestorAtDurabilityFence(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("open directory rename fixture requires Unix")
+	}
+	dir := t.TempDir()
+	server := filepath.Join(dir, "instances", "test", "server")
+	if e := os.MkdirAll(server, 0700); e != nil {
+		t.Fatal(e)
+	}
+	r := domain.JavaRuntime{ID: "managed", Major: 17, Executable: filepath.Join(dir, "java")}
+	p := NewPublisher(dir, NewClient(nil))
+	p.getRuntime = func(context.Context, string) (domain.JavaRuntime, error) { return r, nil }
+	plan := domain.InstallPlan{Requirements: domain.LaunchRequirements{JavaMajor: 17, MinJavaMajor: 17, MaxJavaMajor: 17}}
+	spec, e := p.Publish(context.Background(), "test", plan, r, nil, nil, func(ctx context.Context, root *os.Root, stage, final string, reuse bool) ([]string, error) {
+		if e := WriteFile(root, "server.jar", []byte("verified")); e != nil {
+			return nil, e
+		}
+		if e := os.Rename(filepath.Join(server, ".manager"), filepath.Join(server, ".manager-displaced")); e != nil {
+			return nil, e
+		}
+		return []string{"-jar", filepath.Join(final, "server.jar"), "nogui"}, nil
+	})
+	if e == nil || spec.Executable != "" {
+		t.Fatal("published success with an unsyncable containing directory", spec, e)
 	}
 }

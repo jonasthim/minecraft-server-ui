@@ -29,7 +29,7 @@ Install re-resolves metadata, compares the executable-affecting canonical plan, 
 ## Immutable executable layout and launch behavior
 
 ```
-instances/<id>/server/.manager/loaders/<canonical-plan-sha256>/
+instances/<id>/server/.manager/loaders/<plan-runtime-generation-sha256>/
   manifest.json               # schema 2, canonical plan, exact managed runtime,
                               # metadata source digests/times, every file SHA256,
                               # exact provider argv, verification time
@@ -53,7 +53,7 @@ Updates publish a new immutable directory; a retained previous LaunchSpec remain
 
 ## Offline launch verification handoff
 
-The integrator requested an offline gate for later native game launch. VerifyLaunch checks the canonical instance working directory, immutable release identifier, schema-2 receipt and canonical plan digest, complete file inventory, each pinned artifact, published installer/output/bundled-library hashes and rebuilt provider argv. It binds the receipt Java executable, runtime ID, major and archive checksum to LaunchSpec. The native launcher separately runs runtime.Manager.Get to verify all runtime files and host identity before using this verifier.
+The integrator requested an offline gate for later native game launch. VerifyLaunch checks the canonical instance working directory, immutable release identifier, schema-2 receipt and combined canonical plan/runtime generation digest, complete file inventory, each pinned artifact, published installer/output/bundled-library hashes and rebuilt provider argv. It binds the receipt Java executable, runtime ID, major and archive checksum to LaunchSpec. The native launcher separately runs runtime.Manager.Get to verify all runtime files and host identity before using this verifier.
 
 Only the native-owner helper launchargs.StripMemory may extend provider argv: no prefix, or exactly `-Xms<min(512,max)>M -Xmx<max>M`, with canonical decimal max 256..1048576. The rest must equal the rebuilt baseline exactly. Extra environment overrides, arbitrary flags, alternate classes, mixed release paths, changed files or changed arguments are rejected offline. No network or game execution occurs during verification. The coordinator remains responsible for binding the selected memory amount to database configuration at activation.
 
@@ -125,3 +125,28 @@ Early Fabric smoke failures exposed historical catalog decoding (fixed with an o
 ## Remaining integration and qualification
 
 The integrator must review this package and update the ledger. Tasks09/18 must wire discovery/Resolve/Install into authorized durable jobs and role-aware UI, serialize the stopped-state/safety-backup/EULA transaction, persist proposals and retain rollback references. Native launch must compose managed-runtime verification with this offline provider verifier. Readiness is Task10. No real game start, client connection, update activation, world recovery or stable support matrix is qualified by installer-only checks. Windows build checks do not substitute for native installer/filesystem/process/game execution. Legacy Forge installer-only qualification also passed after the narrowly reviewed runtime and manifest-bound corrections described above.
+
+
+## Review fix round 1 — runtime generations and publication durability
+
+BASE 011f99e. Independent review raised two Important findings; both are addressed for integrator re-review, with no shared-file edits, staging or commits by this worker.
+
+1. **Distinct managed runtime generations.** Publication previously keyed the directory solely by PlanID(plan) while requiring exact receipt runtime equality. An unchanged game/loader tuple with a newer verified Temurin build therefore collided with the older receipt. The immutable key is now SHA256 over a typed record containing the canonical plan ID, managed runtime ID and Java archive checksum. Receipt runtime equality is retained. Offline VerifyLaunch checks the same combined key; its public signature and the opaque 64-character path component remain unchanged. The native owner was notified. The focused fixture installs two verified runtime generations of the same Fabric plan, checks that their executable paths differ, independently verifies both through VerifyLaunch after both exist, and confirms reuse of the newer generation.
+
+2. **Durable publication ancestors.** The success fence now syncs the loaders directory, containing .manager directory and canonical instance server directory, in that order. This applies to new publication and verified reuse, including the competing-publisher path. A real filesystem regression moves .manager away while publication holds its rooted handles: the prior implementation incorrectly returned a successful proposal despite the absent canonical ancestor; the corrected fence returns failure. Existing publication tests also exercise the normal newly-created ancestor success path. Linux directory syncing is exercised; native Windows directory durability remains unqualified as previously documented.
+
+Observed RED command:
+
+```sh
+go test ./internal/server/loaderutil -run 'TestOfflineVerifierRebuildsArgsAndBindsRuntime|TestPublicationRejectsMissingAncestorAtDurabilityFence' -count=1
+```
+
+The runtime-generation regression failed with `publish newer verified runtime: invalid loader publication receipt`; the ancestor regression failed because publication returned success with an unsyncable containing directory. The same command passed after the fixes.
+
+Final scoped verification:
+
+- `go test -race ./internal/server/loaderutil ./internal/server/fabric ./internal/server/forge ./internal/server/neoforge -count=1` — PASS.
+- `go vet ./internal/server/loaderutil ./internal/server/fabric ./internal/server/forge ./internal/server/neoforge` — PASS.
+- `env GOOS=windows GOARCH=amd64 go build ./internal/server/loaderutil ./internal/server/fabric ./internal/server/forge ./internal/server/neoforge` — PASS; compilation only.
+
+Official network/installer smokes were not repeated: these fixes change local generation identity and fsync fencing, with focused filesystem/offline-verifier evidence covering the reported failures. The earlier exact publisher/installer evidence and its game/client/native Windows limitations remain as recorded above. Two findings addressed, zero known open findings from this round; independent re-review remains with the integrator.
