@@ -64,3 +64,21 @@ Root composed the authenticated API and visible server map route in4cb6e0e. Prod
 Isolated Playwright390x844 passed: fresh DB → first administrator → actual official1.12.2 instance through shipping UI with EULA unchecked → Saved map link → real HTTP200 missing-world summary → visible legacy limitation → keyboard pan → direct route reload. A viewer created through the shipping user API logged in and read the same real map endpoint successfully. No page errors or horizontal overflow occurred. No world files/database prerequisites were seeded, game launched or service installed.
 
 Separately labelled supplemental UI-only intercepted responses exercised a custom dimension, inclusive height query, player marker/centering, keyboard zoom, purple unknown blocks, distinct stale chunk and failed-refresh stale notice. They do not constitute saved-world decoding or native position interoperability evidence. Root inspected both shipping and supplemental screenshots. Reproducer `.superpowers/sdd/2026-10-16-minecraft-server-ui/map-browser.mjs`; screenshots in `map-browser-artifacts/`. The disposable8192 manager was stopped and drained after validation. Actual game/native platform qualification remains pending.
+
+## Fix round 1 — automatic dimension changes (2026-10-16)
+
+Independent review approved the package with one minor finding: discovery could replace the selected dimension while retaining the previous dimension's terrain, including when the replacement view request failed. This fix changes only the map feature and this report, against the reviewed `95690b9` implementation; shared API/composition and existing browser evidence remain unchanged.
+
+Discovery, selected dimension and displayed view now update in one pure reducer transition. If discovery removes the selection, it selects the first discovered dimension (or clears selection for an empty list) and clears the previous view atomically. A late response tagged with a different requested dimension is rejected. Ordinary discovery polls preserve a still-discovered user selection and its saved terrain. The summary callback performs no state mutation inside another state updater.
+
+Focused state regressions exercise observed custom terrain followed by discovery replacement/empty discovery, a failed replacement request with no new view, late old-dimension responses, recovery from an empty dimension list, and ordinary polls preserving useful same-dimension terrain. Against the extracted original transition semantics, replacement and empty-discovery tests failed by retaining the Moon terrain object; after the fix all three state regressions and the existing visibility/cancellation test pass.
+
+Verification passed:
+
+```text
+node --experimental-strip-types --test web/src/features/map/*.test.mjs
+cd web && npm run typecheck && npm run lint && npm run build
+git diff --check -- web/src/features/map docs/reports/task22.md
+```
+
+No full browser rerun was needed for this pure state consistency correction; the integrator's existing shipping/mobile and supplemental canvas observations above retain their stated limits. Integrator commit and re-review remain pending; this worker did not stage or commit.

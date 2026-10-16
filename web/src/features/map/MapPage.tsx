@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { Alert, Anchor, Badge, Button, Group, NumberInput, Paper, Select, SimpleGrid, Stack, Text, Title } from '@mantine/core';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../../api/client';
 import type { components } from '../../api/schema';
 import { startVisiblePoll } from './poll';
+import { initialSelection, reduceSelection } from './selection';
 
 type Summary = components['schemas']['MapSummary'];
 type View = components['schemas']['MapView'];
@@ -17,9 +18,8 @@ export function MapPage() {
 }
 export function MapPanel({ instanceId }: { instanceId: string }) {
   const endpoint = '/instances/' + encodeURIComponent(instanceId) + '/map';
-  const [summary, setSummary] = useState<Summary | null>(null);
-  const [view, setView] = useState<View | null>(null);
-  const [dimension, setDimension] = useState('');
+  const [{ summary, view, dimension }, dispatchSelection] = useReducer(reduceSelection, initialSelection);
+  const setDimension = (value: string) => dispatchSelection({ type: 'dimension', value });
   const [center, setCenter] = useState({ x: 0, z: 0 });
   const [height, setHeight] = useState<number | string>('');
   const [zoom, setZoom] = useState(1);
@@ -28,14 +28,13 @@ export function MapPanel({ instanceId }: { instanceId: string }) {
   const [summaryError, setSummaryError] = useState('');
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => startVisiblePoll(signal => api<Summary>(endpoint, { signal }), value => {
-    setSummary(value); setSummaryError('');
-    setDimension(previous => value.discovery.dimensions.some(d => d.id === previous) ? previous : value.discovery.dimensions[0]?.id || '');
+    dispatchSelection({ type: 'summary', value }); setSummaryError('');
   }, error => setSummaryError(message(error))), [endpoint, attempt]);
   useEffect(() => {
     if (!dimension) return;
     const query = new URLSearchParams({ dimension, chunk_x: String(center.x), chunk_z: String(center.z) });
     if (typeof height === 'number') query.set('max_y', String(Math.trunc(height)));
-    return startVisiblePoll(signal => api<View>(endpoint + '/view?' + query, { signal }), value => { setView(value); setError(''); }, error => setError(message(error)));
+    return startVisiblePoll(signal => api<View>(endpoint + '/view?' + query, { signal }), value => { dispatchSelection({ type: 'view', dimension, value }); setError(''); }, error => setError(message(error)));
   }, [endpoint, dimension, center.x, center.z, height, attempt]);
   useEffect(() => {
     const context = canvas.current?.getContext('2d');
@@ -61,7 +60,7 @@ export function MapPanel({ instanceId }: { instanceId: string }) {
     }
     context.restore();
   }, [view, center.x, center.z, zoom, dimension]);
-  const resetView = () => { setView(null); setError(''); };
+  const resetView = () => { dispatchSelection({ type: 'clear_view' }); setError(''); };
   const pan = (x: number, z: number) => { resetView(); setCenter(previous => ({ x: Math.max(-1874999, Math.min(1874998, previous.x + x)), z: Math.max(-1874999, Math.min(1874998, previous.z + z)) })); };
   const counts = view?.tiles.reduce<Record<string, number>>((all, tile) => { all[tile.state] = (all[tile.state] || 0) + 1; return all; }, {}) || {};
   const unknown = view?.tiles.flatMap(tile => tile.cells).filter(cell => !cell.empty && !cell.known).length || 0;
