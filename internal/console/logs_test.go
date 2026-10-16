@@ -125,7 +125,7 @@ func TestHistoryBoundsGapAndUnterminatedSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	page, _ = h.Read(ctx, "test", page.NextCursor, 100)
-	if len(page.Lines) != 2 || !page.Lines[0].Gap {
+	if len(page.Lines) != 1 || !page.Lines[0].Gap {
 		t.Fatalf("truncation not disclosed: %+v", page)
 	}
 	canceled, cancel := context.WithCancel(ctx)
@@ -173,5 +173,101 @@ func TestFutureHistoryCursorReplaysWithGap(t *testing.T) {
 	page, err = h.Read(t.Context(), "test", page.NextCursor, 500)
 	if err != nil || page.Gap || len(page.Lines) != 0 {
 		t.Fatalf("replay repeated %+v %v", page, err)
+	}
+}
+
+func TestCrossRotationPartialSecretStaysDiscardedAcrossCaptureAndRestart(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same_manager", true: "manager_restart"}[restart], func(t *testing.T) {
+			h, path := logFixture(t)
+			if err := os.WriteFile(path+".1", []byte("password=alpha"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("bravo"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.Capture(t.Context(), "test"); err != nil {
+				t.Fatal(err)
+			}
+			if restart {
+				// A newly constructed service must restore the discard state from SQL.
+				h = New(h.db, h.paths, nil, nil, nil).history
+			}
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.WriteString("charlie\nvisible complete line\n")
+			f.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := h.Capture(t.Context(), "test"); err != nil {
+				t.Fatal(err)
+			}
+			page, err := h.Read(t.Context(), "test", 0, 500)
+			if err != nil {
+				t.Fatal(err)
+			}
+			visible := false
+			for _, line := range page.Lines {
+				if strings.Contains(line.Message, "alpha") || strings.Contains(line.Message, "bravo") || strings.Contains(line.Message, "charlie") {
+					t.Fatalf("split secret leaked: %q", line.Message)
+				}
+				visible = visible || line.Message == "visible complete line"
+			}
+			if !visible {
+				t.Fatalf("subsequent complete output lost: %+v", page)
+			}
+		})
+	}
+}
+
+func TestDiscardedSecretContinuationAcrossMultipleRotations(t *testing.T) {
+	h, path := logFixture(t)
+	if err := os.WriteFile(path+".1", []byte("password=alpha"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("bravo"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Capture(t.Context(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path+".1", path+".2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("charlie"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h = New(h.db, h.paths, nil, nil, nil).history
+	if err := h.Capture(t.Context(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path + ".2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path+".1", path+".2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("delta\nnext safe line\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h = New(h.db, h.paths, nil, nil, nil).history
+	if err := h.Capture(t.Context(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := h.Read(t.Context(), "test", 0, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Lines) != 2 || !page.Lines[0].Gap || page.Lines[1].Message != "next safe line" {
+		t.Fatalf("unsafe or missing rotation output: %+v", page)
 	}
 }

@@ -343,3 +343,90 @@ func TestCaptureFailureIsVisibleAndRecoveryClearsIt(t *testing.T) {
 		t.Fatalf("capture recovery %+v %v", state, err)
 	}
 }
+
+type managedFixtureInstances struct {
+	fixtureInstances
+	cfg              instance.ManagementConfig
+	beforeManagement func()
+}
+
+func (f managedFixtureInstances) Management(context.Context, string) (instance.ManagementConfig, error) {
+	if f.beforeManagement != nil {
+		f.beforeManagement()
+	}
+	return f.cfg, nil
+}
+
+func TestModernSessionRejectsGenerationChangesBeforeEffects(t *testing.T) {
+	for _, stage := range []string{"unchanged_generation", "before_verify", "management", "rpc.discover", "minecraft:server/status", "minecraft:gamerules", "minecraft:gamerules/update"} {
+		t.Run(stage, func(t *testing.T) {
+			s, native, _ := serviceFixture(t)
+			replace := func() { native.mu.Lock(); native.identity.StartIdentity = "replacement"; native.mu.Unlock() }
+			var callsMu sync.Mutex
+			calls := map[string]int{}
+			ruleValue := true
+			cfg := rpcFixtureBeforeResponse(t, "3.1.0", func(method string, _ json.RawMessage) any {
+				switch method {
+				case "minecraft:server/status":
+					return map[string]bool{"started": true}
+				case "minecraft:gamerules":
+					return []any{map[string]any{"key": "minecraft:pvp", "type": "boolean", "value": ruleValue}}
+				case "minecraft:gamerules/update":
+					ruleValue = false
+					return map[string]any{"key": "minecraft:pvp", "type": "boolean", "value": false}
+				}
+				return nil
+			}, func(method string) {
+				callsMu.Lock()
+				calls[method]++
+				callsMu.Unlock()
+				if method == stage {
+					replace()
+				}
+			})
+			detail := instance.Detail{Instance: domain.Instance{ID: "test", Flavor: domain.FlavorVanilla, MinecraftVersion: "26.3"}, Settings: instance.SettingsProjection{DesiredRuntime: []instance.DesiredRuntimeSetting{{Kind: "boolean_gamerule", Rule: "minecraft:pvp", Value: false, Supported: true, Scope: "native_server_rules"}}}}
+			metadata := managedFixtureInstances{fixtureInstances: fixtureInstances{detail}, cfg: cfg}
+			if stage == "management" {
+				metadata.beforeManagement = replace
+			}
+			s.instances = metadata
+			var state State
+			err := s.withSession(t.Context(), "test", func(session *Session) error {
+				if stage == "before_verify" {
+					replace()
+				}
+				var err error
+				state, err = session.VerifyReady(t.Context())
+				return err
+			})
+			if stage == "unchanged_generation" {
+				if err != nil || !state.ReadyForUse {
+					t.Fatalf("original generation did not verify: %+v %v", state, err)
+				}
+			} else if err == nil || state.ReadyForUse {
+				t.Fatalf("replacement was accepted: %+v %v", state, err)
+			}
+			callsMu.Lock()
+			defer callsMu.Unlock()
+			allowedMutations := 0
+			if stage == "minecraft:gamerules/update" || stage == "unchanged_generation" {
+				allowedMutations = 1
+			}
+			if calls["minecraft:gamerules/update"] != allowedMutations {
+				t.Fatalf("rule mutations after replacement: %v", calls)
+			}
+			if (stage == "before_verify" || stage == "management") && calls["rpc.discover"] != 0 {
+				t.Fatalf("stale session connected to replacement: %v", calls)
+			}
+			if stage == "rpc.discover" && calls["minecraft:server/status"] != 0 {
+				t.Fatalf("stale discovery used: %v", calls)
+			}
+			if stage == "minecraft:server/status" && calls["minecraft:gamerules"] != 0 {
+				t.Fatalf("stale status used: %v", calls)
+			}
+			if stage == "minecraft:gamerules/update" && calls["minecraft:gamerules"] != 1 {
+				t.Fatalf("stale mutation acknowledgement used for readback: %v", calls)
+			}
+		})
+	}
+}

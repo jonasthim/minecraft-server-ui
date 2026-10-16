@@ -67,3 +67,24 @@ Cached files are under `/home/thim/.cache/dilla-tmp/minecraft-console-schemas`; 
 - Native Windows execution and Linux systemd/namespace/process-restart qualification remain pending. Cross-compilation is not Windows qualification.
 - Backups/players/schedules must use the typed session within their own existing job admission. Task 13 still owns lease acquisition/watchdog/recovery orchestration; this package provides acknowledged flush/save-on cleanup capabilities only.
 - Raw launcher output is private and retains its launcher-owned rotation policy; only redacted database history is served. Log observations disclose gaps and do not guarantee completeness across arbitrary plugin log formats or manager downtime.
+
+## Fix round 1 — independent review findings (2026-10-16)
+
+Scope: two Important findings from the review of `4f3da0d`, addressed on the shared tree at `46789a6`. Only `internal/console` implementation/tests and this report changed. Native/instance/shared composition were left to their assigned owners. No staging, commits, subagents, games or EULA acceptance occurred.
+
+1. **Cross-rotation partial credential disclosure.** Reproduced the reviewer's `.1=password=alpha`, current=`bravo`, capture, append=`charlie\n` sequence; the new regression failed on `split secret leaked: "charlie"` both within the manager and after constructing a fresh service. A partial line omitted across files now persists a `discard-through-newline:` marker with the existing durable boundary hash, in the same transaction as the gap and cursor. The non-hex prefix cannot collide with normal SHA-256 hex hashes. Continuations remain discarded across captures, a newly constructed `Service`, and multiple rotations until a newline is consumed; the next complete line is retained. A lost/truncated checkpoint also discards its untrusted initial continuation with an explicit gap. The previous truncation fixture now expects that conservative omission. No migration or raw secret persistence was added.
+
+2. **MSMP effects before captured-generation validation.** Reproduced a generation change before verification, while reading private configuration, and before discovery/status/rule-read/update responses; before the fix, later rule mutation/readback still occurred. Modern sessions now validate the captured identity before configuration access and connection, immediately before every RPC write, and after each matching successful response. Discovery is covered by the same guard. The client retains one established WebSocket and never reconnects or retargets another process; a lifetime change between steps cannot authorize another mutation on a replacement endpoint. Checks include cancellation and native running/control health. No shared native interface change was needed. Regressions assert zero subsequent mutation on replacement, no stale discovery/status propagation, no readback after replacement during mutation acknowledgement, and successful apply/readback for an unchanged generation.
+
+Regression evidence was collected before each fix, then the following scoped checks passed after both fixes:
+
+```text
+go test ./internal/console -run 'TestCrossRotationPartialSecret|TestHistory|TestDiscardedSecret' -count=1
+go test ./internal/console -run TestModernSessionRejectsGeneration -count=1
+go test ./internal/console -count=1
+go test -race ./internal/console -count=1
+go vet ./internal/console
+git diff --check -- internal/console docs/reports/task10.md
+```
+
+Files: `history.go`, `logs_test.go`, `session.go`, `rpc.go`, `service_test.go`, `control_test.go`, and this report. Both assigned findings are addressed for integrator re-review; acceptance and real game/platform qualification remain pending.

@@ -46,9 +46,17 @@ type rpcClient struct {
 	conn     *websocket.Conn
 	protocol string
 	methods  map[string]rpcMethod
+	check    func(context.Context) error
 }
 
 func dialRPC(ctx context.Context, cfg instance.ManagementConfig) (*rpcClient, error) {
+	return dialRPCGuarded(ctx, cfg, nil)
+}
+
+// A session client keeps one established socket, which cannot reconnect or
+// retarget a replacement JVM. The guard brackets discovery and every request
+// so a changed generation cannot authorize a subsequent operation or result.
+func dialRPCGuarded(ctx context.Context, cfg instance.ManagementConfig, check func(context.Context) error) (*rpcClient, error) {
 	if cfg.Host != "127.0.0.1" || cfg.Port < 1 || cfg.Port > 65535 || len(cfg.Secret) != 40 {
 		return nil, domain.E(domain.CodeUnavailable, "private native management configuration is invalid")
 	}
@@ -64,12 +72,17 @@ func dialRPC(ctx context.Context, cfg instance.ManagementConfig) (*rpcClient, er
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	if check != nil {
+		if err := check(operation); err != nil {
+			return nil, err
+		}
+	}
 	conn, _, err := websocket.Dial(operation, "ws://127.0.0.1:"+strconv.Itoa(cfg.Port), &websocket.DialOptions{HTTPClient: client, HTTPHeader: http.Header{"Authorization": []string{"Bearer " + cfg.Secret}}})
 	if err != nil {
 		return nil, domain.E(domain.CodeUnavailable, "authenticated native management connection failed")
 	}
 	conn.SetReadLimit(1 << 20)
-	c := &rpcClient{conn: conn, protocol: cfg.Protocol, methods: map[string]rpcMethod{}}
+	c := &rpcClient{conn: conn, protocol: cfg.Protocol, methods: map[string]rpcMethod{}, check: check}
 	raw, err := c.call(operation, "rpc.discover", nil)
 	if err != nil {
 		c.Close()
@@ -116,6 +129,11 @@ func (c *rpcClient) call(ctx context.Context, method string, params any) (json.R
 	if params != nil {
 		request["params"] = params
 	}
+	if c.check != nil {
+		if err := c.check(operation); err != nil {
+			return nil, err
+		}
+	}
 	if err := wsjson.Write(operation, c.conn, request); err != nil {
 		return nil, domain.E(domain.CodeUnavailable, "native management request could not be delivered")
 	}
@@ -148,6 +166,11 @@ func (c *rpcClient) call(ctx context.Context, method string, params any) (json.R
 		}
 		if len(response.Result) == 0 || string(response.Result) == "null" {
 			return nil, domain.E(domain.CodeUnavailable, "native management returned no verifiable result")
+		}
+		if c.check != nil {
+			if err := c.check(operation); err != nil {
+				return nil, err
+			}
 		}
 		return response.Result, nil
 	}

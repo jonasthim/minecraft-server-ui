@@ -128,6 +128,9 @@ func (s *Session) enter(ctx context.Context, cleanup bool) (*sessionScope, func(
 	return scope, scope.mu.Unlock, nil
 }
 func (scope *sessionScope) check(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	identity, err := scope.service.native.Identity(ctx, scope.identity.InstanceID)
 	if err != nil || identity != scope.identity {
 		return domain.E(domain.CodeUnavailable, "managed JVM generation changed during command verification")
@@ -136,15 +139,18 @@ func (scope *sessionScope) check(ctx context.Context) error {
 	if err != nil || !observed.ProcessRunning || observed.State != domain.StateRunning || observed.WatchdogError != "" {
 		return domain.E(domain.CodeUnavailable, "managed JVM is no longer ready for command verification")
 	}
-	return nil
+	return ctx.Err()
 }
 func (scope *sessionScope) rpc(ctx context.Context) (*rpcClient, error) {
+	if err := scope.check(ctx); err != nil {
+		return nil, err
+	}
 	cfg, err := scope.service.instances.Management(ctx, scope.identity.InstanceID)
 	if err != nil {
 		return nil, err
 	}
 	scope.service.history.SetSecrets(scope.identity.InstanceID, []string{cfg.Secret})
-	return dialRPC(ctx, cfg)
+	return dialRPCGuarded(ctx, cfg, scope.check)
 }
 func (scope *sessionScope) legacy(ctx context.Context, command string, ack acknowledgement) (domain.CommandResult, error) {
 	result := domain.CommandResult{}

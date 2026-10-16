@@ -70,6 +70,11 @@ func TestLegacySaveFlushAndRotationGap(t *testing.T) {
 
 func rpcFixture(t *testing.T, protocol string, handler func(string, json.RawMessage) any) instance.ManagementConfig {
 	t.Helper()
+	return rpcFixtureBeforeResponse(t, protocol, handler, nil)
+}
+
+func rpcFixtureBeforeResponse(t *testing.T, protocol string, handler func(string, json.RawMessage) any, beforeResponse func(string)) instance.ManagementConfig {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+strings.Repeat("a", 40) {
 			t.Error("missing private auth")
@@ -100,6 +105,9 @@ func rpcFixture(t *testing.T, protocol string, handler func(string, json.RawMess
 				}}
 			} else {
 				result = handler(request.Method, request.Params)
+			}
+			if beforeResponse != nil {
+				beforeResponse(request.Method)
 			}
 			// The early heartbeat is deliberately unrelated to world readiness.
 			_ = wsjson.Write(r.Context(), c, map[string]any{"jsonrpc": "2.0", "method": "minecraft:notification/server/status", "params": []any{map[string]any{"started": true}}})

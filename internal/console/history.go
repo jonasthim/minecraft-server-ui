@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 
 const maxLineBytes = 8192
 const retainedLines = 2000
+const discardBoundaryPrefix = "discard-through-newline:"
 
 // Line contains redacted application text, never raw console file content.
 type Line struct {
@@ -64,8 +66,9 @@ func boundary(f *os.File, offset int64) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// Capture resumes only at an acknowledged durable newline boundary. Partial
-// Unicode and secrets remain private until the complete line can be redacted.
+// Capture resumes at a durable newline boundary or an explicit durable discard
+// checkpoint. Partial Unicode and secrets stay private until a complete line is
+// redacted, or are discarded through their terminating newline across captures.
 // Lost/truncated/ambiguous raw history produces an explicit retained gap line.
 func (h *History) Capture(ctx context.Context, id string) error {
 	h.mu.Lock()
@@ -132,6 +135,8 @@ func (h *History) Capture(ctx context.Context, id string) error {
 	}
 	start := 0
 	gap := false
+	discard := strings.HasPrefix(hash, discardBoundaryPrefix)
+	hash = strings.TrimPrefix(hash, discardBoundaryPrefix)
 	if hash != "" {
 		matches := []int{}
 		for i, file := range files {
@@ -147,6 +152,9 @@ func (h *History) Capture(ctx context.Context, id string) error {
 		} else {
 			offset = 0
 			gap = true
+			// The retained oldest bytes may continue a secret whose prefix was
+			// lost with the checkpoint. Skip through the first complete newline.
+			discard = true
 		}
 	}
 	tx, err := h.db.BeginTx(ctx, nil)
@@ -187,6 +195,13 @@ func (h *History) Capture(ctx context.Context, id string) error {
 			if n > 0 {
 				for _, b := range buf[:n] {
 					position++
+					if discard {
+						if b == '\n' {
+							discard = false
+							committed = position
+						}
+						continue
+					}
 					if b == '\n' {
 						message := "[Console line omitted: exceeded 8192 bytes.]"
 						if !oversized {
@@ -218,19 +233,27 @@ func (h *History) Capture(ctx context.Context, id string) error {
 		if i < len(files)-1 { // Rotation may split a UTF-8 code point or logical line.
 			continue
 		}
-		// A partial logical line spanning files cannot be resumed using a single-file
-		// cursor. Omit it with a gap only if its beginning has already rotated away.
+		// A partial logical line spanning files cannot be resumed using this
+		// single-file checkpoint. Persist discarding through its next newline;
+		// advancing the cursor alone would expose the continuation as a new line.
 		if len(pending) > 0 || oversized {
 			if begin == 0 && i > start {
 				if err = appendLine("[Console history gap: partial line crossed a rotation boundary.]", true); err != nil {
 					return err
 				}
 				committed = file.size
+				discard = true
 			}
+		}
+		if discard {
+			committed = file.size
 		}
 		committedHash, err = boundary(file.f, committed)
 		if err != nil {
 			return err
+		}
+		if discard {
+			committedHash = discardBoundaryPrefix + committedHash
 		}
 	}
 	// If a split line crossed a file boundary and completed, all its bytes were
