@@ -63,3 +63,23 @@ Focused regression: `internal/world/archive_test.go:TestCaptureReportsOriginalAn
 - `go vet ./internal/world`, `git diff --check` and web `npm run typecheck`: PASS.
 
 No broad test suites, staging or commits were run for this fix round. Native Windows cleanup failure execution and browser warning rendering remain outside this focused evidence.
+
+## World source-root follow-up — base 618c4fa
+
+The initial absolute Lstat/OpenRoot pair checked only the final instance directory. An ancestor substituted after Paths.For could redirect both observations to the same outside directory. The private openWorldRoot bootstrap now opens only the filesystem root or a local Windows drive root, then descends each component through openChild's rooted, link-rejecting identity checks. It closes each ancestor after obtaining the checked child and closes the current root on errors, preserving close errors alongside the original failure. Noncanonical/relative paths and unreviewed UNC/device/extended-volume roots are rejected. openChild now preserves host stat/recheck errors instead of converting them all to a changed-world error.
+
+Directory safety checks reject symlinks on every platform. Windows additionally checks FileInfo's FILE_ATTRIBUTE_REPARSE_POINT attribute on before/opened/current directory observations, covering junction/reparse candidates without relying solely on ModeSymlink. Native Windows execution is still unqualified.
+
+The deterministic regression in internal/world/root_test.go completes Paths.For, replaces either the configured data directory or its instances ancestor with an outside-directory symlink, and calls the same private bootstrap used by openInstance. The old final-only bootstrap read `outside secret world` in both cases. The repaired bootstrap returns no usable root; discovery and capture also refuse the substituted paths. Other tests retain ordinary world reads, exercise closed/missing-host errors, and reject nondirectory, relative and noncanonical roots. No production injection hook, shared helper or constructor/interface change was added.
+
+The scoped race run also reproduced an existing test-only synchronization flaw: TestReconciliationExcludesNewCaptureAcrossServices could time out because its TryLock polling briefly occupied admission when ReconcileExports tried its own nonblocking lock. The test now waits for the real SQLite connection's WaitCount to increase while its deliberately held connection blocks the reconciliation query. This observes admission without competing for it. Production admission and cleanup behavior are unchanged.
+
+- RED: `go test ./internal/world -run '^TestWorldRoot' -count=1` failed both `data` and `instances` substitution cases with `ancestor substitution admitted outside world: "outside secret world" <nil>` against the extracted, unchanged old bootstrap.
+- GREEN: the same focused command passed after anchored descent, `ok .../internal/world 0.015s`.
+- An initial `go test -race ./internal/world -count=1` reported the existing synchronization failure: `TestReconciliationExcludesNewCaptureAcrossServices: reconciliation never acquired admission context deadline exceeded`. A later run before the test correction passed; the race was in test observation, not the production root fix.
+- Final `go test -race ./internal/world -count=1`: PASS, `ok .../internal/world 6.544s`.
+- `go test -race ./internal/world -run '^(TestWorldRoot|TestReconciliationExcludesNewCaptureAcrossServices)' -count=5`: PASS, `ok .../internal/world 4.714s`, checking the corrected synchronization and root regression repeatedly.
+- `go vet ./internal/world`, `git diff --check`: PASS.
+- `GOOS=windows GOARCH=amd64 go test -c ./internal/world -o /home/thim/.cache/dilla-tmp/minecraft-world-root.test.exe`: PASS; compilation only, not native Windows reparse or drive qualification.
+
+Only internal/world files and this report were changed for this follow-up. Existing archive validation, cleanup and UI behavior were preserved. No game/EULA/service action, dependency, shared file change, staging or commit was performed. The patch is frozen for independent scoped review.

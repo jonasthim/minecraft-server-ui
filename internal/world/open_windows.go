@@ -5,7 +5,16 @@ package world
 import (
 	"golang.org/x/sys/windows"
 	"os"
+	"syscall"
 )
+
+func safeDirectoryInfo(info os.FileInfo) bool {
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	attributes, ok := info.Sys().(*syscall.Win32FileAttributeData)
+	return ok && attributes.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0
+}
 
 func openRead(root *os.Root, name string, directory bool) (*os.File, error) {
 	f, e := root.Open(name)

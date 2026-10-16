@@ -4,10 +4,13 @@ package world
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -129,7 +132,7 @@ func openChild(parent *os.Root, name string) (*os.Root, error) {
 	if e != nil {
 		return nil, e
 	}
-	if !before.IsDir() || before.Mode()&os.ModeSymlink != 0 {
+	if !safeDirectoryInfo(before) {
 		return nil, unsafe()
 	}
 	r, e := parent.OpenRoot(name)
@@ -138,9 +141,14 @@ func openChild(parent *os.Root, name string) (*os.Root, error) {
 	}
 	after, e := r.Stat(".")
 	current, ce := parent.Lstat(name)
-	if e != nil || ce != nil || !os.SameFile(before, after) || !os.SameFile(before, current) || current.Mode()&os.ModeSymlink != 0 {
-		r.Close()
-		return nil, changed()
+	if e != nil {
+		return nil, errors.Join(fmt.Errorf("stat opened world directory: %w", e), r.Close())
+	}
+	if ce != nil {
+		return nil, errors.Join(fmt.Errorf("recheck world directory: %w", ce), r.Close())
+	}
+	if !os.SameFile(before, after) || !os.SameFile(before, current) || !safeDirectoryInfo(after) || !safeDirectoryInfo(current) {
+		return nil, errors.Join(changed(), r.Close())
 	}
 	return r, nil
 }
@@ -149,22 +157,67 @@ func (s *Service) openInstance(id string) (*os.Root, error) {
 	if e != nil {
 		return nil, e
 	}
-	before, e := os.Lstat(d.Root)
-	if e != nil {
-		return nil, e
-	}
-	if !before.IsDir() || before.Mode()&os.ModeSymlink != 0 {
+	return openWorldRoot(d.Root)
+}
+
+// Bootstrap only from an OS filesystem/local-drive root. Absolute instance
+// strings are not handles: following the full path would accept a substituted
+// ancestor even when all final-directory identities agree on the outside tree.
+func openWorldRoot(absolute string) (_ *os.Root, err error) {
+	if !filepath.IsAbs(absolute) || filepath.Clean(absolute) != absolute {
 		return nil, unsafe()
 	}
-	r, e := os.OpenRoot(d.Root)
-	if e != nil {
-		return nil, e
+	volume := filepath.VolumeName(absolute)
+	if volume != "" && (len(volume) != 2 || volume[1] != ':' || !(volume[0] >= 'a' && volume[0] <= 'z' || volume[0] >= 'A' && volume[0] <= 'Z')) {
+		return nil, domain.E(domain.CodeUnsupported, "world data requires a local filesystem drive")
 	}
+	anchor := volume + string(filepath.Separator)
+	relative := strings.TrimPrefix(absolute, anchor)
+	if relative == absolute {
+		return nil, unsafe()
+	}
+	before, e := os.Lstat(anchor)
+	if e != nil {
+		return nil, fmt.Errorf("inspect world filesystem root: %w", e)
+	}
+	if !safeDirectoryInfo(before) {
+		return nil, unsafe()
+	}
+	r, e := os.OpenRoot(anchor)
+	if e != nil {
+		return nil, fmt.Errorf("open world filesystem root: %w", e)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, r.Close())
+		}
+	}()
 	after, e := r.Stat(".")
-	current, ce := os.Lstat(d.Root)
-	if e != nil || ce != nil || !os.SameFile(before, after) || !os.SameFile(before, current) || current.Mode()&os.ModeSymlink != 0 {
-		r.Close()
+	current, ce := os.Lstat(anchor)
+	if e != nil {
+		return nil, fmt.Errorf("stat opened world filesystem root: %w", e)
+	}
+	if ce != nil {
+		return nil, fmt.Errorf("recheck world filesystem root: %w", ce)
+	}
+	if !os.SameFile(before, after) || !os.SameFile(before, current) || !safeDirectoryInfo(after) || !safeDirectoryInfo(current) {
 		return nil, changed()
+	}
+	if relative != "" {
+		for _, component := range strings.Split(relative, string(filepath.Separator)) {
+			if component == "" || component == "." || component == ".." || strings.ContainsAny(component, "\\:\x00") {
+				return nil, unsafe()
+			}
+			child, openErr := openChild(r, component)
+			if openErr != nil {
+				return nil, fmt.Errorf("open world root component: %w", openErr)
+			}
+			closeErr := r.Close()
+			r = child
+			if closeErr != nil {
+				return nil, fmt.Errorf("close world root ancestor: %w", closeErr)
+			}
+		}
 	}
 	return r, nil
 }

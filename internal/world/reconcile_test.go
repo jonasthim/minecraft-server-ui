@@ -215,12 +215,16 @@ func TestReconciliationExcludesNewCaptureAcrossServices(t *testing.T) {
 	}
 	defer connection.Close()
 	done := make(chan error, 1)
+	waitsBefore := s.db.Stats().WaitCount
 	go func() { done <- s.ReconcileExports(ctx) }()
-	for {
-		if !exportAdmission.TryLock() {
-			break
+	for s.db.Stats().WaitCount == waitsBefore {
+		// Observing database admission cannot contend with the export mutex:
+		// probing TryLock here could make reconciliation itself refuse admission.
+		select {
+		case reconcileErr := <-done:
+			t.Fatal("reconciliation ended before database admission", reconcileErr)
+		default:
 		}
-		exportAdmission.Unlock()
 		if ctx.Err() != nil {
 			t.Fatal("reconciliation never acquired admission", ctx.Err())
 		}
