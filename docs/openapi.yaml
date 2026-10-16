@@ -5444,6 +5444,205 @@
           }
         }
       }
+    },
+    "/api/v1/instances/{instanceId}/map": {
+      "get": {
+        "operationId": "mapMapSummary",
+        "tags": [
+          "map"
+        ],
+        "summary": "Viewer: saved world metadata and exact discovered standard/custom dimensions.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instanceId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded saved terrain observation; ready does not imply live freshness.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or expired/revoked credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Viewer role/read token scope required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid or unsafe coordinates/dimension/height",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Global map capacity reached; retry after five seconds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/map/view": {
+      "get": {
+        "operationId": "mapMapView",
+        "tags": [
+          "map"
+        ],
+        "summary": "Viewer: fixed 3x3 saved chunks, highest non-air at/below inclusive max_y (not an exact plane). Global two finite requests; 32 tiles / 3MiB plus 32 native observations / 1MiB serialized cache; five-second TTL and expired-source revalidation. Native roster/targeted positions share one per-instance singleflight read per five seconds, up to16 player identities/positions, 4s batch deadline. Each request reauthenticates; no retained streams. Targeted fields statically verified only1.21.9/26.3; no actual game qualification.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instanceId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dimension",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024
+            }
+          },
+          {
+            "in": "query",
+            "name": "chunk_x",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": -1874999,
+              "maximum": 1874998
+            }
+          },
+          {
+            "in": "query",
+            "name": "chunk_z",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": -1874999,
+              "maximum": 1874998
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_y",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": -2032,
+              "maximum": 2031
+            }
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded saved terrain observation; ready does not imply live freshness.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or expired/revoked credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Viewer role/read token scope required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid or unsafe coordinates/dimension/height",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Global map capacity reached; retry after five seconds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -8967,6 +9166,271 @@
           "job"
         ],
         "additionalProperties": false
+      },
+      "MapCell": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "y",
+          "block",
+          "color",
+          "known",
+          "empty"
+        ],
+        "properties": {
+          "y": {
+            "type": "integer"
+          },
+          "block": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}$"
+          },
+          "known": {
+            "type": "boolean"
+          },
+          "empty": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MapTile": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "reason",
+          "dimension",
+          "chunk_x",
+          "chunk_z",
+          "cells",
+          "data_version",
+          "format",
+          "codec",
+          "source_mtime",
+          "sampled_at",
+          "fingerprint",
+          "consistency"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "missing",
+              "stale",
+              "unsupported",
+              "corrupt",
+              "unknown"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dimension": {
+            "type": "string"
+          },
+          "chunk_x": {
+            "type": "integer"
+          },
+          "chunk_z": {
+            "type": "integer"
+          },
+          "max_y": {
+            "type": "integer"
+          },
+          "cells": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/MapCell"
+            }
+          },
+          "data_version": {
+            "type": "integer"
+          },
+          "format": {
+            "type": "string"
+          },
+          "codec": {
+            "type": "string"
+          },
+          "source_mtime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sampled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "chunk_saved_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "consistency": {
+            "type": "string"
+          }
+        }
+      },
+      "MapSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "discovery",
+          "state",
+          "reason",
+          "data_version",
+          "version_name",
+          "source_mtime",
+          "sampled_at",
+          "consistency"
+        ],
+        "properties": {
+          "discovery": {
+            "$ref": "#/components/schemas/WorldDiscovery"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "missing",
+              "stale",
+              "unsupported",
+              "corrupt",
+              "unknown"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "data_version": {
+            "type": "integer"
+          },
+          "version_name": {
+            "type": "string"
+          },
+          "source_mtime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sampled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "consistency": {
+            "type": "string"
+          }
+        }
+      },
+      "MapView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tiles",
+          "sampled_at",
+          "sample_interval_seconds",
+          "native"
+        ],
+        "properties": {
+          "tiles": {
+            "type": "array",
+            "maxItems": 9,
+            "items": {
+              "$ref": "#/components/schemas/MapTile"
+            }
+          },
+          "sampled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sample_interval_seconds": {
+            "type": "integer",
+            "enum": [
+              5
+            ]
+          },
+          "native": {
+            "$ref": "#/components/schemas/MapPlayers"
+          }
+        }
+      },
+      "MapPosition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "player",
+          "x",
+          "y",
+          "z",
+          "dimension",
+          "observed_at",
+          "source"
+        ],
+        "properties": {
+          "player": {
+            "$ref": "#/components/schemas/PlayerIdentity"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "z": {
+            "type": "number"
+          },
+          "dimension": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "MapPlayers": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "snapshot",
+          "positions",
+          "available",
+          "truncated",
+          "gap",
+          "reason"
+        ],
+        "properties": {
+          "snapshot": {
+            "$ref": "#/components/schemas/PlayerSnapshot"
+          },
+          "positions": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "$ref": "#/components/schemas/MapPosition"
+            }
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "gap": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
       }
     }
   }

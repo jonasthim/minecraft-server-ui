@@ -983,6 +983,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{instanceId}/map": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: saved world metadata and exact discovered standard/custom dimensions. */
+        get: operations["mapMapSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/map/view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: fixed 3x3 saved chunks, highest non-air at/below inclusive max_y (not an exact plane). Global two finite requests; 32 tiles / 3MiB plus 32 native observations / 1MiB serialized cache; five-second TTL and expired-source revalidation. Native roster/targeted positions share one per-instance singleflight read per five seconds, up to16 player identities/positions, 4s batch deadline. Each request reauthenticates; no retained streams. Targeted fields statically verified only1.21.9/26.3; no actual game qualification. */
+        get: operations["mapMapView"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1887,6 +1921,73 @@ export interface components {
         };
         ContentJobResponse: {
             job: components["schemas"]["Job"];
+        };
+        MapCell: {
+            y: number;
+            block: string;
+            color: string;
+            known: boolean;
+            empty: boolean;
+        };
+        MapTile: {
+            /** @enum {string} */
+            state: "ready" | "missing" | "stale" | "unsupported" | "corrupt" | "unknown";
+            reason: string;
+            dimension: string;
+            chunk_x: number;
+            chunk_z: number;
+            max_y?: number;
+            cells: components["schemas"]["MapCell"][];
+            data_version: number;
+            format: string;
+            codec: string;
+            /** Format: date-time */
+            source_mtime: string;
+            /** Format: date-time */
+            sampled_at: string;
+            /** Format: date-time */
+            chunk_saved_at?: string;
+            fingerprint: string;
+            consistency: string;
+        };
+        MapSummary: {
+            discovery: components["schemas"]["WorldDiscovery"];
+            /** @enum {string} */
+            state: "ready" | "missing" | "stale" | "unsupported" | "corrupt" | "unknown";
+            reason: string;
+            data_version: number;
+            version_name: string;
+            /** Format: date-time */
+            source_mtime: string;
+            /** Format: date-time */
+            sampled_at: string;
+            consistency: string;
+        };
+        MapView: {
+            tiles: components["schemas"]["MapTile"][];
+            /** Format: date-time */
+            sampled_at: string;
+            /** @enum {integer} */
+            sample_interval_seconds: 5;
+            native: components["schemas"]["MapPlayers"];
+        };
+        MapPosition: {
+            player: components["schemas"]["PlayerIdentity"];
+            x: number;
+            y: number;
+            z: number;
+            dimension: string;
+            /** Format: date-time */
+            observed_at: string;
+            source: string;
+        };
+        MapPlayers: {
+            snapshot: components["schemas"]["PlayerSnapshot"];
+            positions: components["schemas"]["MapPosition"][];
+            available: boolean;
+            truncated: boolean;
+            gap: boolean;
+            reason: string;
         };
     };
     responses: never;
@@ -6227,6 +6328,127 @@ export interface operations {
                 };
             };
             /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    mapMapSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded saved terrain observation; ready does not imply live freshness. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MapSummary"];
+                };
+            };
+            /** @description Authentication required or expired/revoked credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Viewer role/read token scope required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid or unsafe coordinates/dimension/height */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Global map capacity reached; retry after five seconds */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    mapMapView: {
+        parameters: {
+            query: {
+                dimension: string;
+                chunk_x: number;
+                chunk_z: number;
+                max_y?: number;
+            };
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded saved terrain observation; ready does not imply live freshness. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MapView"];
+                };
+            };
+            /** @description Authentication required or expired/revoked credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Viewer role/read token scope required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid or unsafe coordinates/dimension/height */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Global map capacity reached; retry after five seconds */
             503: {
                 headers: {
                     [name: string]: unknown;
