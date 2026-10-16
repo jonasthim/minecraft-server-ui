@@ -8,6 +8,7 @@ const OIDCSettingsPage = lazy(() => import('./features/auth/OIDCSettingsPage').t
 const InstancesPage = lazy(() => import('./features/instances').then(m => ({ default: m.InstancesPage })))
 const InstancePage = lazy(() => import('./features/instances').then(m => ({ default: m.InstancePage })))
 const PlayersPage = lazy(() => import('./features/players/PlayersPage').then(m => ({ default: m.PlayersPage })))
+const GameEventsPage = lazy(() => import('./features/game-events/GameEventsPage').then(m => ({ default: m.GameEventsPage })))
 const ConsolePage = lazy(() => import('./features/console/ConsolePage').then(m => ({ default: m.ConsolePage })))
 const WorldsPage = lazy(() => import('./features/worlds').then(m => ({ default: m.WorldsPage })))
 const MapPage = lazy(() => import('./features/map').then(m => ({ default: m.MapPage })))
@@ -30,6 +31,7 @@ export default function App() {
     <Route path="/" element={<InstancesPage />} />
     <Route path="/instances/:instanceId" element={<InstancePage />} />
     <Route path="/instances/:instanceId/players" element={<PlayersPage />} />
+    <Route path="/instances/:instanceId/game-events" element={<GameEventsPage />} />
     <Route path="/instances/:instanceId/console" element={<ConsolePage />} />
     <Route path="/instances/:instanceId/world" element={<WorldsPage />} />
     <Route path="/instances/:instanceId/map" element={<MapPage />} />

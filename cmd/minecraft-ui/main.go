@@ -15,6 +15,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/content"
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
+	"github.com/jonasthim/minecraft-server-ui/internal/events/game"
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"github.com/jonasthim/minecraft-server-ui/internal/launcher"
@@ -126,6 +127,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	instances := instance.New(database, paths, guard, instance.WithJobMutationGuard(guard), instance.WithActivationCoordinator(activation), instance.WithRecoveryMutationGuard(guard))
 	control := console.New(database, paths, native, instances, queue)
 	playerService := players.New(database, paths, instances, control, queue, native)
+	gameEvents := game.New(database, control, instances)
 	operations := lifecycle.New(lifecycle.Config{DB: database, DataDir: cfg.DataDir, Instances: instances, Jobs: queue, Native: native, Runtime: managedruntime.New(cfg.DataDir, nil), Console: control, Providers: []domain.DistributionProvider{vanilla.New(cfg.DataDir, nil), paper.New(cfg.DataDir, nil), fabric.New(cfg.DataDir, nil), forge.New(cfg.DataDir, nil), neoforge.New(cfg.DataDir, nil)}})
 	activation.operations = operations
 	worlds := world.New(database, instances, paths, queue)
@@ -170,6 +172,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 			api.MountLifecycle(r, operations)
 			api.MountConsole(r, control)
 			api.MountPlayers(r, playerService)
+			api.MountGameEvents(r, gameEvents)
 			api.MountWorlds(r, worlds)
 			api.MountMap(r, maps)
 			api.MountBackups(r, backups)
@@ -203,11 +206,12 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	}()
 	defer func() { cancelPlayers(); runErr = errors.Join(runErr, <-playerDone) }()
 	observationCtx, cancelObservations := context.WithCancel(ctx)
-	observationDone := make(chan error, 2)
-	for _, loop := range []struct {
+	observationLoops := []struct {
 		name string
 		run  func(context.Context) error
-	}{{"metrics", metricService.Run}, {"notifications", notificationService.Run}} {
+	}{{"metrics", metricService.Run}, {"notifications", notificationService.Run}, {"game events", gameEvents.Run}}
+	observationDone := make(chan error, len(observationLoops))
+	for _, loop := range observationLoops {
 		go func(name string, run func(context.Context) error) {
 			observationDone <- watchObservability(observationCtx, name, run, func(shutdown context.Context) error {
 				if err := server.Shutdown(shutdown); err != nil {
@@ -217,7 +221,12 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 			}, log)
 		}(loop.name, loop.run)
 	}
-	defer func() { cancelObservations(); runErr = errors.Join(runErr, <-observationDone, <-observationDone) }()
+	defer func() {
+		cancelObservations()
+		for range observationLoops {
+			runErr = errors.Join(runErr, <-observationDone)
+		}
+	}()
 
 	done := make(chan struct{})
 	shutdownDone := make(chan struct{})
