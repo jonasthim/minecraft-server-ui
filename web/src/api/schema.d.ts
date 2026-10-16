@@ -641,6 +641,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalog/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: provider availability; never returns credentials */
+        get: operations["catalogProviders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/curseforge-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Administrator: privately replace or clear the operator-supplied key; audited transaction */
+        put: operations["catalogConfigureCurseForge"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/{provider}/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: bounded provider discovery; catalog claims do not qualify tested content */
+        get: operations["catalogSearch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/{provider}/projects/{projectId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: publisher project metadata and official link */
+        get: operations["catalogProject"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/{provider}/projects/{projectId}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: paged version evidence; use canonical project ID returned by discovery */
+        get: operations["catalogVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/{provider}/projects/{projectId}/versions/{versionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: exact version/files/dependencies; manual resolution remains explicit */
+        get: operations["catalogVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1198,6 +1300,112 @@ export interface components {
         };
         LifecycleJobResponse: {
             job: components["schemas"]["Job"];
+        };
+        CatalogAvailability: {
+            /** @enum {string} */
+            provider: "modrinth" | "curseforge" | "hangar";
+            enabled: boolean;
+            reason: string;
+        };
+        CatalogProviders: {
+            providers: components["schemas"]["CatalogAvailability"][];
+        };
+        CatalogKeyInput: {
+            /** @description Private operator-supplied CurseForge key. Empty string clears it. Never returned or logged. */
+            key: string;
+        };
+        CatalogCompatibility: {
+            minecraft: string[];
+            loaders: string[];
+            environment: string;
+            /** @enum {string} */
+            server_side: "supported" | "unsupported" | "unknown";
+            evidence: string;
+            /** @constant */
+            tested: false;
+        };
+        CatalogProjectMetadata: {
+            /** @enum {string} */
+            source: "modrinth" | "curseforge" | "hangar";
+            /** Format: date-time */
+            fetched_at: string;
+            id: string;
+            slug: string;
+            /** @enum {string} */
+            kind: "mod" | "plugin" | "modpack";
+            title: string;
+            description: string;
+            /** Format: uri */
+            official_url: string;
+            compatibility: components["schemas"]["CatalogCompatibility"];
+        };
+        CatalogDependency: {
+            /** @enum {string} */
+            provider: "modrinth" | "curseforge" | "hangar";
+            project_id: string;
+            version_id: string;
+            name: string;
+            relation: string;
+            required: boolean;
+            manual_url: string;
+            platform: string;
+        };
+        CatalogFile: {
+            id: string;
+            filename: string;
+            /** @description Approved direct publisher CDN URL, empty when manual resolution is required. Browser must use official_url for user-facing links. */
+            download_url: string;
+            /** Format: int64 */
+            size: number;
+            hashes: {
+                [key: string]: string;
+            };
+            primary: boolean;
+            role: string;
+            manual_reason: string;
+            /** Format: uri */
+            official_url: string;
+        };
+        CatalogVersionMetadata: {
+            /** @enum {string} */
+            source: "modrinth" | "curseforge" | "hangar";
+            /** Format: date-time */
+            fetched_at: string;
+            /** @description Canonical resolution identifier; Hangar version name. */
+            id: string;
+            /** @description Publisher version ID; numeric Hangar ID retained separately. */
+            upstream_id: string;
+            project_id: string;
+            name: string;
+            number: string;
+            published_at: string;
+            /** Format: uri */
+            official_url: string;
+            compatibility: components["schemas"]["CatalogCompatibility"];
+            dependencies: components["schemas"]["CatalogDependency"][];
+            files: components["schemas"]["CatalogFile"][];
+            server_pack_file_id: string;
+            is_server_pack: boolean;
+        };
+        CatalogSearchResult: {
+            /** @enum {string} */
+            source: "modrinth" | "curseforge" | "hangar";
+            /** Format: date-time */
+            fetched_at: string;
+            projects: components["schemas"]["CatalogProjectMetadata"][];
+            offset: number;
+            limit: number;
+            total: number;
+        };
+        CatalogVersionPage: {
+            /** @enum {string} */
+            source: "modrinth" | "curseforge" | "hangar";
+            /** Format: date-time */
+            fetched_at: string;
+            versions: components["schemas"]["CatalogVersionMetadata"][];
+            offset: number;
+            limit: number;
+            total: number;
         };
     };
     responses: never;
@@ -3723,6 +3931,479 @@ export interface operations {
                 };
             };
             /** @description Request refused */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    catalogProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProviders"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role or token scope denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Publisher item not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bounded publisher request failed or metadata invalid */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Provider unavailable; CurseForge requires a private key */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    catalogConfigureCurseForge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogKeyInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogAvailability"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role or token scope denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Publisher item not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bounded publisher request failed or metadata invalid */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Provider unavailable; CurseForge requires a private key */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    catalogSearch: {
+        parameters: {
+            query?: {
+                q?: string;
+                kind?: "mod" | "plugin" | "modpack";
+                minecraft?: string;
+                loader?: "fabric" | "forge" | "neoforge" | "paper" | "bukkit" | "spigot" | "purpur" | "quilt";
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                provider: "modrinth" | "curseforge" | "hangar";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogSearchResult"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role or token scope denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Publisher item not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bounded publisher request failed or metadata invalid */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Provider unavailable; CurseForge requires a private key */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    catalogProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: "modrinth" | "curseforge" | "hangar";
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProjectMetadata"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role or token scope denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Publisher item not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bounded publisher request failed or metadata invalid */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Provider unavailable; CurseForge requires a private key */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    catalogVersions: {
+        parameters: {
+            query?: {
+                kind?: "mod" | "plugin" | "modpack";
+                minecraft?: string;
+                loader?: "fabric" | "forge" | "neoforge" | "paper" | "bukkit" | "spigot" | "purpur" | "quilt";
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                provider: "modrinth" | "curseforge" | "hangar";
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogVersionPage"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role or token scope denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Publisher item not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bounded publisher request failed or metadata invalid */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Provider unavailable; CurseForge requires a private key */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    catalogVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: "modrinth" | "curseforge" | "hangar";
+                projectId: string;
+                versionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogVersionMetadata"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role or token scope denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Publisher item not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bounded publisher request failed or metadata invalid */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Provider unavailable; CurseForge requires a private key */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -12,6 +12,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const links = [
     { to: '/', label: 'Servers', icon: IconServer },
+    { to: '/catalog', label: 'Content catalogs', icon: IconCube },
     { to: '/jobs', label: 'Jobs', icon: IconListCheck },
     { to: '/account', label: 'Account', icon: IconUser },
     ...(user?.role === 'admin' ? [

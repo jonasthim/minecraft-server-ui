@@ -9,6 +9,7 @@ const InstancesPage = lazy(() => import('./features/instances').then(m => ({ def
 const InstancePage = lazy(() => import('./features/instances').then(m => ({ default: m.InstancePage })))
 const ConsolePage = lazy(() => import('./features/console/ConsolePage').then(m => ({ default: m.ConsolePage })))
 const WorldsPage = lazy(() => import('./features/worlds').then(m => ({ default: m.WorldsPage })))
+const CatalogPage = lazy(() => import('./features/catalog/CatalogPage').then(m => ({ default: m.CatalogPage })))
 const JobsPage = lazy(() => import('./features/jobs').then(m => ({ default: m.JobsPage })))
 const AuditPage = lazy(() => import('./features/auth/AuditPage').then(m => ({ default: m.AuditPage })))
 import { Shell } from './layout/Shell'
@@ -24,6 +25,7 @@ export default function App() {
     <Route path="/instances/:instanceId" element={<InstancePage />} />
     <Route path="/instances/:instanceId/console" element={<ConsolePage />} />
     <Route path="/instances/:instanceId/world" element={<WorldsPage />} />
+    <Route path="/catalog" element={<CatalogPage />} />
     <Route path="/jobs" element={<JobsPage />} />
     <Route path="/account" element={<AccountPage />} />
     <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />

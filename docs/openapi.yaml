@@ -2952,6 +2952,781 @@
           }
         }
       ]
+    },
+    "/api/v1/catalog/providers": {
+      "get": {
+        "operationId": "catalogProviders",
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Viewer: provider availability; never returns credentials",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProviders"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or token scope denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Publisher item not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Bounded publisher request failed or metadata invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable; CurseForge requires a private key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/curseforge-key": {
+      "put": {
+        "operationId": "catalogConfigureCurseForge",
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Administrator: privately replace or clear the operator-supplied key; audited transaction",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogAvailability"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or token scope denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Publisher item not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Bounded publisher request failed or metadata invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable; CurseForge requires a private key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogKeyInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/{provider}/search": {
+      "get": {
+        "operationId": "catalogSearch",
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Viewer: bounded provider discovery; catalog claims do not qualify tested content",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSearchResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or token scope denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Publisher item not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Bounded publisher request failed or metadata invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable; CurseForge requires a private key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "modrinth",
+                "curseforge",
+                "hangar"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mod",
+                "plugin",
+                "modpack"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "minecraft",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 160
+            }
+          },
+          {
+            "in": "query",
+            "name": "loader",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fabric",
+                "forge",
+                "neoforge",
+                "paper",
+                "bukkit",
+                "spigot",
+                "purpur",
+                "quilt"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000,
+              "default": 0
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "description": "Hangar caps pages at25."
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/catalog/{provider}/projects/{projectId}": {
+      "get": {
+        "operationId": "catalogProject",
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Viewer: publisher project metadata and official link",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProjectMetadata"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or token scope denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Publisher item not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Bounded publisher request failed or metadata invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable; CurseForge requires a private key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "modrinth",
+                "curseforge",
+                "hangar"
+              ]
+            }
+          },
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 160
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/catalog/{provider}/projects/{projectId}/versions": {
+      "get": {
+        "operationId": "catalogVersions",
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Viewer: paged version evidence; use canonical project ID returned by discovery",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogVersionPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or token scope denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Publisher item not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Bounded publisher request failed or metadata invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable; CurseForge requires a private key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "modrinth",
+                "curseforge",
+                "hangar"
+              ]
+            }
+          },
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 160
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mod",
+                "plugin",
+                "modpack"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "minecraft",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 160
+            }
+          },
+          {
+            "in": "query",
+            "name": "loader",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fabric",
+                "forge",
+                "neoforge",
+                "paper",
+                "bukkit",
+                "spigot",
+                "purpur",
+                "quilt"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000,
+              "default": 0
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "description": "Hangar caps pages at25."
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/catalog/{provider}/projects/{projectId}/versions/{versionId}": {
+      "get": {
+        "operationId": "catalogVersion",
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Viewer: exact version/files/dependencies; manual resolution remains explicit",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogVersionMetadata"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or token scope denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Publisher item not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Bounded publisher request failed or metadata invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable; CurseForge requires a private key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "modrinth",
+                "curseforge",
+                "hangar"
+              ]
+            }
+          },
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 160
+            }
+          },
+          {
+            "in": "path",
+            "name": "versionId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 160
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -5100,6 +5875,417 @@
         "required": [
           "job"
         ],
+        "additionalProperties": false
+      },
+      "CatalogAvailability": {
+        "type": "object",
+        "required": [
+          "provider",
+          "enabled",
+          "reason"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "modrinth",
+              "curseforge",
+              "hangar"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogProviders": {
+        "type": "object",
+        "required": [
+          "providers"
+        ],
+        "properties": {
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogAvailability"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogKeyInput": {
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 512,
+            "writeOnly": true,
+            "description": "Private operator-supplied CurseForge key. Empty string clears it. Never returned or logged."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogCompatibility": {
+        "type": "object",
+        "required": [
+          "minecraft",
+          "loaders",
+          "environment",
+          "server_side",
+          "evidence",
+          "tested"
+        ],
+        "properties": {
+          "minecraft": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "loaders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "environment": {
+            "type": "string"
+          },
+          "server_side": {
+            "type": "string",
+            "enum": [
+              "supported",
+              "unsupported",
+              "unknown"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "tested": {
+            "type": "boolean",
+            "const": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogProjectMetadata": {
+        "type": "object",
+        "required": [
+          "source",
+          "fetched_at",
+          "id",
+          "slug",
+          "kind",
+          "title",
+          "description",
+          "official_url",
+          "compatibility"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "modrinth",
+              "curseforge",
+              "hangar"
+            ]
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "mod",
+              "plugin",
+              "modpack"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "official_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "compatibility": {
+            "$ref": "#/components/schemas/CatalogCompatibility"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogDependency": {
+        "type": "object",
+        "required": [
+          "provider",
+          "project_id",
+          "version_id",
+          "name",
+          "relation",
+          "required",
+          "manual_url",
+          "platform"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "modrinth",
+              "curseforge",
+              "hangar"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "version_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "relation": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "manual_url": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogFile": {
+        "type": "object",
+        "required": [
+          "id",
+          "filename",
+          "download_url",
+          "size",
+          "hashes",
+          "primary",
+          "role",
+          "manual_reason",
+          "official_url"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "download_url": {
+            "type": "string",
+            "description": "Approved direct publisher CDN URL, empty when manual resolution is required. Browser must use official_url for user-facing links."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "hashes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "primary": {
+            "type": "boolean"
+          },
+          "role": {
+            "type": "string"
+          },
+          "manual_reason": {
+            "type": "string"
+          },
+          "official_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogVersionMetadata": {
+        "type": "object",
+        "required": [
+          "source",
+          "fetched_at",
+          "id",
+          "upstream_id",
+          "project_id",
+          "name",
+          "number",
+          "published_at",
+          "official_url",
+          "compatibility",
+          "dependencies",
+          "files",
+          "server_pack_file_id",
+          "is_server_pack"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "modrinth",
+              "curseforge",
+              "hangar"
+            ]
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "description": "Canonical resolution identifier; Hangar version name."
+          },
+          "upstream_id": {
+            "type": "string",
+            "description": "Publisher version ID; numeric Hangar ID retained separately."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "number": {
+            "type": "string"
+          },
+          "published_at": {
+            "type": "string"
+          },
+          "official_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "compatibility": {
+            "$ref": "#/components/schemas/CatalogCompatibility"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogDependency"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogFile"
+            }
+          },
+          "server_pack_file_id": {
+            "type": "string"
+          },
+          "is_server_pack": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogSearchResult": {
+        "type": "object",
+        "required": [
+          "source",
+          "fetched_at",
+          "projects",
+          "offset",
+          "limit",
+          "total"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "modrinth",
+              "curseforge",
+              "hangar"
+            ]
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogProjectMetadata"
+            }
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogVersionPage": {
+        "type": "object",
+        "required": [
+          "source",
+          "fetched_at",
+          "versions",
+          "offset",
+          "limit",
+          "total"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "modrinth",
+              "curseforge",
+              "hangar"
+            ]
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogVersionMetadata"
+            }
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
         "additionalProperties": false
       }
     }

@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jonasthim/minecraft-server-ui/internal/api"
 	"github.com/jonasthim/minecraft-server-ui/internal/auth"
+	"github.com/jonasthim/minecraft-server-ui/internal/catalog"
 	"github.com/jonasthim/minecraft-server-ui/internal/config"
 	"github.com/jonasthim/minecraft-server-ui/internal/console"
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
@@ -120,6 +121,10 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	operations := lifecycle.New(lifecycle.Config{DB: database, DataDir: cfg.DataDir, Instances: instances, Jobs: queue, Native: native, Runtime: managedruntime.New(cfg.DataDir, nil), Console: control, Providers: []domain.DistributionProvider{vanilla.New(cfg.DataDir, nil), paper.New(cfg.DataDir, nil), fabric.New(cfg.DataDir, nil), forge.New(cfg.DataDir, nil), neoforge.New(cfg.DataDir, nil)}})
 	activation.operations = operations
 	worlds := world.New(database, instances, paths, queue)
+	catalogs, err := catalog.New(catalog.Config{DB: database, ArtifactDir: filepath.Join(cfg.DataDir, "catalog", "artifacts"), UserAgent: "minecraft-server-ui/" + version + " (+https://github.com/jonasthim/minecraft-server-ui)"})
+	if err != nil {
+		return err
+	}
 	if err := control.Register(); err != nil {
 		return err
 	}
@@ -134,6 +139,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 			api.MountLifecycle(r, operations)
 			api.MountConsole(r, control)
 			api.MountWorlds(r, worlds)
+			api.MountCatalog(r, catalogs)
 		})
 	}})
 	server := &http.Server{Addr: cfg.Address, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}

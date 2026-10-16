@@ -23,7 +23,7 @@ func TestRouterHealthAndSPAAreDistinct(t *testing.T) {
 		path     string
 		code     int
 		contains string
-	}{{"/healthz", 200, `"status":"ok"`}, {"/api/missing", 404, `"code":"not_found"`}, {"/health", 404, `"code":"not_found"`}, {"/assets/missing.js", 404, ""}, {"/", 200, "<html>app</html>"}, {"/instances/main", 200, "<html>app</html>"}} {
+	}{{"/healthz", 200, `"status":"ok"`}, {"/api/missing", 404, `"code":"not_found"`}, {"/health", 404, `"code":"not_found"`}, {"/assets/missing.js", 404, ""}, {"/", 200, "<html>app</html>"}, {"/instances/main", 200, "<html>app</html>"}, {"/catalog", 200, "<html>app</html>"}, {"/jobs", 200, "<html>app</html>"}, {"/catalogue", 404, `"code":"not_found"`}, {"/catalog/not-an-app-route", 404, `"code":"not_found"`}} {
 		t.Run(tc.path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 			rec := httptest.NewRecorder()
@@ -38,5 +38,16 @@ func TestRouterHealthAndSPAAreDistinct(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != 503 {
 		t.Fatalf("closed database health=%d", rec.Code)
+	}
+}
+
+func TestCatalogAndJobsSPARejectPOST(t *testing.T) {
+	h := NewRouter(Dependencies{Web: fstest.MapFS{"index.html": {Data: []byte("<html>app</html>")}}})
+	for _, path := range []string{"/catalog", "/jobs"} {
+		r := httptest.NewRecorder()
+		h.ServeHTTP(r, httptest.NewRequest(http.MethodPost, path, nil))
+		if r.Code != 404 || strings.Contains(r.Body.String(), "<html>") {
+			t.Fatal(path, r.Code, r.Body)
+		}
 	}
 }

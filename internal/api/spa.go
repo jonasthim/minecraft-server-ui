@@ -13,7 +13,7 @@ func spaHandler(frontend fs.FS) http.HandlerFunc {
 		p := r.URL.Path
 		// Only actual browser application routes receive SPA fallback. Misspelled
 		// health/API routes and missing assets remain observable 404 responses.
-		appRoute := p == "/" || p == "/login" || p == "/setup" || p == "/instances" || strings.HasPrefix(p, "/instances/") || p == "/account" || p == "/users" || p == "/audit" || p == "/settings" || strings.HasPrefix(p, "/settings/")
+		appRoute := p == "/" || p == "/login" || p == "/setup" || p == "/instances" || strings.HasPrefix(p, "/instances/") || p == "/catalog" || p == "/jobs" || p == "/account" || p == "/users" || p == "/audit" || p == "/settings" || strings.HasPrefix(p, "/settings/")
 		asset := strings.HasPrefix(p, "/assets/") || p == "/favicon.svg"
 		if frontend == nil || (!appRoute && !asset) || (r.Method != "GET" && r.Method != "HEAD") {
 			WriteError(w, domain.NotFound("resource"))
