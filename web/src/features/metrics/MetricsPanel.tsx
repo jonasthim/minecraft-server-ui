@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Anchor, Badge, Button, Group, Paper, Select, SimpleGrid, Stack, Table, Text, Title } from '@mantine/core';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../../api/client';
+import { startMetricsPoll } from './poll';
 import type { components } from '../../api/schema';
 
 type Page = components['schemas']['MetricsPage'];
@@ -21,38 +22,28 @@ export function MetricsPanel({ instanceId }: { instanceId: string }) {
   const [attempt, setAttempt] = useState(0);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
-    let alive = true; let controller: AbortController | undefined; let timer: ReturnType<typeof setTimeout> | undefined;
-    const load = async () => {
-      if (document.hidden) return;
-      controller?.abort(); controller = new AbortController();
+    setLoading(true); setData(null);
+    return startMetricsPoll(async signal => {
       const to = new Date();
-      // Align query to sample buckets; the API caps every response at 1000.
       const resolution = Number(hours) <= 6 ? 'raw' : 'hourly';
       const step = resolution === 'raw' ? 30000 : 3600000;
       const from = new Date(Math.floor((to.getTime() - Number(hours) * 3600000) / step) * step);
-      const query = new URLSearchParams({ from: from.toISOString(), to: to.toISOString(), resolution });
-      try {
-        const endpoint = '/instances/' + encodeURIComponent(instanceId) + '/metrics?';
-        let page: Page;
-        if (Number(hours) > 999) {
-          const pages: Page[] = [];
-          for (let start = from.getTime(); start < to.getTime(); start += 999 * step) {
-            const end = Math.min(to.getTime(), start + 999 * step);
-            pages.push(await api<Page>(endpoint + new URLSearchParams({ from: new Date(start).toISOString(), to: new Date(end).toISOString(), resolution }), { signal: controller.signal }));
-          }
-          page = { ...pages[0], points: pages.flatMap(part => part.points) };
-        } else page = await api<Page>(endpoint + query, { signal: controller.signal });
-        if (alive && !controller.signal.aborted) { setData(page); setError(''); }
+      const endpoint = '/instances/' + encodeURIComponent(instanceId) + '/metrics?';
+      const pages: Page[] = [];
+      // Every selected bucket is retained; API requests remain below 1000 each.
+      for (let start = from.getTime(); start < to.getTime(); start += 999 * step) {
+        signal.throwIfAborted();
+        const end = Math.min(to.getTime(), start + 999 * step);
+        pages.push(await api<Page>(endpoint + new URLSearchParams({ from: new Date(start).toISOString(), to: new Date(end).toISOString(), resolution }), { signal }));
       }
-      catch (error) { if (alive && !controller.signal.aborted) setError(error instanceof Error ? error.message : 'Metrics could not be loaded.'); }
-      finally { if (alive) { setLoading(false); timer = setTimeout(() => { void load(); }, 30000); } }
-    };
-    const visible = () => { clearTimeout(timer); if (!document.hidden) void load(); else controller?.abort(); };
-    setLoading(true); setData(null); void load(); document.addEventListener('visibilitychange', visible);
-    return () => { alive = false; controller?.abort(); clearTimeout(timer); document.removeEventListener('visibilitychange', visible); };
+      signal.throwIfAborted();
+      return { ...pages[0], points: pages.flatMap(part => part.points) };
+    }, page => { setData(page); setError(''); setLoading(false); }, error => {
+      setError(error instanceof Error ? error.message : 'Metrics could not be loaded.'); setLoading(false);
+    });
   }, [instanceId, hours, attempt]);
   const latest = data?.points.at(-1);
-  const rows = data?.points.slice(-120).toReversed() ?? [];
+  const rows = data?.points.toReversed() ?? [];
   const fields: { label: string; value: string }[] = [{ label: 'JVM CPU', value: latest?.cpu_percent == null ? 'Unknown' : latest.cpu_percent.toFixed(1) + '%' }, { label: 'JVM resident memory', value: bytes(latest?.resident_bytes) }, { label: 'JVM private memory', value: bytes(latest?.private_bytes) }, { label: 'Instance disk', value: bytes(latest?.disk_bytes) }, { label: data?.resolution === 'hourly' ? 'Average observed players' : 'Observed players', value: count(latest?.players) }];
   return <Stack style={{ minWidth: 0 }}>
     <Group justify="space-between"><Title order={2}>JVM metrics</Title><Button variant="light" onClick={() => setAttempt(value => value + 1)} loading={loading}>Refresh metrics</Button></Group>
@@ -61,12 +52,13 @@ export function MetricsPanel({ instanceId }: { instanceId: string }) {
     {loading && !data && <Text role="status">Loading metrics…</Text>}
     <SimpleGrid cols={{ base: 1, xs: 2, md: 3 }}>{fields.map(field => <Paper key={field.label} withBorder p="sm"><Text size="sm" c="dimmed">{field.label}</Text><Text fw={600}>{field.value}</Text></Paper>)}</SimpleGrid>
     <Text size="sm">{data?.cpu_convention || '100% CPU means one fully busy logical CPU. JVM memory is not Java heap. Unavailable observations remain unknown.'}</Text>
-    <Text size="sm">Disk is a bounded logical-size scan of this instance, including server, logs, backups and state. Shared runtimes and the manager database are excluded. Player counts preserve Task 11 native roster provenance; <Anchor component={Link} to={'/instances/' + encodeURIComponent(instanceId) + '/players'}>player history</Anchor> records observed sessions and coverage gaps.</Text>
-    {latest && <Paper withBorder p="sm"><Stack gap="xs"><Group><Text fw={600}>Latest bucket · {date(latest.collected_at)}</Text><Badge color={latest.gap ? 'orange' : 'green'}>{latest.gap ? 'Coverage gaps' : 'Observed'}</Badge></Group><Text size="sm">{latest.counts.samples}/{latest.expected} scheduled observations. A missing bucket may reflect manager downtime, collection limits or an unavailable JVM.</Text>{latest.sources.map((source, index) => <Text key={index} size="xs">{source.field}: {source.kind} · {date(source.observed_at)}{source.gap_reason ? ' · ' + source.gap_reason.replaceAll('_', ' ') : ''}</Text>)}</Stack></Paper>}
+    <Text size="sm">Disk is a bounded logical-size scan of this instance, including server, logs, backups and state. Shared runtimes and the manager database are excluded. Player counts preserve native roster provenance; <Anchor component={Link} to={'/instances/' + encodeURIComponent(instanceId) + '/players'}>player history</Anchor> records observed sessions and coverage gaps.</Text>
+    {latest && <Paper withBorder p="sm"><Stack gap="xs"><Group><Text fw={600}>Latest bucket · {date(latest.collected_at)}</Text><Badge color={latest.gap ? 'orange' : 'green'}>{latest.gap ? 'Coverage gaps' : 'Observed'}</Badge></Group><Text size="sm">{latest.counts.samples}/{latest.expected} scheduled observations. A missing bucket may reflect manager downtime, collection limits or an unavailable JVM.</Text>{latest.sources.map((source, index) => <Text key={index} size="xs">{source.field}: {source.kind === 'task11_native_roster' ? 'native player roster' : source.kind.replaceAll('_', ' ')} · {date(source.observed_at)}{source.gap_reason ? ' · ' + source.gap_reason.replaceAll('_', ' ') : ''}</Text>)}</Stack></Paper>}
     <Text size="sm" c="dimmed">Collection every 30 seconds. Raw retention: 7 days; hourly retention: 90 days. Hourly values average available observations only. Current hourly buckets may be incomplete.</Text>
     {data && <HistoryTable points={rows} total={data.points.length} />}
   </Stack>;
 }
 function HistoryTable({ points, total }: { points: Point[]; total: number }) {
-  return <><Text size="sm">Showing the latest {points.length} of {total} returned buckets. Missing values are unknown.</Text><div role="region" aria-label="Scrollable metric history" tabIndex={0} style={{ maxHeight: 440, overflowY: 'auto' }}><Table.ScrollContainer minWidth={620}><Table captionSide="top"><Table.Caption>JVM and instance metric history</Table.Caption><Table.Thead><Table.Tr><Table.Th>Observed</Table.Th><Table.Th>CPU</Table.Th><Table.Th>RSS</Table.Th><Table.Th>Disk</Table.Th><Table.Th>Players</Table.Th><Table.Th>Coverage</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{points.map(point => <Table.Tr key={point.collected_at}><Table.Td>{date(point.collected_at)}</Table.Td><Table.Td>{point.cpu_percent == null ? 'Unknown' : point.cpu_percent.toFixed(1) + '%'}</Table.Td><Table.Td>{bytes(point.resident_bytes)}</Table.Td><Table.Td>{bytes(point.disk_bytes)}</Table.Td><Table.Td>{count(point.players)}</Table.Td><Table.Td>{point.counts.samples}/{point.expected}{point.gap ? ' · gaps' : ''}</Table.Td></Table.Tr>)}</Table.Tbody></Table></Table.ScrollContainer></div></>;
+  const viewport = useRef<HTMLDivElement>(null);
+  return <><Text size="sm">Showing all {total} selected buckets, newest first. Missing values are unknown.</Text><Group><Button variant="light" onClick={() => viewport.current?.scrollTo({ top: 0 })}>Newest observations</Button><Button variant="light" onClick={() => viewport.current?.scrollTo({ top: viewport.current.scrollHeight })}>Oldest observations</Button></Group><div ref={viewport} role="region" aria-label="Scrollable metric history" tabIndex={0} style={{ maxHeight: 440, overflowY: 'auto' }}><Table.ScrollContainer minWidth={620}><Table captionSide="top"><Table.Caption>JVM and instance metric history</Table.Caption><Table.Thead><Table.Tr><Table.Th>Observed</Table.Th><Table.Th>CPU</Table.Th><Table.Th>RSS</Table.Th><Table.Th>Disk</Table.Th><Table.Th>Players</Table.Th><Table.Th>Coverage</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{points.map(point => <Table.Tr key={point.collected_at}><Table.Td>{date(point.collected_at)}</Table.Td><Table.Td>{point.cpu_percent == null ? 'Unknown' : point.cpu_percent.toFixed(1) + '%'}</Table.Td><Table.Td>{bytes(point.resident_bytes)}</Table.Td><Table.Td>{bytes(point.disk_bytes)}</Table.Td><Table.Td>{count(point.players)}</Table.Td><Table.Td>{point.counts.samples}/{point.expected}{point.gap ? ' · gaps' : ''}</Table.Td></Table.Tr>)}</Table.Tbody></Table></Table.ScrollContainer></div></>;
 }

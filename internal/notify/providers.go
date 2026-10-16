@@ -5,11 +5,9 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/smtp"
 	"net/url"
 	"strconv"
 	"strings"
@@ -189,48 +187,5 @@ func sendEmailTLS(ctx context.Context, c privateChannel, event *Event, trusted *
 		}
 		conn = secure
 	}
-	client, err := smtp.NewClient(conn, d.SMTPHost)
-	if err != nil {
-		return safeFailure("smtp_failed")
-	}
-	defer client.Close()
-	if d.TLSMode == "starttls" {
-		if ok, _ := client.Extension("STARTTLS"); !ok {
-			return safeFailure("tls_required")
-		}
-		if err = client.StartTLS(tlsConfig); err != nil {
-			return safeFailure("tls_failed")
-		}
-	}
-	if d.SMTPUser != "" {
-		if err = client.Auth(smtp.PlainAuth("", d.SMTPUser, d.SMTPPassword, d.SMTPHost)); err != nil {
-			return safeFailure("authentication_rejected")
-		}
-	}
-	if err = client.Mail(d.From); err != nil {
-		return safeFailure("smtp_rejected")
-	}
-	if err = client.Rcpt(d.Recipient); err != nil {
-		return safeFailure("smtp_rejected")
-	}
-	writer, err := client.Data()
-	if err != nil {
-		return safeFailure("smtp_rejected")
-	}
-	text := "Minecraft server event."
-	if event != nil {
-		text = eventText(*event)
-	}
-	_, err = fmt.Fprintf(writer, "From: %s\r\nTo: %s\r\nSubject: Minecraft server event\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n", d.From, d.Recipient, text)
-	if err != nil {
-		_ = writer.Close()
-		return safeFailure("smtp_failed")
-	}
-	if err = writer.Close(); err != nil {
-		return safeFailure("smtp_failed")
-	}
-	if err = client.Quit(); err != nil {
-		return safeFailure("smtp_failed")
-	}
-	return nil
+	return smtpExchange(ctx, conn, c, event, tlsConfig)
 }

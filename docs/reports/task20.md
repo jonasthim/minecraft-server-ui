@@ -91,3 +91,41 @@ No real provider accounts, people or external channels received messages. Local 
 ## Remaining qualification
 
 Real installed Linux systemd JVM/broker sampling, live Minecraft/client player correlation, supported distribution/version combinations, and native Windows execution still require qualification. Windows cross-compilation is build evidence only. External production-provider delivery needs separate user authorization and configured credentials; it is not implied by local adapter fixtures. Task 19 crash-event binding remains with its owner. The implementation report does not mark Task 20 or any release matrix row complete.
+
+## Review fix round 1 — 2026-10-16
+
+Independent review `0ff0089`: three Important findings and one Minor finding addressed. No shared main/App/schema or dependency files were changed in this round. Acceptance remains with the integrator; native and external-provider qualification statements above are unchanged.
+
+1. **Fleet admission:** the previous nonblocking sends treated the two-worker/two-buffer capacity as a fleet limit. Admission now waits for workers to free capacity until the 30-second period ends, keeps one pending reservation per instance, and resumes overloaded admission from the first unadmitted instance in the next period. It never holds the pending-map mutex while waiting for a worker. Cancellation and fatal errors interrupt admission and drain the two workers. A virtual-time regression reproduced **3/7 healthy samples** before the fix and records **7/7** afterward. A separate 40-instance overload check records genuine first-period gaps, proves all 40 eventually receive observations, rejects duplicate/concurrent per-instance admission and verifies cancellation drains workers.
+
+2. **SMTP response bounds:** removed the unbounded `smtp.NewClient` response-reader path. The narrowly scoped SMTP exchange now bounds **4096 bytes per response line and 64 KiB of total SMTP response plaintext** across greeting, EHLO, mandatory STARTTLS, post-TLS EHLO, authentication, envelope, DATA completion and QUIT. A limit violation produces only `smtp_response_limit`; raw peer text is never exposed. Plaintext and decrypted connections share the same budget; TLS handshakes and records bypass the SMTP plaintext counter. STARTTLS requires an advertised capability and a successful certificate-verified handshake before authentication. Authentication retains the original PLAIN mechanism boundary; there is no plaintext fallback. Controlled oversized single-line/multiline greetings and post-TLS EHLO responses failed before the fix and now fail safely at the byte limit. Authenticated STARTTLS succeeds with a certificate flight larger than the entire SMTP plaintext budget, proving TLS records are not miscounted. A blocked greeting read cancels and closes its peer promptly. Existing local SMTP/TLS and provider tests also pass.
+
+3. **Complete history access:** removed the unconditional last-120-bucket slice. Every bucket returned for the selected range remains available inside the bounded 440 px history viewport. Accessible Newest observations and Oldest observations controls navigate the complete table; request pages remain below 1000 points each. Product copy now describes native roster provenance without an implementation task label.
+
+4. **Request generations:** extracted the production metrics poll lifecycle into an owned helper. Each invocation captures its own controller and generation; only the current visible generation publishes data/errors or schedules its next timer. Hide, unmount and range replacement invalidate the generation and cancel its work. A concrete hide → show → fresh success → late obsolete failure scenario reproduced the stale error before the fix. Both that case and abort-ignoring range replacement/unmount cases now pass, including the assertion that obsolete completion cannot add a second polling timer.
+
+Commands and results:
+
+```sh
+# RED, then GREEN after admission correction:
+go test ./internal/metrics -run 'TestSampling' -count=1 -timeout=20s
+# RED, then GREEN after SMTP correction:
+go test ./internal/notify -run TestSMTPBounds -count=1 -timeout=15s
+# Full owned-package checks: PASS
+go test ./internal/metrics ./internal/notify -count=1 -timeout=30s
+go test -race ./internal/metrics ./internal/notify -count=1 -timeout=60s
+go vet ./internal/metrics ./internal/notify
+# TLS-flight assertion added afterward: PASS
+go test ./internal/notify -run TestSTARTTLSBoundsSMTPPlaintextWithoutCountingTLSRecords -count=1 -timeout=15s
+# Poll race RED, then GREEN; build/lint PASS:
+cd web && node --experimental-strip-types --test src/features/metrics/poll.test.mjs
+cd web && npm run build && npm run lint
+# PASS:
+git diff --check
+```
+
+Browser evidence: rebuilt embedded manager with a **fresh current-schema database**, isolated Chromium 390×844, first-admin creation → official Vanilla 1.21.9 server creation with EULA unchecked → metrics. The real API rendered all 121 one-hour-range raw buckets and keyboard Oldest navigation reached the earliest one. No horizontal overflow or visible implementation task label occurred.
+
+Separately labeled intercepted history responses exercised complete long-range presentation: **721 six-hour buckets, 169 seven-day buckets and 2160 ninety-day buckets**. For each, keyboard Oldest reached the exact first selected timestamp, Newest returned to the start, and all rows remained accessible. The ninety-day range used three requests with at most 999 points each. These fixtures verify history presentation, not native telemetry or stored production history. No page errors or horizontal overflow occurred. The refreshed ninety-day screenshot was visually inspected.
+
+Artifacts: `/home/thim/.cache/dilla-tmp/task20-fix1-browser/evidence.json`, `shipping-oldest390.png`, `6hours-oldest390.png`, `7days-oldest390.png`, `90days-oldest390.png`. Reproduction data is `/home/thim/.cache/dilla-tmp/task20-fix1-browser-data`; the earlier task cache predates the final migration-12 draft and is not the current-schema reproduction database. The local review manager was stopped after the check. No external messages were sent, files staged or commits created.

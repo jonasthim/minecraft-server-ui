@@ -174,21 +174,46 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 		}
 		s.previousMu.Unlock()
+		periodEnded := false
 		if len(instances) > 0 {
 			for n := 0; n < len(instances); n++ {
-				id := instances[(offset+n)%len(instances)].Instance.ID
+				index := (offset + n) % len(instances)
+				id := instances[index].Instance.ID
 				pendingMu.Lock()
-				if !pending[id] {
-					select {
-					case work <- id:
-						pending[id] = true
-					default:
-					}
+				alreadyPending := pending[id]
+				if !alreadyPending {
+					pending[id] = true
 				}
 				pendingMu.Unlock()
+				if alreadyPending {
+					continue
+				}
+				// Keep offering the remaining fleet as workers finish. The period
+				// deadline bounds admission; channel capacity never caps fleet size.
+				select {
+				case work <- id:
+				case <-tick.C:
+					pendingMu.Lock()
+					delete(pending, id)
+					pendingMu.Unlock()
+					offset = index
+					periodEnded = true
+				case failure := <-fatal:
+					return failure
+				case <-workerCtx.Done():
+					select {
+					case failure := <-fatal:
+						return failure
+					default:
+						return nil
+					}
+				}
+				if periodEnded {
+					break
+				}
 			}
-			offset = (offset + 4) % len(instances)
 		}
+
 		if s.cfg.Now().Sub(lastRetention) >= time.Hour {
 			if err = s.Retain(workerCtx); err != nil {
 				if ctx.Err() != nil {
@@ -197,6 +222,9 @@ func (s *Service) Run(ctx context.Context) error {
 				return fmt.Errorf("retain metrics: %w", err)
 			}
 			lastRetention = s.cfg.Now()
+		}
+		if periodEnded {
+			continue
 		}
 		select {
 		case failure := <-fatal:
