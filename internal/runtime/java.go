@@ -38,6 +38,14 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 	b.data = append(b.data, p...)
 	return n, nil
 }
+
+// Temurin 16.0.2+7 was published under Eclipse Foundation before the vendor
+// rename. Callers still verify official origin, archive hash and exact build;
+// this alias must not admit Foundation builds for other versions or majors.
+func temurinVendor(vendor string, major int, version string) bool {
+	return vendor == "Eclipse Adoptium" || (vendor == "Eclipse Foundation" && major == 16 && version == "16.0.2+7")
+}
+
 func parseJVM(output string) (jvmInfo, error) {
 	properties := map[string]string{}
 	for _, line := range strings.Split(output, "\n") {
@@ -62,9 +70,7 @@ func parseJVM(output string) (jvmInfo, error) {
 	if err != nil || !supportedMajor(major) {
 		return jvmInfo{}, fmt.Errorf("unsupported JVM version")
 	}
-	if properties["java.vendor"] != "Eclipse Adoptium" {
-		return jvmInfo{}, fmt.Errorf("Java executable vendor is not Eclipse Adoptium")
-	}
+
 	arch := properties["os.arch"]
 	if arch != "amd64" && arch != "x86_64" {
 		return jvmInfo{}, fmt.Errorf("Java executable is not x64")
@@ -72,6 +78,9 @@ func parseJVM(output string) (jvmInfo, error) {
 	version := properties["java.runtime.version"]
 	if !versionPattern.MatchString(version) {
 		return jvmInfo{}, fmt.Errorf("missing JVM runtime version")
+	}
+	if !temurinVendor(properties["java.vendor"], major, version) {
+		return jvmInfo{}, fmt.Errorf("Java executable vendor does not match Temurin build")
 	}
 	return jvmInfo{Major: major, Vendor: properties["java.vendor"], Version: version, Architecture: arch}, nil
 }
@@ -117,7 +126,7 @@ func (m *Manager) verifyProbe(ctx context.Context, r domain.JavaRuntime) error {
 	if err != nil {
 		return fmt.Errorf("verify Temurin executable: %w", err)
 	}
-	if got.Major != r.Major || got.Vendor != "Eclipse Adoptium" || got.Version != r.Version || (got.Architecture != "amd64" && got.Architecture != "x86_64") {
+	if got.Major != r.Major || !temurinVendor(got.Vendor, got.Major, got.Version) || got.Version != r.Version || (got.Architecture != "amd64" && got.Architecture != "x86_64") {
 		return fmt.Errorf("Temurin executable does not match verified metadata")
 	}
 	return nil
@@ -142,10 +151,15 @@ func validateRelease(root string, r domain.JavaRuntime) error {
 			values[name] = strings.Trim(value, "\"\r")
 		}
 	}
-	if values["IMPLEMENTOR"] != "Eclipse Adoptium" || (values["OS_ARCH"] != "x86_64" && values["OS_ARCH"] != "amd64") {
+	// The historical Java 16 release file records its build in FULL_VERSION.
+	version := values["JAVA_RUNTIME_VERSION"]
+	if version == "" && values["IMPLEMENTOR"] == "Eclipse Foundation" {
+		version = values["FULL_VERSION"]
+	}
+	if !temurinVendor(values["IMPLEMENTOR"], r.Major, version) || (values["OS_ARCH"] != "x86_64" && values["OS_ARCH"] != "amd64") {
 		return fmt.Errorf("Temurin release vendor or architecture mismatch")
 	}
-	if version := values["JAVA_RUNTIME_VERSION"]; version != "" && version != r.Version {
+	if version != "" && version != r.Version {
 		return fmt.Errorf("Temurin release version mismatch")
 	}
 	return nil
