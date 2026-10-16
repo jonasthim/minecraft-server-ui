@@ -220,7 +220,16 @@ func (s *Service) run(ctx context.Context, execution *jobs.Execution) error {
 				return s.cleanupFailure(root, id, e)
 			}
 			defer tx.Rollback()
-			e = participant.Commit(ctx, tx)
+			if len(p.Request.Manual) > 0 || p.Request.ArchiveReceiptID != "" {
+				var role domain.Role
+				var disabled bool
+				if err := tx.QueryRowContext(ctx, "SELECT role,disabled FROM users WHERE id=?", actor.ID).Scan(&role, &disabled); err != nil || disabled || role != domain.RoleAdmin {
+					e = domain.E(domain.CodeForbidden, "administrator authority changed before pack commit")
+				}
+			}
+			if e == nil {
+				e = participant.Commit(ctx, tx)
+			}
 			if e == nil {
 				baseline, _ := json.Marshal(p.Baseline)
 				_, e = tx.ExecContext(ctx, "INSERT INTO modpack_baselines(instance_id,baseline_json) VALUES(?,?) ON CONFLICT(instance_id) DO UPDATE SET baseline_json=excluded.baseline_json", id, string(baseline))
@@ -285,6 +294,11 @@ func (s *Service) recoverJournal(ctx context.Context, root *os.Root, id string) 
 			return conflict("external pack edit preserved; recovery requires review")
 		}
 	}
+	if s.fault != nil {
+		if e = s.fault("recovery_preflight"); e != nil {
+			return e
+		}
+	}
 	if !committed {
 		for i := len(p.Operations) - 1; i >= 0; i-- {
 			op := p.Operations[i]
@@ -295,6 +309,9 @@ func (s *Service) recoverJournal(ctx context.Context, root *os.Root, id string) 
 			if hash == op.Before.SHA256 {
 				continue
 			}
+			if hash != op.After.SHA256 {
+				return conflict("external pack edit preserved during replay; recovery requires review")
+			}
 			var reader io.Reader
 			var f *os.File
 			if op.Before.ID != "" {
@@ -304,7 +321,7 @@ func (s *Service) recoverJournal(ctx context.Context, root *os.Root, id string) 
 				}
 				reader = f
 			}
-			e = atomicStream(ctx, root, op.Path, hash, reader, op.Before.ID == "")
+			e = atomicStream(ctx, root, op.Path, op.After.SHA256, reader, op.Before.ID == "")
 			if f != nil {
 				f.Close()
 			}

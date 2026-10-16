@@ -1,6 +1,9 @@
 package modpack
 
 import (
+	"bytes"
+	"io"
+	"net/http"
 	"net/netip"
 	"testing"
 )
@@ -20,5 +23,37 @@ func TestPackTransportRejectsCredentialsPrivateAddressesAndNonSpecHosts(t *testi
 		if _, e := allowedPackURL(raw); e != nil {
 			t.Fatal(raw, e)
 		}
+	}
+}
+
+type packRoundTripper func(*http.Request) (*http.Response, error)
+
+func (fn packRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return fn(r) }
+func TestDownloadedMembersUseSharedDestinationValidation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		body     []byte
+		accepted bool
+	}{
+		{"config/a.cfg", []byte("valid UTF-8 text"), true},
+		{"config/a.cfg", []byte{255, 1}, false},
+		{"kubejs/server_scripts/a.js", []byte{0, 1}, false},
+		{"kubejs/assets/example/icon.png.mcmeta", []byte{0, 1}, false},
+		{"config/a.cfg", bytes.Repeat([]byte("x"), MaxConfigBytes+1), false},
+		{"kubejs/assets/example/icon.png", []byte{0, 255, 1}, true},
+		{"kubejs/data/example/structure.nbt", []byte{0, 255, 1}, true},
+		{"config/icon.png", []byte{0, 255, 1}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newPackFixture(t)
+			client := &http.Client{Transport: packRoundTripper(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, ContentLength: int64(len(test.body)), Body: io.NopCloser(bytes.NewReader(test.body))}, nil
+			})}
+			file := PackFile{Path: test.name, Size: int64(len(test.body)), Hashes: map[string]string{"sha256": digest(test.body)}, Downloads: []string{"https://cdn.modrinth.com/verified-index-member"}}
+			st, e := f.s.downloadPackFileUsing(t.Context(), "alpha", packAdmin.ID, file, client)
+			if (e == nil) != test.accepted {
+				t.Fatal("download destination policy mismatch", st, e)
+			}
+		})
 	}
 }

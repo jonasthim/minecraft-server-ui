@@ -151,6 +151,15 @@ func ParseArchive(ctx context.Context, r io.ReaderAt, size int64, format string)
 				p.Excluded = append(p.Excluded, f.Path)
 				continue
 			}
+			if e = validateDestinationSize(f.Path, f.FileSize); e != nil {
+				return p, e
+			}
+			if textDestination(f.Path) {
+				configBytes += f.FileSize
+				if configBytes > 32<<20 {
+					return p, packError("aggregate pack text exceeds 32 MiB")
+				}
+			}
 			if !allowedPath(f.Path) {
 				return p, packError("pack file targets excluded server path")
 			}
@@ -172,7 +181,7 @@ func ParseArchive(ctx context.Context, r io.ReaderAt, size int64, format string)
 					if configBytes > 32<<20 {
 						return p, packError("aggregate override text exceeds 32 MiB")
 					}
-					if e != nil || !utf8.Valid(b) || bytes.ContainsRune(b, 0) {
+					if e != nil || validateDestination(ctx, dest, bytes.NewReader(b), int64(len(b))) != nil {
 						return p, packError("override is not bounded UTF-8 config text")
 					}
 				}
@@ -212,7 +221,7 @@ func ParseArchive(ctx context.Context, r io.ReaderAt, size int64, format string)
 				if configBytes > 32<<20 {
 					return p, packError("aggregate override text exceeds 32 MiB")
 				}
-				if e != nil || !utf8.Valid(b) || bytes.ContainsRune(b, 0) {
+				if e != nil || validateDestination(ctx, f.Name, bytes.NewReader(b), int64(len(b))) != nil {
 					return p, packError("server override is not bounded config text")
 				}
 			}

@@ -379,7 +379,9 @@ func (s *Service) PreparePackCandidate(ctx context.Context, id string, t Tuple, 
 		return nil, nil, e
 	}
 	needs := false
-	for _, item := range candidate {
+	for i := range candidate {
+		candidate[i].LanguageEvidence = nil
+		item := candidate[i]
 		if item.Enabled && item.Descriptor.LanguageRequirement != "" && item.Descriptor.LanguageRequirement != "*" {
 			needs = true
 		}

@@ -204,10 +204,12 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 		for _, installed := range manifest.Items {
 			for _, owned := range installed.Files {
 				if strings.TrimSuffix(owned.Path, ".disabled") == name {
-					selection := baseline.Selections[name]
+					selection, saved := baseline.Selections[name]
 					selection.Disabled = !installed.Enabled
 					selection.Pinned = installed.Pinned
-					selection.Selected = true
+					if !saved {
+						selection.Selected = true
+					}
 					baseline.Selections[name] = selection
 					baseline.Content[name] = installed.ID
 				}
@@ -263,7 +265,7 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 				if re != nil {
 					return p.Preview, re
 				}
-				e = verifyMember(ctx, rf, receipt.Size, file)
+				e = verifyPackMember(ctx, rf, receipt.Size, file)
 				rf.Close()
 				st = receipt
 			} else {
@@ -285,6 +287,9 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 		}
 		if st.ID == "" {
 			return p.Preview, invalid("pack file has no staged bytes")
+		}
+		if e = s.validateDestinationStage(ctx, id, name, st); e != nil {
+			return p.Preview, e
 		}
 		stages[name] = st
 		p.Baseline.Files[name] = st.SHA256
@@ -351,6 +356,10 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 				p.Baseline.Files[name] = ""
 			}
 			if oldID := baseline.Content[name]; oldID != "" {
+				if item, ok := candidate[oldID]; ok {
+					item.Pinned = p.Preview.Selections[name].Pinned
+					candidate[oldID] = item
+				}
 				p.Baseline.Content[name] = oldID
 			}
 			continue

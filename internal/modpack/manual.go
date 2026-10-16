@@ -38,6 +38,13 @@ func verifyMember(ctx context.Context, r io.ReaderAt, size int64, file PackFile)
 	return nil
 }
 
+func verifyPackMember(ctx context.Context, r io.ReaderAt, size int64, file PackFile) error {
+	if e := validateDestination(ctx, file.Path, r, size); e != nil {
+		return e
+	}
+	return verifyMember(ctx, r, size, file)
+}
+
 // ResumeMember accepts raw bytes only for an exact unresolved member in an owned
 // private preview. Its official hashes/size are never supplied by the API.
 func (s *Service) ResumeMember(ctx context.Context, id, preview, member string, r io.Reader, actor domain.User) (out Preview, result error) {
@@ -79,6 +86,10 @@ func (s *Service) ResumeMember(ctx context.Context, id, preview, member string, 
 		s.mu.Unlock()
 		return Preview{}, invalid("manual member not unresolved in this preview")
 	}
+	if e = validateDestinationSize(file.Path, file.Size); e != nil {
+		s.mu.Unlock()
+		return Preview{}, e
+	}
 	st, e := s.stage(ctx, id, actor.ID, r, file.Size)
 	if e == nil {
 		var f interface {
@@ -87,7 +98,7 @@ func (s *Service) ResumeMember(ctx context.Context, id, preview, member string, 
 		}
 		f, e = s.openStage(ctx, id, st)
 		if e == nil {
-			e = verifyMember(ctx, f, st.Size, file)
+			e = verifyPackMember(ctx, f, st.Size, file)
 			f.Close()
 		}
 	}

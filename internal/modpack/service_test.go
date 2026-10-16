@@ -4,7 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"crypto/sha512"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"github.com/jonasthim/minecraft-server-ui/internal/catalog"
@@ -452,5 +455,342 @@ func TestPackPreservesUnknownTrialProvenanceAndAutomaticBlocker(t *testing.T) {
 	snapshot, e := cs.Snapshot(t.Context(), "alpha")
 	if e != nil || len(snapshot.Items) != 1 || !snapshot.Items[0].Unknown || snapshot.Items[0].TrialTuple == nil || len(snapshot.AutomaticBlockers) == 0 {
 		t.Fatal(snapshot, e)
+	}
+}
+
+func TestRecoveryReplayPreservesEditAfterPreflight(t *testing.T) {
+	f := newPackFixture(t)
+	f.setPack(t, "one", map[string][]byte{"overrides/config/a.cfg": []byte("published")})
+	p := f.preview(t, nil)
+	f.s.fault = func(at string) error {
+		if at == "file" {
+			return errors.New("interrupted")
+		}
+		return nil
+	}
+	if j := f.apply(t, p); j.State != domain.JobFailed {
+		t.Fatal(j)
+	}
+	edited := false
+	f.s.fault = func(at string) error {
+		if at == "recovery_preflight" {
+			edited = true
+			return os.WriteFile(filepath.Join(f.dirs.Server, "config/a.cfg"), []byte("external after preflight"), 0600)
+		}
+		return nil
+	}
+	if e := f.s.Reconcile(t.Context()); e == nil {
+		t.Fatal("replay overwrote post-preflight edit")
+	}
+	if !edited {
+		t.Fatal("recovery did not reach preflight seam")
+	}
+	b, e := os.ReadFile(filepath.Join(f.dirs.Server, "config/a.cfg"))
+	if e != nil || string(b) != "external after preflight" {
+		t.Fatal(string(b), e)
+	}
+	if e = launcher.CheckActivationReady(t.Context(), f.data, "alpha"); e == nil {
+		t.Fatal("recovery conflict lost boot blocker")
+	}
+}
+func TestInstalledJarPinSurvivesMetadataOnlyApply(t *testing.T) {
+	f := newPackFixture(t)
+	f.setPack(t, "one", map[string][]byte{"overrides/mods/example.jar": bundledJar(t)})
+	if j := f.apply(t, f.preview(t, nil)); j.State != domain.JobSucceeded {
+		t.Fatal(j)
+	}
+	p, e := f.s.Preview(t.Context(), "alpha", Request{Pack: f.c.artifact.Selection, Selections: map[string]Selection{"mods/example.jar": {Selected: true, Pinned: true}}}, packAdmin)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if j := f.apply(t, p); j.State != domain.JobSucceeded {
+		t.Fatal(j)
+	}
+	manifest, e := f.s.content.Snapshot(t.Context(), "alpha")
+	if e != nil || len(manifest.Items) != 1 || !manifest.Items[0].Pinned {
+		t.Fatal("installed pin not committed", manifest, e)
+	}
+	p = f.preview(t, nil)
+	if !p.Selections["mods/example.jar"].Pinned {
+		t.Fatal("installed pin lost", p.Selections)
+	}
+}
+func (f *packFixture) indexedPack(t *testing.T, name string, body []byte, server string) {
+	t.Helper()
+	f.setPack(t, "one", map[string][]byte{})
+	entry := indexEntry(name, server)
+	entry["fileSize"] = len(body)
+	a := sha1.Sum(body)
+	b := sha512.Sum512(body)
+	entry["hashes"] = map[string]string{"sha1": hex.EncodeToString(a[:]), "sha512": hex.EncodeToString(b[:])}
+	entry["downloads"] = []string{"https://unapproved.invalid/file"}
+	archive := packZip(t, map[string][]byte{"modrinth.index.json": mrIndex(entry)})
+	if e := os.WriteFile(f.c.artifact.Path, archive, 0600); e != nil {
+		t.Fatal(e)
+	}
+	f.c.artifact.File.Size = int64(len(archive))
+	f.c.artifact.File.Hashes = map[string]string{"sha256": digest(archive)}
+	f.c.artifact.SHA256 = digest(archive)
+	f.c.version.Files[0] = f.c.artifact.File
+}
+func TestInstalledOptionalDeselectionSurvivesNextPreview(t *testing.T) {
+	f := newPackFixture(t)
+	body := bundledJar(t)
+	f.indexedPack(t, "mods/example.jar", body, "optional")
+	p, e := f.s.Preview(t.Context(), "alpha", Request{Pack: f.c.artifact.Selection, Selections: map[string]Selection{"mods/example.jar": {Selected: true}}}, packAdmin)
+	if e != nil {
+		t.Fatal(e)
+	}
+	p, e = f.s.ResumeMember(t.Context(), "alpha", p.ID, "mods/example.jar", bytes.NewReader(body), packAdmin)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if j := f.apply(t, p); j.State != domain.JobSucceeded {
+		t.Fatal(j)
+	}
+	p, e = f.s.Preview(t.Context(), "alpha", Request{Pack: f.c.artifact.Selection, Selections: map[string]Selection{"mods/example.jar": {Selected: false}}}, packAdmin)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if j := f.apply(t, p); j.State != domain.JobSucceeded {
+		t.Fatal(j)
+	}
+	p = f.preview(t, nil)
+	if p.Selections["mods/example.jar"].Selected {
+		t.Fatal("saved optional deselection reset by installed bytes", p.Selections)
+	}
+}
+func TestManualMemberRejectsBinaryConfiguration(t *testing.T) {
+	for _, name := range []string{"config/a.cfg", "kubejs/server_scripts/a.js", "kubejs/assets/example/icon.png.mcmeta"} {
+		t.Run(name, func(t *testing.T) {
+			f := newPackFixture(t)
+			body := []byte{0, 255, 1}
+			f.indexedPack(t, name, body, "required")
+			p := f.preview(t, nil)
+			if _, e := f.s.ResumeMember(t.Context(), "alpha", p.ID, name, bytes.NewReader(body), packAdmin); e == nil {
+				t.Fatal("binary config accepted despite exact digest")
+			}
+		})
+	}
+}
+func TestManualMemberRejectsOversizedConfiguration(t *testing.T) {
+	f := newPackFixture(t)
+	body := bytes.Repeat([]byte("x"), MaxConfigBytes+1)
+	f.indexedPack(t, "config/a.cfg", body, "required")
+	p, e := f.s.Preview(t.Context(), "alpha", Request{Pack: f.c.artifact.Selection}, packAdmin)
+	if e == nil {
+		if _, e = f.s.ResumeMember(t.Context(), "alpha", p.ID, "config/a.cfg", bytes.NewReader(body), packAdmin); e == nil {
+			t.Fatal("oversized config accepted despite exact digest")
+		}
+	}
+}
+
+func customizationJSON(t *testing.T, f *packFixture) map[string]any {
+	t.Helper()
+	snapshot, e := f.s.Snapshot(t.Context(), "alpha")
+	if e != nil {
+		t.Fatal(e)
+	}
+	raw, e := json.Marshal(snapshot)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var value map[string]any
+	if e = json.Unmarshal(raw, &value); e != nil {
+		t.Fatal(e)
+	}
+	summary, ok := value["customizations"].(map[string]any)
+	if !ok {
+		t.Fatal("snapshot lacks current customization summary", string(raw))
+	}
+	return summary
+}
+func TestSnapshotListsCurrentEditedDeletedAndSelectionCustomizations(t *testing.T) {
+	f := newPackFixture(t)
+	f.setPack(t, "one", map[string][]byte{"overrides/config/a.cfg": []byte("old"), "overrides/config/deleted.cfg": []byte("old")})
+	if j := f.apply(t, f.preview(t, nil)); j.State != domain.JobSucceeded {
+		t.Fatal(j)
+	}
+	if e := os.WriteFile(filepath.Join(f.dirs.Server, "config/a.cfg"), []byte("edited"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Remove(filepath.Join(f.dirs.Server, "config/deleted.cfg")); e != nil {
+		t.Fatal(e)
+	}
+	summary := customizationJSON(t, f)
+	if summary["complete"] != true || summary["observed_at"] == "" || summary["source"].(map[string]any)["sha256"] != f.c.artifact.SHA256 {
+		t.Fatal(summary)
+	}
+	entries := summary["entries"].([]any)
+	if len(entries) != 2 {
+		t.Fatal(entries)
+	}
+	for i, reason := range []string{"edited", "deleted"} {
+		entry := entries[i].(map[string]any)
+		if entry["reasons"].([]any)[0] != reason || entry["evidence"] != "observed_file" {
+			t.Fatal(entry)
+		}
+	}
+}
+func TestSnapshotBoundsHashWorkAndPrioritizesEditableConfig(t *testing.T) {
+	f := newPackFixture(t)
+	f.setPack(t, "one", map[string][]byte{"overrides/config/a.cfg": []byte("old")})
+	if j := f.apply(t, f.preview(t, nil)); j.State != domain.JobSucceeded {
+		t.Fatal(j)
+	}
+	var raw string
+	if e := f.database.QueryRow("SELECT baseline_json FROM modpack_baselines WHERE instance_id='alpha'").Scan(&raw); e != nil {
+		t.Fatal(e)
+	}
+	var baseline Baseline
+	json.Unmarshal([]byte(raw), &baseline)
+	baseline.Files["mods/large.jar"] = digest([]byte("old"))
+	updated, _ := json.Marshal(baseline)
+	if _, e := f.database.Exec("UPDATE modpack_baselines SET baseline_json=? WHERE instance_id='alpha'", string(updated)); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.MkdirAll(filepath.Join(f.dirs.Server, "mods"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	large, e := os.Create(filepath.Join(f.dirs.Server, "mods/large.jar"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	e = large.Truncate(9 << 20)
+	large.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(filepath.Join(f.dirs.Server, "config/a.cfg"), []byte("edited"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	summary := customizationJSON(t, f)
+	if summary["complete"] != false || summary["checked_files"] != float64(1) || summary["hashed_bytes"].(float64) > 16<<20 || len(summary["notices"].([]any)) == 0 {
+		t.Fatal(summary)
+	}
+	entries := summary["entries"].([]any)
+	if len(entries) != 1 || entries[0].(map[string]any)["path"] != "config/a.cfg" {
+		t.Fatal(entries)
+	}
+}
+
+func TestSnapshotSavedChoicesRemainAvailableWhenScanBusy(t *testing.T) {
+	f := newPackFixture(t)
+	f.setPack(t, "one", map[string][]byte{"overrides/config/a.cfg": []byte("old")})
+	p, e := f.s.Preview(t.Context(), "alpha", Request{Pack: f.c.artifact.Selection, Selections: map[string]Selection{"config/a.cfg": {Selected: true, Excluded: true, Pinned: true}}}, packAdmin)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if j := f.apply(t, p); j.State != domain.JobSucceeded {
+		t.Fatal(j)
+	}
+	summaryScanSlots <- struct{}{}
+	summaryScanSlots <- struct{}{}
+	defer func() { <-summaryScanSlots; <-summaryScanSlots }()
+	summary := customizationJSON(t, f)
+	if summary["complete"] != false || summary["checked_files"] != float64(0) {
+		t.Fatal(summary)
+	}
+	entries := summary["entries"].([]any)
+	if len(entries) != 1 {
+		t.Fatal(entries)
+	}
+	entry := entries[0].(map[string]any)
+	if entry["evidence"] != "saved_selection" || entry["path"] != "config/a.cfg" || len(entry["reasons"].([]any)) != 2 {
+		t.Fatal(entry)
+	}
+}
+func TestSnapshotCacheDisclosesObservationTimeAndRefreshes(t *testing.T) {
+	f := newPackFixture(t)
+	f.setPack(t, "one", map[string][]byte{"overrides/config/a.cfg": []byte("old")})
+	if j := f.apply(t, f.preview(t, nil)); j.State != domain.JobSucceeded {
+		t.Fatal(j)
+	}
+	first := customizationJSON(t, f)
+	if e := os.WriteFile(filepath.Join(f.dirs.Server, "config/a.cfg"), []byte("edited"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	cached := customizationJSON(t, f)
+	if cached["observed_at"] != first["observed_at"] || len(cached["entries"].([]any)) != 0 {
+		t.Fatal("cache should retain its observation provenance", cached)
+	}
+	f.s.summaryMu.Lock()
+	entry := f.s.summaryCache["alpha"]
+	entry.expires = time.Time{}
+	f.s.summaryCache["alpha"] = entry
+	f.s.summaryMu.Unlock()
+	fresh := customizationJSON(t, f)
+	if fresh["observed_at"] == first["observed_at"] || len(fresh["entries"].([]any)) != 1 {
+		t.Fatal("expired cache did not observe current edit", fresh)
+	}
+}
+
+func TestManualBinaryResourceExceptionsAndReusedTextReceipt(t *testing.T) {
+	for _, name := range []string{"kubejs/assets/example/icon.png", "kubejs/data/example/structure.nbt", "config/a.cfg"} {
+		t.Run(name, func(t *testing.T) {
+			f := newPackFixture(t)
+			body := []byte{0, 255, 1}
+			f.indexedPack(t, name, body, "required")
+			p := f.preview(t, nil)
+			if name == "config/a.cfg" {
+				f.s.mu.Lock()
+				st, e := f.s.stage(t.Context(), "alpha", packAdmin.ID, bytes.NewReader(body), int64(len(body)))
+				f.s.mu.Unlock()
+				if e != nil {
+					t.Fatal(e)
+				}
+				next, e := f.s.Preview(t.Context(), "alpha", Request{Pack: f.c.artifact.Selection, PreviousPreviewID: p.ID, Manual: map[string]string{name: st.ID}}, packAdmin)
+				if e == nil && len(next.Manual) == 0 {
+					t.Fatal("reused receipt bypassed config text validation", next)
+				}
+				return
+			}
+			p, e := f.s.ResumeMember(t.Context(), "alpha", p.ID, name, bytes.NewReader(body), packAdmin)
+			if e != nil || len(p.Manual) > 0 {
+				t.Fatal(p, e)
+			}
+			if j := f.apply(t, p); j.State != domain.JobSucceeded {
+				t.Fatal(j)
+			}
+			b, e := os.ReadFile(filepath.Join(f.dirs.Server, name))
+			if e != nil || !bytes.Equal(b, body) {
+				t.Fatal(b, e)
+			}
+		})
+	}
+}
+func TestMemberManualApplyRejectsAdminDemotionAtCommit(t *testing.T) {
+	f := newPackFixture(t)
+	body := []byte("exact config")
+	f.indexedPack(t, "config/a.cfg", body, "required")
+	p := f.preview(t, nil)
+	p, e := f.s.ResumeMember(t.Context(), "alpha", p.ID, "config/a.cfg", bytes.NewReader(body), packAdmin)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = f.database.Exec("INSERT INTO users(id,username,role,created_at,updated_at) VALUES(2,'remaining-admin','admin','now','now')"); e != nil {
+		t.Fatal(e)
+	}
+	demoted := false
+	f.s.fault = func(at string) error {
+		if at == "before_commit" {
+			_, err := f.database.Exec("UPDATE users SET role='operator' WHERE id=1")
+			demoted = err == nil
+			return err
+		}
+		return nil
+	}
+	if j := f.apply(t, p); j.State != domain.JobFailed {
+		t.Fatal("admin-only member committed after demotion", j)
+	}
+	if !demoted {
+		t.Fatal("did not reach demotion seam")
+	}
+	var n int
+	if e = f.database.QueryRow("SELECT count(*) FROM modpack_baselines WHERE instance_id='alpha'").Scan(&n); e != nil || n != 0 {
+		t.Fatal(n, e)
+	}
+	if _, e = os.Stat(filepath.Join(f.dirs.Server, "config/a.cfg")); !os.IsNotExist(e) {
+		t.Fatal("publication not rolled back", e)
 	}
 }

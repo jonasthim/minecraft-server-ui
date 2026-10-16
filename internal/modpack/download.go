@@ -89,6 +89,13 @@ func packHTTPClient() *http.Client {
 	}}
 }
 func (s *Service) downloadPackFile(ctx context.Context, id string, actor int64, file PackFile) (stage, error) {
+	return s.downloadPackFileUsing(ctx, id, actor, file, packHTTPClient())
+}
+
+func (s *Service) downloadPackFileUsing(ctx context.Context, id string, actor int64, file PackFile, client *http.Client) (stage, error) {
+	if e := validateDestinationSize(file.Path, file.Size); e != nil {
+		return stage{}, e
+	}
 	var result error
 	for _, raw := range file.Downloads {
 		u, e := allowedPackURL(raw)
@@ -101,7 +108,6 @@ func (s *Service) downloadPackFile(ctx context.Context, id string, actor int64, 
 			return stage{}, e
 		}
 		request.Header.Set("User-Agent", "MinecraftServerUI/0.1 (server pack files)")
-		client := packHTTPClient()
 		response, e := client.Do(request)
 		if e != nil {
 			result = e
@@ -131,6 +137,9 @@ func (s *Service) downloadPackFile(ctx context.Context, id string, actor int64, 
 			if !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), file.Hashes[name]) {
 				return stage{}, invalid("pack member published digest mismatch")
 			}
+		}
+		if e = s.validateDestinationStage(ctx, id, file.Path, st); e != nil {
+			return stage{}, e
 		}
 		return st, nil
 	}

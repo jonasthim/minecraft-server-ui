@@ -95,9 +95,28 @@ type Preview struct {
 	Excluded         []string             `json:"excluded"`
 	Summary          string               `json:"summary"`
 }
+type Customization struct {
+	Path           string   `json:"path"`
+	Reasons        []string `json:"reasons"`
+	Evidence       string   `json:"evidence"`
+	UpstreamSHA256 string   `json:"upstream_sha256,omitempty"`
+	LocalSHA256    string   `json:"local_sha256,omitempty"`
+}
+type CustomizationSummary struct {
+	ObservedAt   string          `json:"observed_at"`
+	Source       *Source         `json:"source,omitempty"`
+	Entries      []Customization `json:"entries"`
+	CheckedFiles int             `json:"checked_files"`
+	TotalFiles   int             `json:"total_files"`
+	HashedBytes  int64           `json:"hashed_bytes"`
+	Complete     bool            `json:"complete"`
+	Truncated    bool            `json:"truncated"`
+	Notices      []string        `json:"notices"`
+}
 type Snapshot struct {
-	Baseline *Baseline `json:"baseline,omitempty"`
-	Blockers []string  `json:"blockers"`
+	Customizations CustomizationSummary `json:"customizations"`
+	Baseline       *Baseline            `json:"baseline,omitempty"`
+	Blockers       []string             `json:"blockers"`
 }
 type Upload struct {
 	ID     string `json:"id"`

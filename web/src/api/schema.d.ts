@@ -2539,6 +2539,7 @@ export interface components {
         ModpackSnapshot: {
             baseline?: components["schemas"]["ModpackBaseline"];
             blockers: string[];
+            customizations: components["schemas"]["ModpackCustomizationSummary"];
         };
         ModpackPreview: {
             id: string;
@@ -2746,6 +2747,27 @@ export interface components {
         SelfUpdateAccepted: {
             /** @enum {string} */
             status: "accepted";
+        };
+        ModpackCustomization: {
+            path: string;
+            reasons: ("edited" | "deleted" | "retained" | "pinned" | "excluded" | "disabled" | "optional_selected" | "optional_deselected")[];
+            /** @enum {string} */
+            evidence: "saved_selection" | "observed_file" | "saved_selection_and_observed_file";
+            upstream_sha256?: string;
+            local_sha256?: string;
+        };
+        ModpackCustomizationSummary: {
+            /** Format: date-time */
+            observed_at: string;
+            source?: components["schemas"]["ModpackSource"];
+            entries: components["schemas"]["ModpackCustomization"][];
+            checked_files: number;
+            total_files: number;
+            /** Format: int64 */
+            hashed_bytes: number;
+            complete: boolean;
+            truncated: boolean;
+            notices: string[];
         };
     };
     responses: never;

@@ -83,3 +83,40 @@ func TestArchiveReceiptRejectsForeignExpiredTamperedAndRemappedSource(t *testing
 		})
 	}
 }
+
+func TestArchiveManualApplyRejectsAdminDemotionAtCommit(t *testing.T) {
+	f, selection, b := restrictedCFPack(t)
+	receipt, e := f.s.StageArchive(t.Context(), "alpha", selection, bytes.NewReader(b), packAdmin)
+	if e != nil {
+		t.Fatal(e)
+	}
+	p, e := f.s.Preview(t.Context(), "alpha", Request{Pack: selection, ArchiveReceiptID: receipt.ID}, packAdmin)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = f.database.Exec("INSERT INTO users(id,username,role,created_at,updated_at) VALUES(2,'remaining-admin','admin','now','now')"); e != nil {
+		t.Fatal(e)
+	}
+	demoted := false
+	f.s.fault = func(at string) error {
+		if at == "before_commit" {
+			_, err := f.database.Exec("UPDATE users SET role='operator' WHERE id=1")
+			demoted = err == nil
+			return err
+		}
+		return nil
+	}
+	if j := f.apply(t, p); j.State != domain.JobFailed {
+		t.Fatal("admin-only archive applied after demotion", j)
+	}
+	if !demoted {
+		t.Fatal("did not reach authority change seam")
+	}
+	var n int
+	if e = f.database.QueryRow("SELECT count(*) FROM modpack_baselines WHERE instance_id='alpha'").Scan(&n); e != nil || n != 0 {
+		t.Fatal("baseline committed", n, e)
+	}
+	if _, e = os.Stat(filepath.Join(f.dirs.Server, "config/a.cfg")); !os.IsNotExist(e) {
+		t.Fatal("admin-only publication not rolled back", e)
+	}
+}

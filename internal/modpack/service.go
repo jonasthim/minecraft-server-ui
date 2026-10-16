@@ -16,15 +16,17 @@ const MaxArtifactBytes = MaxFileBytes
 const MaxConfigBytes = 1 << 20
 
 type Service struct {
-	db        *sql.DB
-	paths     instance.Paths
-	instances Instances
-	queue     *jobs.Service
-	catalog   Catalog
-	content   ContentService
-	recovery  Recovery
-	mu        sync.Mutex
-	fault     func(string) error
+	db           *sql.DB
+	paths        instance.Paths
+	instances    Instances
+	queue        *jobs.Service
+	catalog      Catalog
+	content      ContentService
+	recovery     Recovery
+	mu           sync.Mutex
+	fault        func(string) error
+	summaryMu    sync.Mutex
+	summaryCache map[string]summaryCacheEntry
 }
 
 func New(c Config) (*Service, error) {
@@ -68,6 +70,7 @@ func (s *Service) Snapshot(ctx context.Context, id string) (Snapshot, error) {
 		}
 		out.Baseline = &b
 	}
+	out.Customizations = s.currentCustomizations(ctx, id, out.Baseline)
 	if e = s.CheckReady(ctx, id); e != nil {
 		out.Blockers = append(out.Blockers, "Pack transaction or recovery requires review")
 	}
