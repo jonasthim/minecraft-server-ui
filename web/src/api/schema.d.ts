@@ -1017,6 +1017,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{instanceId}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: exact JVM and bounded instance metrics; maximum 1000 buckets, raw 7 days/hourly 90 days. Missing values and missing buckets are explicit. */
+        get: operations["metricsQuery"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Administrator: masked channels; destinations and recipients are never echoed. */
+        get: operations["notificationsChannels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/channels/{channelId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Administrator: create disabled; explicit enable on later save. Omitted replacement keeps private configuration; clear removes it and disables delivery. Replacement/disable invalidate queued deliveries. */
+        put: operations["notificationsSave"];
+        post?: never;
+        /** Administrator: delete destination and cancel queued delivery. */
+        delete: operations["notificationsDelete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Administrator: safe delivery history retained 30 days/10000 rows. Sending at crash is unknown, never replayed automatically. */
+        get: operations["notificationsHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1988,6 +2057,105 @@ export interface components {
             truncated: boolean;
             gap: boolean;
             reason: string;
+        };
+        MetricSource: {
+            /** @enum {string} */
+            field: "cpu" | "resident" | "private" | "disk" | "players";
+            kind: string;
+            /** Format: date-time */
+            observed_at: string;
+            gap_reason?: string;
+        };
+        MetricCounts: {
+            samples: number;
+            cpu: number;
+            resident: number;
+            private: number;
+            disk: number;
+            players: number;
+        };
+        MetricPoint: {
+            /** Format: date-time */
+            collected_at: string;
+            cpu_percent: number | null;
+            resident_bytes: number | null;
+            private_bytes: number | null;
+            disk_bytes: number | null;
+            players: number | null;
+            counts: components["schemas"]["MetricCounts"];
+            expected: number;
+            gap: boolean;
+            sources: components["schemas"]["MetricSource"][];
+        };
+        MetricsPage: {
+            instance_id: string;
+            /** @enum {string} */
+            resolution: "raw" | "hourly";
+            interval_seconds: number;
+            points: components["schemas"]["MetricPoint"][];
+            cpu_convention: string;
+        };
+        /** @enum {string} */
+        NotificationProvider: "discord" | "slack" | "ntfy" | "telegram" | "webhook" | "email";
+        /** @enum {string} */
+        NotificationEventKind: "job_failed" | "job_succeeded";
+        NotificationDestination: {
+            endpoint?: string;
+            secret?: string;
+            recipient?: string;
+            smtp_host?: string;
+            smtp_port?: number;
+            smtp_user?: string;
+            smtp_password?: string;
+            from?: string;
+            /** @enum {string} */
+            tls_mode?: "" | "tls" | "starttls";
+        };
+        NotificationChannel: {
+            id: string;
+            label: string;
+            /** @enum {string} */
+            provider: "discord" | "slack" | "ntfy" | "telegram" | "webhook" | "email";
+            enabled: boolean;
+            events: ("job_failed" | "job_succeeded")[];
+            allow_private: boolean;
+            configured: boolean;
+            secret_set: boolean;
+            recipient_set: boolean;
+        };
+        NotificationChannelInput: {
+            label: string;
+            /** @enum {string} */
+            provider: "discord" | "slack" | "ntfy" | "telegram" | "webhook" | "email";
+            enabled: boolean;
+            events: ("job_failed" | "job_succeeded")[];
+            allow_private: boolean;
+            replace?: components["schemas"]["NotificationDestination"];
+            clear: boolean;
+        };
+        NotificationChannels: {
+            channels: components["schemas"]["NotificationChannel"][];
+        };
+        NotificationDelivery: {
+            id: number;
+            channel_id: string;
+            /** @enum {string} */
+            provider: "discord" | "slack" | "ntfy" | "telegram" | "webhook" | "email";
+            instance_id: string;
+            /** @enum {string} */
+            event_kind: "job_failed" | "job_succeeded";
+            /** @enum {string} */
+            status: "queued" | "sending" | "sent" | "failed" | "unknown_after_crash";
+            attempts: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            safe_failure: string;
+        };
+        NotificationHistory: {
+            deliveries: components["schemas"]["NotificationDelivery"][];
+            next_cursor: number;
         };
     };
     responses: never;
@@ -6449,6 +6617,346 @@ export interface operations {
                 };
             };
             /** @description Global map capacity reached; retry after five seconds */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    metricsQuery: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+                resolution: "raw" | "hourly";
+            };
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricsPage"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    notificationsChannels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationChannels"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    notificationsSave: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationChannelInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationChannel"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    notificationsDelete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    notificationsHistory: {
+        parameters: {
+            query?: {
+                before?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationHistory"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or availability failure */
             503: {
                 headers: {
                     [name: string]: unknown;

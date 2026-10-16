@@ -5643,6 +5643,469 @@
           }
         }
       }
+    },
+    "/api/v1/instances/{instanceId}/metrics": {
+      "get": {
+        "operationId": "metricsQuery",
+        "summary": "Viewer: exact JVM and bounded instance metrics; maximum 1000 buckets, raw 7 days/hourly 90 days. Missing values and missing buckets are explicit.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instanceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "raw",
+                "hourly"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/channels": {
+      "get": {
+        "operationId": "notificationsChannels",
+        "summary": "Administrator: masked channels; destinations and recipients are never echoed.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationChannels"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/channels/{channelId}": {
+      "put": {
+        "operationId": "notificationsSave",
+        "summary": "Administrator: create disabled; explicit enable on later save. Omitted replacement keeps private configuration; clear removes it and disables delivery. Replacement/disable invalidate queued deliveries.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channelId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationChannel"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationChannelInput"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "notificationsDelete",
+        "summary": "Administrator: delete destination and cancel queued delivery.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channelId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/history": {
+      "get": {
+        "operationId": "notificationsHistory",
+        "summary": "Administrator: safe delivery history retained 30 days/10000 rows. Sending at crash is unknown, never replayed automatically.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationHistory"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -9431,6 +9894,445 @@
             "type": "string"
           }
         }
+      },
+      "MetricSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "type": "string",
+            "enum": [
+              "cpu",
+              "resident",
+              "private",
+              "disk",
+              "players"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "gap_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "kind",
+          "observed_at"
+        ]
+      },
+      "MetricCounts": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "samples": {
+            "type": "integer"
+          },
+          "cpu": {
+            "type": "integer"
+          },
+          "resident": {
+            "type": "integer"
+          },
+          "private": {
+            "type": "integer"
+          },
+          "disk": {
+            "type": "integer"
+          },
+          "players": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "samples",
+          "cpu",
+          "resident",
+          "private",
+          "disk",
+          "players"
+        ]
+      },
+      "MetricPoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "collected_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cpu_percent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "resident_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "private_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disk_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "players": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "counts": {
+            "$ref": "#/components/schemas/MetricCounts"
+          },
+          "expected": {
+            "type": "integer"
+          },
+          "gap": {
+            "type": "boolean"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricSource"
+            }
+          }
+        },
+        "required": [
+          "collected_at",
+          "cpu_percent",
+          "resident_bytes",
+          "private_bytes",
+          "disk_bytes",
+          "players",
+          "counts",
+          "expected",
+          "gap",
+          "sources"
+        ]
+      },
+      "MetricsPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "instance_id": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "hourly"
+            ]
+          },
+          "interval_seconds": {
+            "type": "integer"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricPoint"
+            }
+          },
+          "cpu_convention": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "resolution",
+          "interval_seconds",
+          "points",
+          "cpu_convention"
+        ]
+      },
+      "NotificationProvider": {
+        "type": "string",
+        "enum": [
+          "discord",
+          "slack",
+          "ntfy",
+          "telegram",
+          "webhook",
+          "email"
+        ]
+      },
+      "NotificationEventKind": {
+        "type": "string",
+        "enum": [
+          "job_failed",
+          "job_succeeded"
+        ]
+      },
+      "NotificationDestination": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "secret": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "recipient": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "smtp_host": {
+            "type": "string"
+          },
+          "smtp_port": {
+            "type": "integer"
+          },
+          "smtp_user": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "smtp_password": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "from": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "tls_mode": {
+            "type": "string",
+            "enum": [
+              "",
+              "tls",
+              "starttls"
+            ]
+          }
+        }
+      },
+      "NotificationChannel": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "discord",
+              "slack",
+              "ntfy",
+              "telegram",
+              "webhook",
+              "email"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "job_failed",
+                "job_succeeded"
+              ]
+            }
+          },
+          "allow_private": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "secret_set": {
+            "type": "boolean"
+          },
+          "recipient_set": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "provider",
+          "enabled",
+          "events",
+          "allow_private",
+          "configured",
+          "secret_set",
+          "recipient_set"
+        ]
+      },
+      "NotificationChannelInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "discord",
+              "slack",
+              "ntfy",
+              "telegram",
+              "webhook",
+              "email"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "job_failed",
+                "job_succeeded"
+              ]
+            }
+          },
+          "allow_private": {
+            "type": "boolean"
+          },
+          "replace": {
+            "$ref": "#/components/schemas/NotificationDestination"
+          },
+          "clear": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "label",
+          "provider",
+          "enabled",
+          "events",
+          "allow_private",
+          "clear"
+        ]
+      },
+      "NotificationChannels": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationChannel"
+            }
+          }
+        },
+        "required": [
+          "channels"
+        ]
+      },
+      "NotificationDelivery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "discord",
+              "slack",
+              "ntfy",
+              "telegram",
+              "webhook",
+              "email"
+            ]
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "event_kind": {
+            "type": "string",
+            "enum": [
+              "job_failed",
+              "job_succeeded"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "sending",
+              "sent",
+              "failed",
+              "unknown_after_crash"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "safe_failure": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "channel_id",
+          "provider",
+          "instance_id",
+          "event_kind",
+          "status",
+          "attempts",
+          "created_at",
+          "updated_at",
+          "safe_failure"
+        ]
+      },
+      "NotificationHistory": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationDelivery"
+            }
+          },
+          "next_cursor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deliveries",
+          "next_cursor"
+        ]
       }
     }
   }

@@ -1,0 +1,294 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "JVM metrics",
+    "version": "0.0.0"
+  },
+  "paths": {
+    "/api/v1/instances/{instanceId}/metrics": {
+      "get": {
+        "operationId": "metricsQuery",
+        "summary": "Viewer: exact JVM and bounded instance metrics; maximum 1000 buckets, raw 7 days/hourly 90 days. Missing values and missing buckets are explicit.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instanceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "raw",
+                "hourly"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication, authorization, validation or availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "MetricSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "type": "string",
+            "enum": [
+              "cpu",
+              "resident",
+              "private",
+              "disk",
+              "players"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "gap_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "kind",
+          "observed_at"
+        ]
+      },
+      "MetricCounts": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "samples": {
+            "type": "integer"
+          },
+          "cpu": {
+            "type": "integer"
+          },
+          "resident": {
+            "type": "integer"
+          },
+          "private": {
+            "type": "integer"
+          },
+          "disk": {
+            "type": "integer"
+          },
+          "players": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "samples",
+          "cpu",
+          "resident",
+          "private",
+          "disk",
+          "players"
+        ]
+      },
+      "MetricPoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "collected_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cpu_percent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "resident_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "private_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disk_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "players": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "counts": {
+            "$ref": "#/components/schemas/MetricCounts"
+          },
+          "expected": {
+            "type": "integer"
+          },
+          "gap": {
+            "type": "boolean"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricSource"
+            }
+          }
+        },
+        "required": [
+          "collected_at",
+          "cpu_percent",
+          "resident_bytes",
+          "private_bytes",
+          "disk_bytes",
+          "players",
+          "counts",
+          "expected",
+          "gap",
+          "sources"
+        ]
+      },
+      "MetricsPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "instance_id": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "hourly"
+            ]
+          },
+          "interval_seconds": {
+            "type": "integer"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricPoint"
+            }
+          },
+          "cpu_convention": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "resolution",
+          "interval_seconds",
+          "points",
+          "cpu_convention"
+        ]
+      }
+    }
+  }
+}
