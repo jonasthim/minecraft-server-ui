@@ -1,6 +1,6 @@
 # Task 22 — saved map presentation and native observations
 
-Status: implementation submitted for integrator review; ledger acceptance, composed browser evidence and actual game/platform qualification remain pending. Base `71b6660` includes the independently reviewed Task21/Task11 containment fixes. No dependency, process/service installation, EULA acceptance, game execution, staging or commit was performed by this worker.
+Status: implementation and fix round1 independently reviewed; composed browser evidence accepted. Actual game/platform qualification remains pending. Base `71b6660` includes the independently reviewed Task21/Task11 containment fixes. No dependency, process/service installation, EULA acceptance, game execution, staging or commit was performed by this worker.
 
 ## Owned implementation and contract
 
