@@ -10,6 +10,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -107,5 +108,115 @@ func TestJobLogsRejectInvalidCursor(t *testing.T) {
 		if r.Code != 422 {
 			t.Fatalf("%s returned %d", q, r.Code)
 		}
+	}
+}
+
+// The response writer advances a local clock to model slow output and honors
+// actual SetWriteDeadline calls. No process-wide clock or long sleep is needed.
+type timedJobStreamWriter struct {
+	*httptest.ResponseRecorder
+	now                     *time.Time
+	deadlines               []time.Time
+	deadline                time.Time
+	attempts                int
+	initialDelay, nextDelay time.Duration
+	afterSnapshot           func()
+	cancel                  context.CancelFunc
+	denied                  bool
+}
+
+func (w *timedJobStreamWriter) SetWriteDeadline(deadline time.Time) error {
+	w.deadline = deadline
+	w.deadlines = append(w.deadlines, deadline)
+	return nil
+}
+func (w *timedJobStreamWriter) Write(value []byte) (int, error) {
+	w.attempts++
+	delay := w.nextDelay
+	if w.attempts == 1 {
+		delay = w.initialDelay
+	}
+	*w.now = w.now.Add(delay)
+	if !w.deadline.IsZero() && !w.now.Before(w.deadline) {
+		w.denied = true
+		w.cancel()
+		return 0, os.ErrDeadlineExceeded
+	}
+	return w.ResponseRecorder.Write(value)
+}
+func (w *timedJobStreamWriter) Flush() {
+	w.ResponseRecorder.Flush()
+	if w.attempts == 1 && w.afterSnapshot != nil {
+		w.afterSnapshot()
+		w.afterSnapshot = nil
+	} else if w.attempts > 1 {
+		w.cancel()
+	}
+}
+
+func TestJobStreamAbsoluteExpiryBoundsSlowAndNearExpiryOutput(t *testing.T) {
+	for _, test := range []struct {
+		name                                   string
+		initialDelay, afterSnapshot, nextDelay time.Duration
+		heartbeat                              bool
+		wantAttempts                           int
+		wantDenied                             bool
+	}{
+		{name: "slow snapshot then near-expiry event", initialDelay: 4 * time.Second, afterSnapshot: 29 * time.Second, nextDelay: 2 * time.Second, wantAttempts: 2, wantDenied: true},
+		{name: "event selected at expiry", afterSnapshot: 30 * time.Second, wantAttempts: 1},
+		{name: "near-expiry heartbeat", afterSnapshot: 29 * time.Second, nextDelay: 2 * time.Second, heartbeat: true, wantAttempts: 2, wantDenied: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			database, err := db.OpenMemory(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			// An inert durable queued job gives the stream a deterministic snapshot;
+			// cancellation below publishes a real service progress event.
+			_, err = database.Exec(`INSERT INTO jobs(id,kind,state,created_at,cancellable,requested_by) VALUES('stream-job','test','queued','2026-10-16T00:00:00Z',1,1)`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := jobs.New(database, nil)
+			defer service.Stop(context.Background())
+			start := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+			now := start
+			req := userRequest("GET", "/jobs/stream-job/events", &domain.User{ID: 1, Role: domain.RoleViewer})
+			ctx, cancel := context.WithCancel(req.Context())
+			defer cancel()
+			req = req.WithContext(ctx)
+			writer := &timedJobStreamWriter{ResponseRecorder: httptest.NewRecorder(), now: &now, initialDelay: test.initialDelay, nextDelay: test.nextDelay, cancel: cancel}
+			writer.afterSnapshot = func() {
+				now = start.Add(test.afterSnapshot)
+				if !test.heartbeat {
+					if err := service.Cancel(context.Background(), "stream-job", domain.User{ID: 1, Role: domain.RoleOperator}); err != nil {
+						t.Error(err)
+						cancel()
+					}
+				}
+			}
+			heartbeat := 15 * time.Second
+			if test.heartbeat {
+				heartbeat = time.Nanosecond
+			}
+			router := chi.NewRouter()
+			router.With(auth.RequireRole(domain.RoleViewer)).Get("/jobs/{jobId}/events", func(w http.ResponseWriter, r *http.Request) {
+				streamJobWithTiming(w, r, service, jobStreamTiming{now: func() time.Time { return now }, lifetime: 30 * time.Second, heartbeat: heartbeat})
+			})
+			router.ServeHTTP(writer, req)
+			if writer.attempts != test.wantAttempts || writer.denied != test.wantDenied {
+				t.Fatalf("expired output was attempted or accepted: attempts=%d denied=%v, want %d/%v", writer.attempts, writer.denied, test.wantAttempts, test.wantDenied)
+			}
+			expiry := start.Add(30 * time.Second)
+			for _, deadline := range writer.deadlines {
+				if deadline.After(expiry) {
+					t.Fatalf("write deadline %s extends authorization past %s", deadline, expiry)
+				}
+			}
+			if writer.Code != 200 || !strings.Contains(writer.Body.String(), "event: progress") {
+				t.Fatalf("initial snapshot missing: %d %s", writer.Code, writer.Body.String())
+			}
+		})
 	}
 }

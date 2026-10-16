@@ -85,7 +85,21 @@ func jobCursor(r *http.Request, key string, fallback, min, max int64) (int64, er
 	}
 	return n, nil
 }
+
+type jobStreamTiming struct {
+	now                 func() time.Time
+	lifetime, heartbeat time.Duration
+}
+
 func streamJob(w http.ResponseWriter, r *http.Request, s *jobs.Service) {
+	streamJobWithTiming(w, r, s, jobStreamTiming{now: time.Now, lifetime: 30 * time.Second, heartbeat: 15 * time.Second})
+}
+func streamJobWithTiming(w http.ResponseWriter, r *http.Request, s *jobs.Service, timing jobStreamTiming) {
+	// Establish the authorization boundary before lookup or any snapshot I/O.
+	// A slow first flush must not restart the connection's permission lifetime.
+	expires := timing.now().Add(timing.lifetime)
+	lifetime := time.NewTimer(expires.Sub(timing.now()))
+	defer lifetime.Stop()
 	id := chi.URLParam(r, "jobId")
 	sub := s.Subscribe(id)
 	defer sub.Close()
@@ -98,12 +112,26 @@ func streamJob(w http.ResponseWriter, r *http.Request, s *jobs.Service) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
+	prepareWrite := func() bool {
+		now := timing.now()
+		if !now.Before(expires) || r.Context().Err() != nil {
+			return false
+		}
+		deadline := now.Add(5 * time.Second)
+		if expires.Before(deadline) {
+			deadline = expires
+		}
+		_ = controller.SetWriteDeadline(deadline)
+		return true
+	}
 	write := func(event events.Event) bool {
 		data, err := json.Marshal(event)
 		if err != nil {
 			return false
 		}
-		_ = controller.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if !prepareWrite() {
+			return false
+		}
 		if _, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data); err != nil {
 			return false
 		}
@@ -116,12 +144,10 @@ func streamJob(w http.ResponseWriter, r *http.Request, s *jobs.Service) {
 	if !write(events.Event{Type: "progress", JobID: id, Job: raw}) {
 		return
 	}
-	heartbeat := time.NewTicker(15 * time.Second)
+	heartbeat := time.NewTicker(timing.heartbeat)
 	defer heartbeat.Stop()
 	// Each connection reauthorizes within 30s, bounding revocation/role staleness
 	// without retaining or leaking the bearer or session credential into the hub.
-	lifetime := time.NewTimer(30 * time.Second)
-	defer lifetime.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
@@ -136,7 +162,9 @@ func streamJob(w http.ResponseWriter, r *http.Request, s *jobs.Service) {
 				return
 			}
 		case <-heartbeat.C:
-			_ = controller.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if !prepareWrite() {
+				return
+			}
 			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
 				return
 			}

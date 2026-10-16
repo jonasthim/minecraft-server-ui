@@ -90,3 +90,14 @@ Evidence for this extension:
 - `go test ./...`: PASS, including current instance, launcher, runtime, supervisor, auth, and command packages. Earlier concurrent missing-symbol and Java 16 failures recorded above were resolved by their owning workers before this final extension run.
 
 No non-owned implementation files were changed for this extension. Nothing was staged or committed. Independent integration review and ledger updates remain the integrator's responsibility.
+
+
+## Independent review fix round 1 — absolute stream authorization expiry
+
+Review found that the 30-second stream timer was created after the initial snapshot write/flush, while later writes each received an independent five-second deadline. Slow initial or near-expiry output could therefore extend an already-authenticated stream beyond the documented 30-second limit.
+
+Fixed only the jobs SSE handler: it now establishes an absolute expiry before lookup or output and starts its lifetime timer immediately. Snapshot, progress-event, and heartbeat writes all check expiry immediately before output and use `min(now + 5 seconds, absolute expiry)` for their write/flush deadline. An event selected at expiry is rejected even when the timer and event channels are simultaneously ready. Disconnect, reconnect authentication, and durable state/log replay remain unchanged.
+
+Added handler-private timing arguments rather than mutable global clock state. `TestJobStreamAbsoluteExpiryBoundsSlowAndNearExpiryOutput` runs the actual stream handler through Chi and the viewer role gate, a real SQLite-backed job snapshot, and real service cancellation progress events. A local virtual clock and deadline-aware response writer model a slow initial snapshot, an event selected at expiry, and near-expiry event/heartbeat output without 30-second sleeps. All three cases were observed RED against the prior deadline behavior: near-expiry writes were accepted and an already-expired event was written. After the fix, near-expiry writes time out at the original absolute boundary and an expired event is never written.
+
+Verification: `go test -race ./internal/api` PASS, including the new regression and existing jobs API role/privacy/stream tests. No unrelated package suites were rerun for this fix round. Changed files are `internal/api/jobs_handlers.go`, `internal/api/jobs_handlers_test.go`, and this report only. Nothing staged or committed; independent scoped review remains pending.
