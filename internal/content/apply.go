@@ -10,6 +10,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -160,6 +161,15 @@ func (s *Service) run(ctx context.Context, execution *jobs.Execution) (result er
 		}
 		if len(p.Preview.Blockers) > 0 || p.Preview.Manual != nil {
 			return conflict("preview has unresolved blockers")
+		}
+		if p.Next != nil {
+			next, _, err := s.PreparePackCandidate(ctx, id, m.Tuple, []Installed{*p.Next})
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(next[0].LanguageEvidence, p.Next.LanguageEvidence) {
+				return conflict("loader language evidence changed")
+			}
 		}
 		if len(proposedEnabledBlockers(m.Tuple, m.Items, p)) > 0 {
 			return conflict("proposed enabled content has unresolved compatibility contradictions")

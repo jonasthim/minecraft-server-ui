@@ -8,6 +8,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
+	"github.com/jonasthim/minecraft-server-ui/internal/server/loaderutil"
 	"io"
 	"os"
 	"strings"
@@ -16,22 +17,23 @@ import (
 )
 
 type Service struct {
-	db        *sql.DB
-	paths     instance.Paths
-	instances Instances
-	queue     *jobs.Service
-	catalog   Catalog
-	recovery  RecoveryGuard
-	mu        sync.Mutex
-	uploads   chan struct{}
-	fault     func(string) error
+	languageEvidence func(context.Context, string, domain.VersionSelection) (loaderutil.LanguageEvidence, error)
+	db               *sql.DB
+	paths            instance.Paths
+	instances        Instances
+	queue            *jobs.Service
+	catalog          Catalog
+	recovery         RecoveryGuard
+	mu               sync.Mutex
+	uploads          chan struct{}
+	fault            func(string) error
 }
 
 func New(c Config) (*Service, error) {
 	if c.DB == nil || c.Instances == nil || c.Queue == nil {
 		return nil, invalid("content requires database, instances and jobs")
 	}
-	return &Service{db: c.DB, paths: c.Paths, instances: c.Instances, queue: c.Queue, catalog: c.Catalog, recovery: c.Recovery, uploads: make(chan struct{}, 2)}, nil
+	return &Service{languageEvidence: c.LanguageEvidence, db: c.DB, paths: c.Paths, instances: c.Instances, queue: c.Queue, catalog: c.Catalog, recovery: c.Recovery, uploads: make(chan struct{}, 2)}, nil
 }
 func (s *Service) Register() error { return s.queue.Register("content_mutation", s.run) }
 func (s *Service) actor(ctx context.Context, id int64, admin bool) (domain.User, error) {
@@ -150,6 +152,7 @@ func (s *Service) Snapshot(ctx context.Context, id string) (Manifest, error) {
 	if pending > 0 {
 		m.AutomaticBlockers = append(m.AutomaticBlockers, "Unresolved content preview or manual artifact resolution.")
 	}
+	m.AutomaticBlockers = append(m.AutomaticBlockers, enabledManifestBlockers(m.Tuple, m.Items)...)
 	raw, _ := json.Marshal(struct {
 		Tuple Tuple
 		Items []Installed

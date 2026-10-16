@@ -298,6 +298,13 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 	default:
 		return p.Preview, invalid("unknown content action")
 	}
+	if p.Next != nil {
+		next, _, err := s.PreparePackCandidate(ctx, id, manifest.Tuple, []Installed{*p.Next})
+		if err != nil {
+			return p.Preview, err
+		}
+		p.Next = &next[0]
+	}
 	p.Preview.Blockers = append(p.Preview.Blockers, proposedEnabledBlockers(manifest.Tuple, manifest.Items, p)...)
 	for _, operation := range p.Operations {
 		p.Preview.Changes = append(p.Preview.Changes, OwnedFile{operation.Path, operation.After})

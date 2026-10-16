@@ -6,20 +6,32 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"github.com/jonasthim/minecraft-server-ui/internal/catalog"
+	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
 	"io"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 )
 
-var scalar = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|(true|false))\s*(?:#.*)?$`)
-
 func inspectJar(b []byte) (Descriptor, error) {
 	return inspectArchive(bytes.NewReader(b), int64(len(b)))
 }
+
+type nestedBudget struct {
+	bytes      int64
+	jars       int
+	identities int
+}
+
 func inspectArchive(reader io.ReaderAt, size int64) (Descriptor, error) {
+	return inspectArchiveTree(reader, size, 0, &nestedBudget{})
+}
+func inspectArchiveTree(reader io.ReaderAt, size int64, depth int, budget *nestedBudget) (Descriptor, error) {
+	if depth > 4 || budget.jars >= 2048 {
+		return Descriptor{}, invalid("nested JAR graph exceeds depth/item bound")
+	}
+	budget.jars++
 	if e := boundedZipDirectory(reader, size); e != nil {
 		return Descriptor{}, e
 	}
@@ -92,7 +104,13 @@ func inspectArchive(reader io.ReaderAt, size int64) (Descriptor, error) {
 			var v struct {
 				ID, Version, Environment string
 				Depends                  map[string]json.RawMessage
-				Breaks                   map[string]json.RawMessage
+				Recommends               map[string]json.RawMessage
+				Conflicts                map[string]json.RawMessage
+				Provides                 []string
+				Jars                     []struct {
+					File string `json:"file"`
+				}
+				Breaks map[string]json.RawMessage
 			}
 			if json.Unmarshal(raw, &v) != nil || !portable(v.ID) || v.Version == "" {
 				return d, invalid("invalid Fabric descriptor")
@@ -107,23 +125,119 @@ func inspectArchive(reader io.ReaderAt, size int64) (Descriptor, error) {
 			for k, v := range v.Depends {
 				var s string
 				if json.Unmarshal(v, &s) != nil {
-					return d, invalid("complex Fabric dependency needs explicit review")
+					var alternatives []string
+					if json.Unmarshal(v, &alternatives) != nil || len(alternatives) == 0 || len(alternatives) > 64 {
+						return d, invalid("unsupported Fabric dependency expression")
+					}
+					s = strings.Join(alternatives, " || ")
 				}
 				d.Required[k] = s
 			}
 			for k, v := range v.Breaks {
 				var s string
 				if json.Unmarshal(v, &s) != nil {
-					return d, invalid("complex Fabric conflict needs explicit review")
+					var alternatives []string
+					if json.Unmarshal(v, &alternatives) != nil || len(alternatives) == 0 || len(alternatives) > 64 {
+						return d, invalid("unsupported Fabric conflict expression")
+					}
+					s = strings.Join(alternatives, " || ")
 				}
 				d.Conflicts[k] = s
+			}
+			d.Optional = map[string]string{}
+			for id, expression := range v.Recommends {
+				var requirement string
+				if json.Unmarshal(expression, &requirement) != nil {
+					var alternatives []string
+					if json.Unmarshal(expression, &alternatives) != nil || len(alternatives) == 0 || len(alternatives) > 64 {
+						return d, invalid("unsupported Fabric recommendation")
+					}
+					requirement = strings.Join(alternatives, " || ")
+				}
+				d.Optional[id] = requirement
+			}
+			for id, expression := range v.Conflicts {
+				var requirement string
+				if json.Unmarshal(expression, &requirement) != nil {
+					var alternatives []string
+					if json.Unmarshal(expression, &alternatives) != nil || len(alternatives) == 0 || len(alternatives) > 64 {
+						return d, invalid("unsupported Fabric soft conflict")
+					}
+					requirement = strings.Join(alternatives, " || ")
+				}
+				if previous := d.Conflicts[id]; previous != "" {
+					requirement = previous + " || " + requirement
+				}
+				d.Conflicts[id] = requirement
 			}
 			d.Minecraft = d.Required["minecraft"]
 			d.LoaderRequirement = d.Required["fabricloader"]
 			delete(d.Required, "minecraft")
 			delete(d.Required, "fabricloader")
+			d.JavaRequirement = d.Required["java"]
 			delete(d.Required, "java")
+			for _, alias := range v.Provides {
+				if !portable(alias) {
+					return d, invalid("invalid Fabric provided identity")
+				}
+				d.Identities = append(d.Identities, ModIdentity{ID: alias, Version: d.Version})
+			}
 			d.Unknown = false
+			nestedSeen := map[string]bool{}
+			for _, nested := range v.Jars {
+				if !relative(nested.File) || !strings.HasSuffix(strings.ToLower(nested.File), ".jar") || nestedSeen[strings.ToLower(nested.File)] {
+					return d, invalid("unsafe or duplicate nested JAR declaration")
+				}
+				nestedSeen[strings.ToLower(nested.File)] = true
+				found := false
+				for _, entry := range z.File {
+					if entry.Name != nested.File {
+						continue
+					}
+					found = true
+					if entry.UncompressedSize64 > 32<<20 || entry.UncompressedSize64 > uint64((128<<20)-budget.bytes) || entry.UncompressedSize64 > 1<<20 && (entry.CompressedSize64 == 0 || entry.UncompressedSize64/entry.CompressedSize64 > 200) {
+						return d, invalid("nested JAR amplification/aggregate byte bound exceeded")
+					}
+					budget.bytes += int64(entry.UncompressedSize64)
+					r, e := entry.Open()
+					if e != nil {
+						return d, e
+					}
+					b, e := io.ReadAll(io.LimitReader(r, 32<<20+1))
+					r.Close()
+					if e != nil || len(b) > 32<<20 {
+						return d, invalid("nested JAR read exceeds bound")
+					}
+					child, e := inspectArchiveTree(bytes.NewReader(b), int64(len(b)), depth+1, budget)
+					if e != nil {
+						return d, e
+					}
+					if child.ClientOnly {
+						continue
+					}
+					if child.Loader != "fabric" || child.Unknown {
+						d.Unknown = true
+					}
+					budget.identities += 1 + len(child.Identities)
+					if budget.identities > 2048 {
+						return d, invalid("nested identity bound exceeded")
+					}
+					d.Identities = append(d.Identities, ModIdentity{ID: child.ID, Version: child.Version, Required: child.Required, Optional: child.Optional, Conflicts: child.Conflicts})
+					d.Identities = append(d.Identities, child.Identities...)
+					if child.Minecraft != "" {
+						d.Minecraft = joinRequirement(d.Minecraft, child.Minecraft)
+					}
+					if child.LoaderRequirement != "" {
+						d.LoaderRequirement = joinRequirement(d.LoaderRequirement, child.LoaderRequirement)
+					}
+					if child.JavaRequirement != "" {
+						d.JavaRequirement = joinRequirement(d.JavaRequirement, child.JavaRequirement)
+					}
+				}
+				if !found {
+					return d, invalid("declared nested JAR is missing")
+				}
+			}
 		case "plugin.yml", "paper-plugin.yml":
 			var v struct {
 				Name, Version string
@@ -148,96 +262,27 @@ func inspectArchive(reader io.ReaderAt, size int64) (Descriptor, error) {
 			}
 			d.Unknown = false
 		default:
-			d.Loader = "forge"
-			if strings.Contains(f.Name, "neoforge") {
-				d.Loader = "neoforge"
-			}
-			fmlRequirement := ""
-			var section string
-			fields := map[string]string{}
-			mods := 0
-			flush := func() error {
-				if section == "mods" {
-					mods++
-					if mods > 1 {
-						return invalid("multi-mod JAR requires explicit review")
-					}
-					d.ID = fields["modId"]
-					d.Version = fields["version"]
-				}
-				if strings.HasPrefix(section, "dependencies.") {
-					required := fields["mandatory"] == "true" || fields["type"] == "required"
-					if fields["side"] == "CLIENT" && required {
-						d.ClientOnly = true
-					}
-					id := fields["modId"]
-					if required {
-						switch id {
-						case "minecraft":
-							d.Minecraft = fields["versionRange"]
-						case "forge", "neoforge":
-							d.LoaderRequirement = fields["versionRange"]
-						default:
-							d.Required[id] = fields["versionRange"]
-						}
-					}
-					if fields["type"] == "incompatible" {
-						d.Conflicts[id] = fields["versionRange"]
-					}
-				}
-				return nil
-			}
-			for _, line := range strings.Split(string(raw), "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "[[") && strings.HasSuffix(line, "]]") {
-					if e := flush(); e != nil {
-						return d, e
-					}
-					section = strings.Trim(line, "[]")
-					fields = map[string]string{}
-					continue
-				}
-				if strings.HasPrefix(line, "[") {
-					if e := flush(); e != nil {
-						return d, e
-					}
-					section = ""
-					fields = map[string]string{}
-					continue
-				}
-				m := scalar.FindStringSubmatch(line)
-				if m != nil {
-					value := m[2] + m[3] + m[4]
-					fields[m[1]] = value
-					if section == "" && m[1] == "loaderVersion" {
-						fmlRequirement = value
-					}
-					if section == "" && m[1] == "modLoader" && value != "javafml" && value != "lowcodefml" {
-						return d, invalid("unsupported Forge mod loader")
-					}
-				} else if strings.Contains(line, "mandatory") || strings.Contains(line, "modId") || strings.Contains(line, "versionRange") || strings.Contains(line, "type") {
-					return d, invalid("complex Forge descriptor requires explicit review")
-				}
-			}
-			if e := flush(); e != nil {
+			d, e = inspectForgeTOML(raw, strings.Contains(f.Name, "neoforge"), manifestVersion)
+			if e != nil {
 				return d, e
 			}
-			if d.Version == "${file.jarVersion}" {
-				d.Version = manifestVersion
-			}
-			if !portable(d.ID) || d.Version == "" || strings.Contains(d.Version, "${") {
-				return d, invalid("unresolved Forge identity or version")
-			}
-			d.Unknown = fmlRequirement != "" && fmlRequirement != "*"
 		}
 	}
-	if len(d.Required) > 128 || len(d.Conflicts) > 128 {
+	if d.Loader == "forge" || d.Loader == "neoforge" {
+		for _, entry := range z.File {
+			if entry.Name == "META-INF/jarjar/metadata.json" {
+				d.Unknown = true
+			}
+		}
+	}
+	if len(d.Required) > 2048 || len(d.Conflicts) > 2048 {
 		return d, invalid("descriptor dependency limit exceeded")
 	}
 	return d, nil
 }
 func numeric(v string) ([]int, bool) {
 	v = strings.TrimPrefix(v, "v")
+	v = strings.SplitN(v, "+", 2)[0]
 	p := strings.Split(v, ".")
 	out := []int{}
 	for _, s := range p {
@@ -283,6 +328,14 @@ func compare(a, b string) (int, bool) {
 // Deliberately refuses expressions that this bounded checker cannot prove.
 func satisfies(version, requirement string) bool {
 	requirement = strings.TrimSpace(requirement)
+	if strings.Contains(requirement, " && ") {
+		for _, term := range strings.Split(requirement, " && ") {
+			if !satisfies(version, term) {
+				return false
+			}
+		}
+		return true
+	}
 	if requirement == "" {
 		return false
 	}
@@ -434,4 +487,187 @@ func boundedZipDirectory(r io.ReaderAt, size int64) error {
 		return nil
 	}
 	return invalid("JAR end record missing")
+}
+
+// TOML decoding is bounded by the enclosing 256 KiB descriptor read. All
+// compatibility-bearing fields are typed; invalid scalars/duplicate TOML keys
+// fail decoding instead of silently disappearing in a partial line parser.
+func inspectForgeTOML(raw []byte, neo bool, manifestVersion string) (Descriptor, error) {
+	type dependency struct {
+		ModID        string `toml:"modId"`
+		Mandatory    *bool  `toml:"mandatory"`
+		Type         string `toml:"type"`
+		VersionRange string `toml:"versionRange"`
+		Ordering     string `toml:"ordering"`
+		Side         string `toml:"side"`
+	}
+	var v struct {
+		ModLoader      string `toml:"modLoader"`
+		LoaderVersion  string `toml:"loaderVersion"`
+		ClientSideOnly bool   `toml:"clientSideOnly"`
+		Mods           []struct {
+			ModID    string            `toml:"modId"`
+			Version  string            `toml:"version"`
+			Features map[string]string `toml:"features"`
+		} `toml:"mods"`
+		Dependencies map[string][]dependency `toml:"dependencies"`
+		Properties   map[string]string       `toml:"properties"`
+	}
+	d := Descriptor{Loader: "forge", Required: map[string]string{}, Optional: map[string]string{}, Conflicts: map[string]string{}}
+	if neo {
+		d.Loader = "neoforge"
+	}
+	if e := toml.Unmarshal(raw, &v); e != nil {
+		return d, invalid("invalid typed Forge TOML descriptor")
+	}
+	historicalNeo := false
+	if !neo {
+		for _, dependencies := range v.Dependencies {
+			for _, dependency := range dependencies {
+				if dependency.ModID == "neoforge" {
+					neo = true
+					historicalNeo = true
+					d.Loader = "neoforge"
+				}
+			}
+		}
+	}
+	if neo && v.LoaderVersion == "" {
+		v.LoaderVersion = "[1,)"
+	}
+	if (v.ModLoader != "javafml" && v.ModLoader != "lowcodefml") || v.LoaderVersion == "" || len(v.Mods) == 0 || len(v.Mods) > 2048 {
+		return d, invalid("unsupported Forge language or mod list")
+	}
+	d.LanguageLoader = v.ModLoader
+	d.LanguageRequirement = v.LoaderVersion
+	d.ClientOnly = v.ClientSideOnly
+	ids := map[string]bool{}
+	for _, mod := range v.Mods {
+		version := mod.Version
+		if version == "" {
+			version = "1"
+		}
+		if version == "${file.jarVersion}" {
+			version = manifestVersion
+		}
+		for key, value := range v.Properties {
+			version = strings.ReplaceAll(version, "${file."+key+"}", value)
+		}
+		if !portable(mod.ModID) || version == "" || strings.Contains(version, "${") || ids[mod.ModID] {
+			return d, invalid("unresolved or duplicate Forge identity")
+		}
+		ids[mod.ModID] = true
+		identity := ModIdentity{ID: mod.ModID, Version: version, Required: map[string]string{}, Optional: map[string]string{}, Conflicts: map[string]string{}}
+		for feature, requirement := range mod.Features {
+			if feature == "java_version" {
+				d.JavaRequirement = joinRequirement(d.JavaRequirement, requirement)
+			} else {
+				d.Unknown = true
+			}
+		}
+		for _, dep := range v.Dependencies[mod.ModID] {
+			if dep.Side != "" && dep.Side != "BOTH" && dep.Side != "SERVER" && dep.Side != "CLIENT" {
+				return d, invalid("unknown dependency side")
+			}
+			if dep.Side == "CLIENT" {
+				continue
+			}
+			if !portable(dep.ModID) {
+				return d, invalid("invalid Forge dependency identity")
+			}
+			req := dep.VersionRange
+			if req == "" {
+				req = "*"
+			}
+			kind := dep.Type
+			if neo {
+				if kind == "" {
+					kind = "required"
+					if historicalNeo {
+						if dep.Mandatory == nil {
+							return d, invalid("historical NeoForge mandatory flag missing")
+						}
+						if !*dep.Mandatory {
+							kind = "optional"
+						}
+					}
+				}
+				switch kind {
+				case "required", "optional", "incompatible", "discouraged":
+				default:
+					return d, invalid("unknown NeoForge dependency type")
+				}
+			} else {
+				if kind != "" {
+					return d, invalid("unsupported Forge dependency type")
+				}
+				if dep.Mandatory == nil {
+					return d, invalid("Forge dependency mandatory flag missing")
+				}
+				kind = "optional"
+				if *dep.Mandatory {
+					kind = "required"
+				}
+			}
+			if dep.Ordering != "" && dep.Ordering != "NONE" {
+				if dep.Ordering != "BEFORE" && dep.Ordering != "AFTER" {
+					return d, invalid("unknown dependency ordering")
+				}
+				d.Ordering = append(d.Ordering, DependencyOrdering{Owner: mod.ModID, Target: dep.ModID, Direction: dep.Ordering})
+			}
+			switch dep.ModID {
+			case "minecraft":
+				if kind == "required" || kind == "optional" {
+					d.Minecraft = joinRequirement(d.Minecraft, req)
+				} else {
+					return d, invalid("unsupported Minecraft builtin incompatibility constraint")
+				}
+			case "forge", "neoforge":
+				if dep.ModID != d.Loader {
+					return d, invalid("other-loader builtin constraint cannot be established")
+				}
+				if kind == "required" || kind == "optional" {
+					d.LoaderRequirement = joinRequirement(d.LoaderRequirement, req)
+				} else {
+					return d, invalid("unsupported loader builtin incompatibility constraint")
+				}
+			default:
+				switch kind {
+				case "required":
+					identity.Required[dep.ModID] = joinRequirement(identity.Required[dep.ModID], req)
+				case "optional":
+					identity.Optional[dep.ModID] = joinRequirement(identity.Optional[dep.ModID], req)
+				case "incompatible", "discouraged":
+					identity.Conflicts[dep.ModID] = joinConflict(identity.Conflicts[dep.ModID], req)
+				}
+			}
+		}
+		d.Identities = append(d.Identities, identity)
+	}
+	for id := range v.Dependencies {
+		if !ids[id] {
+			return d, invalid("dependency table belongs to absent mod identity")
+		}
+	}
+	primary := d.Identities[0]
+	d.ID = primary.ID
+	d.Version = primary.Version
+	d.Required = primary.Required
+	d.Optional = primary.Optional
+	d.Conflicts = primary.Conflicts
+	d.Identities = d.Identities[1:]
+	return d, nil
+}
+func joinRequirement(a, b string) string {
+	if a == "" {
+		return b
+	}
+	return a + " && " + b
+}
+
+func joinConflict(a, b string) string {
+	if a == "" {
+		return b
+	}
+	return a + " || " + b
 }

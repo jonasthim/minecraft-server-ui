@@ -9,6 +9,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
+	"github.com/jonasthim/minecraft-server-ui/internal/server/loaderutil"
 	"io"
 )
 
@@ -28,12 +29,13 @@ type RecoveryGuard interface {
 	WithStoppedForRecovery(context.Context, string, func() error) error
 }
 type Config struct {
-	DB        *sql.DB
-	Paths     instance.Paths
-	Instances Instances
-	Queue     *jobs.Service
-	Catalog   Catalog
-	Recovery  RecoveryGuard
+	LanguageEvidence func(context.Context, string, domain.VersionSelection) (loaderutil.LanguageEvidence, error)
+	DB               *sql.DB
+	Paths            instance.Paths
+	Instances        Instances
+	Queue            *jobs.Service
+	Catalog          Catalog
+	Recovery         RecoveryGuard
 }
 type Tuple struct {
 	Minecraft     string `json:"minecraft"`
@@ -44,20 +46,32 @@ type OwnedFile struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
 }
+type PackProvenance struct {
+	Selection      catalog.Selection `json:"selection"`
+	PackSHA256     string            `json:"pack_sha256"`
+	Path           string            `json:"path"`
+	Hashes         map[string]string `json:"hashes"`
+	FileProjectID  string            `json:"file_project_id,omitempty"`
+	FileID         string            `json:"file_id,omitempty"`
+	MetadataSource string            `json:"metadata_source"`
+	FetchedAt      string            `json:"fetched_at"`
+}
 type Installed struct {
-	ID           string               `json:"id"`
-	Kind         catalog.Kind         `json:"kind"`
-	Name         string               `json:"name"`
-	Version      string               `json:"version"`
-	Selection    *catalog.Selection   `json:"selection,omitempty"`
-	SHA256       string               `json:"sha256"`
-	Files        []OwnedFile          `json:"files"`
-	Enabled      bool                 `json:"enabled"`
-	Pinned       bool                 `json:"pinned"`
-	Unknown      bool                 `json:"unknown"`
-	TrialTuple   *Tuple               `json:"trial_tuple,omitempty"`
-	Descriptor   Descriptor           `json:"descriptor"`
-	Dependencies []catalog.Dependency `json:"dependencies"`
+	LanguageEvidence *loaderutil.LanguageEvidence `json:"language_evidence,omitempty"`
+	PackMember       *PackProvenance              `json:"pack_member,omitempty"`
+	ID               string                       `json:"id"`
+	Kind             catalog.Kind                 `json:"kind"`
+	Name             string                       `json:"name"`
+	Version          string                       `json:"version"`
+	Selection        *catalog.Selection           `json:"selection,omitempty"`
+	SHA256           string                       `json:"sha256"`
+	Files            []OwnedFile                  `json:"files"`
+	Enabled          bool                         `json:"enabled"`
+	Pinned           bool                         `json:"pinned"`
+	Unknown          bool                         `json:"unknown"`
+	TrialTuple       *Tuple                       `json:"trial_tuple,omitempty"`
+	Descriptor       Descriptor                   `json:"descriptor"`
+	Dependencies     []catalog.Dependency         `json:"dependencies"`
 }
 type Manifest struct {
 	Revision          string      `json:"revision"`
@@ -110,16 +124,34 @@ type ConfigText struct {
 	SHA256 string `json:"sha256"`
 	Text   string `json:"text"`
 }
+type ModIdentity struct {
+	ID        string            `json:"id"`
+	Version   string            `json:"version"`
+	Required  map[string]string `json:"required"`
+	Optional  map[string]string `json:"optional"`
+	Conflicts map[string]string `json:"conflicts"`
+}
+type DependencyOrdering struct {
+	Owner     string `json:"owner"`
+	Target    string `json:"target"`
+	Direction string `json:"direction"`
+}
 type Descriptor struct {
-	ID                string            `json:"id"`
-	Version           string            `json:"version"`
-	Loader            string            `json:"loader"`
-	Minecraft         string            `json:"minecraft"`
-	LoaderRequirement string            `json:"loader_requirement"`
-	ClientOnly        bool              `json:"client_only"`
-	Required          map[string]string `json:"required"`
-	Conflicts         map[string]string `json:"conflicts"`
-	Unknown           bool              `json:"unknown"`
+	Identities          []ModIdentity        `json:"identities,omitempty"`
+	Optional            map[string]string    `json:"optional,omitempty"`
+	JavaRequirement     string               `json:"java_requirement,omitempty"`
+	LanguageLoader      string               `json:"language_loader,omitempty"`
+	LanguageRequirement string               `json:"language_requirement,omitempty"`
+	Ordering            []DependencyOrdering `json:"ordering,omitempty"`
+	ID                  string               `json:"id"`
+	Version             string               `json:"version"`
+	Loader              string               `json:"loader"`
+	Minecraft           string               `json:"minecraft"`
+	LoaderRequirement   string               `json:"loader_requirement"`
+	ClientOnly          bool                 `json:"client_only"`
+	Required            map[string]string    `json:"required"`
+	Conflicts           map[string]string    `json:"conflicts"`
+	Unknown             bool                 `json:"unknown"`
 }
 type privatePreview struct {
 	Preview    Preview         `json:"preview"`

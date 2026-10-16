@@ -741,8 +741,16 @@ func TestDescriptorFamiliesAndVersionConstraints(t *testing.T) {
 		"neoforge": {"META-INF/neoforge.mods.toml": "modLoader=\"javafml\"\n[[mods]]\nmodId=\"example\"\nversion=\"1.0.0\"\n[[dependencies.example]]\nmodId=\"minecraft\"\ntype=\"required\"\nversionRange=\"[1.21.1]\"\n"},
 	} {
 		d, e := inspectJar(jarEntries(t, entries))
-		if e != nil || d.Unknown != (name == "forge") || d.Loader != name || d.Version != "1.0.0" {
+		if e != nil || d.Unknown || d.Loader != name || d.Version != "1.0.0" {
 			t.Fatal(name, d, e)
+		}
+		if name == "forge" {
+			if d.LanguageRequirement != "[47,)" {
+				t.Fatal("FML constraint discarded", d)
+			}
+			if len(enabledManifestBlockers(Tuple{Minecraft: "1.20.1", Loader: "forge", LoaderVersion: "47.4.0"}, []Installed{{ID: "forge-item", Kind: catalog.Mod, Enabled: true, Descriptor: d}})) == 0 {
+				t.Fatal("unverified FML language requirement accepted")
+			}
 		}
 	}
 	for _, test := range []struct {
