@@ -233,6 +233,7 @@ func extractArchive(ctx context.Context, archive, format, dest string) error {
 	}
 	// Official Linux JDKs contain relative license links. Copy their validated
 	// regular-file targets rather than creating any filesystem links.
+	allLinks := e.links
 	for len(e.links) > 0 {
 		pending := e.links
 		e.links = nil
@@ -261,6 +262,13 @@ func extractArchive(ctx context.Context, archive, format, dest string) error {
 			if err != nil {
 				return fmt.Errorf("read archive link target: %w", err)
 			}
+			if info.IsDir() {
+				if err := e.copyManAlias(l, rel, source, allLinks); err != nil {
+					return err
+				}
+				advanced = true
+				continue
+			}
 			if !info.Mode().IsRegular() {
 				return fmt.Errorf("archive link target is not a regular file")
 			}
@@ -280,6 +288,82 @@ func extractArchive(ctx context.Context, archive, format, dest string) error {
 		}
 	}
 	return nil
+}
+
+// copyManAlias supports only the reviewed Temurin 8 man-page layout. Other
+// directory aliases need separate review; no filesystem links are created.
+func (e *extractor) copyManAlias(l archiveLink, rel, source string, links []archiveLink) error {
+	parts := strings.Split(l.name, "/")
+	if l.hard || len(parts) != 3 || parts[1] != "man" || parts[2] != "ja" || l.target != "ja_JP.UTF-8" {
+		return fmt.Errorf("unsupported archive directory alias")
+	}
+	if !e.entries[strings.ToLower(parts[0])] || !e.entries[strings.ToLower(rel)] || e.names[strings.ToLower(rel)] != rel {
+		return fmt.Errorf("archive directory alias needs explicit source and root directories")
+	}
+	for _, name := range e.names {
+		if strings.SplitN(name, "/", 2)[0] != parts[0] {
+			return fmt.Errorf("archive directory alias needs a single runtime root")
+		}
+	}
+	for _, link := range links {
+		if link.name == rel || strings.HasPrefix(link.name, rel+"/") {
+			return fmt.Errorf("archive directory alias source contains links")
+		}
+	}
+	target := filepath.Join(e.root, filepath.FromSlash(l.name))
+	// Mkdir must fail if even an implicitly created target/descendant exists.
+	if err := os.Mkdir(target, 0700); err != nil {
+		return fmt.Errorf("create archive directory alias: %w", err)
+	}
+	e.entries[strings.ToLower(l.name)] = true
+	return filepath.WalkDir(source, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("read archive directory alias source: %w", err)
+		}
+		if err := e.ctx.Err(); err != nil {
+			return err
+		}
+		if p == source {
+			return nil
+		}
+		if !d.IsDir() && !d.Type().IsRegular() {
+			return fmt.Errorf("archive directory alias source contains links or special files")
+		}
+		suffix, err := filepath.Rel(source, p)
+		if err != nil {
+			return fmt.Errorf("resolve archive directory alias: %w", err)
+		}
+		dest, err := e.entry(l.name+"/"+filepath.ToSlash(suffix), d.IsDir())
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if err := os.Mkdir(dest, 0700); err != nil {
+				return fmt.Errorf("copy archive alias directory: %w", err)
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return fmt.Errorf("inspect archive alias file: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("archive alias source is not a regular file")
+		}
+		in, err := os.Open(p)
+		if err != nil {
+			return fmt.Errorf("open archive alias file: %w", err)
+		}
+		copyErr := e.file(dest, info.Size(), info.Mode(), in)
+		closeErr := in.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close archive alias file: %w", closeErr)
+		}
+		return nil
+	})
 }
 
 type contextReader struct {

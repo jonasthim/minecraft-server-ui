@@ -46,6 +46,12 @@ func temurinVendor(vendor string, major int, version string) bool {
 	return vendor == "Eclipse Adoptium" || (vendor == "Eclipse Foundation" && major == 16 && version == "16.0.2+7")
 }
 
+// The verified 8u504-b01 JVM reports Temurin, although its release implementor
+// is Eclipse Adoptium. Keep this JVM-only alias pinned to that observed build.
+func temurinJVMVendor(vendor string, major int, version string) bool {
+	return temurinVendor(vendor, major, version) || (vendor == "Temurin" && major == 8 && version == "1.8.0_504-b01")
+}
+
 func parseJVM(output string) (jvmInfo, error) {
 	properties := map[string]string{}
 	for _, line := range strings.Split(output, "\n") {
@@ -79,7 +85,7 @@ func parseJVM(output string) (jvmInfo, error) {
 	if !versionPattern.MatchString(version) {
 		return jvmInfo{}, fmt.Errorf("missing JVM runtime version")
 	}
-	if !temurinVendor(properties["java.vendor"], major, version) {
+	if !temurinJVMVendor(properties["java.vendor"], major, version) {
 		return jvmInfo{}, fmt.Errorf("Java executable vendor does not match Temurin build")
 	}
 	return jvmInfo{Major: major, Vendor: properties["java.vendor"], Version: version, Architecture: arch}, nil
@@ -126,7 +132,7 @@ func (m *Manager) verifyProbe(ctx context.Context, r domain.JavaRuntime) error {
 	if err != nil {
 		return fmt.Errorf("verify Temurin executable: %w", err)
 	}
-	if got.Major != r.Major || !temurinVendor(got.Vendor, got.Major, got.Version) || got.Version != r.Version || (got.Architecture != "amd64" && got.Architecture != "x86_64") {
+	if got.Major != r.Major || !temurinJVMVendor(got.Vendor, got.Major, got.Version) || got.Version != r.Version || (got.Architecture != "amd64" && got.Architecture != "x86_64") {
 		return fmt.Errorf("Temurin executable does not match verified metadata")
 	}
 	return nil
