@@ -53,6 +53,7 @@ type Service struct {
 	idle              map[string]struct{}
 	started, stopping bool
 	paused            bool
+	recovering        int
 	ctx               context.Context
 	cancel            context.CancelFunc
 	wake              chan struct{}
@@ -119,14 +120,18 @@ func (s *Service) StartPaused(ctx context.Context) error {
 }
 
 // Resume enables dispatch after StartPaused. Repeated Resume calls are
-// idempotent while the service is live. Before startup, after parent-context
-// cancellation, or once stopping begins it returns unavailable and never
-// reopens admission or dispatch.
+// idempotent while the service is live. Active startup recovery callbacks
+// return instance_busy and leave dispatch paused. Before startup, after
+// parent-context cancellation, or once stopping begins it returns unavailable
+// and never reopens admission or dispatch.
 func (s *Service) Resume() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.started || s.stopping || s.ctx.Err() != nil {
 		return domain.E(domain.CodeUnavailable, "job service cannot resume")
+	}
+	if s.recovering != 0 {
+		return domain.E(domain.CodeInstanceBusy, "startup instance recovery is active")
 	}
 	s.paused = false
 	s.signal()
