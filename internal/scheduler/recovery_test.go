@@ -8,6 +8,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/launcher"
 	"github.com/jonasthim/minecraft-server-ui/internal/lifecycle"
 	"github.com/jonasthim/minecraft-server-ui/internal/supervisor"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -273,5 +274,71 @@ func TestCrashPublisherRecoversLostAcknowledgementByExactGeneration(t *testing.T
 		if n != 2 {
 			t.Fatal(seen)
 		}
+	}
+}
+
+func TestDeliberateStopWithUncertainIdentitySuspendsRecovery(t *testing.T) {
+	for _, uncertainty := range []string{"lookup_failure", "missing_native", "invalid_identity"} {
+		t.Run(uncertainty, func(t *testing.T) {
+			database, s, now, _, _ := setup(t)
+			if _, err := database.Exec(`UPDATE users SET role='admin' WHERE id=1`); err != nil {
+				t.Fatal(err)
+			}
+			original := domain.ProcessIdentity{InstanceID: "alpha", PID: 123, StartIdentity: "stopped-generation", StartedAt: now.Add(-time.Hour)}
+			native := &nativeFake{id: original, observation: supervisor.Observation{State: domain.StateCrashed, Exit: &launcher.Exit{Identity: original, ExitedAt: *now, ExitCode: 1}}}
+			s.config.Native = native
+			admin := domain.User{ID: 1, Role: domain.RoleAdmin}
+			if _, err := s.ConfigureRecovery(t.Context(), "alpha", true, admin); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.ObserveRecovery(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			switch uncertainty {
+			case "lookup_failure":
+				native.err = errors.New("temporary identity failure")
+			case "missing_native":
+				s.config.Native = nil
+			case "invalid_identity":
+				native.id = domain.ProcessIdentity{InstanceID: "alpha"}
+			}
+			if err := s.CancelRecovery(t.Context(), "alpha", admin); err != nil {
+				t.Fatal(err)
+			}
+			native.err = nil
+			native.id = original
+			fresh := New(Config{DB: database, Now: func() time.Time { return *now }, Native: native, HostTimezone: "UTC"})
+			if err := fresh.ObserveRecovery(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			status, err := fresh.Recovery(t.Context(), "alpha")
+			if err != nil || status.Enabled || !strings.Contains(status.Reason, "re-enable") || len(status.Attempts) != 1 || status.Attempts[0].State != "cancelled" {
+				t.Fatal("uncertain stop permitted old-generation recovery", status, err)
+			}
+			// Restoring observations, even for a new generation, does not silently lift
+			// the persisted suspension. Re-enablement requires an administrator action.
+			native.id.StartIdentity = "later-generation"
+			native.observation.Exit.Identity = native.id
+			if err = fresh.ObserveRecovery(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			status, err = fresh.Recovery(t.Context(), "alpha")
+			if err != nil || status.Enabled || len(status.Attempts) != 1 {
+				t.Fatal(status, err)
+			}
+			if _, err = fresh.ConfigureRecovery(t.Context(), "alpha", true, domain.User{ID: 1, Role: domain.RoleOperator}); domain.AsError(err).Code != domain.CodeForbidden {
+				t.Fatal(err)
+			}
+			if _, err = fresh.ConfigureRecovery(t.Context(), "alpha", true, admin); err != nil {
+				t.Fatal(err)
+			}
+			if err = fresh.ObserveRecovery(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			status, err = fresh.Recovery(t.Context(), "alpha")
+			if err != nil || !status.Enabled || len(status.Attempts) != 2 {
+				t.Fatal(status, err)
+			}
+		})
 	}
 }

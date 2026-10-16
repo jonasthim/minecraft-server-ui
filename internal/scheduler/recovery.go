@@ -135,16 +135,23 @@ func (s *Service) CancelRecovery(ctx context.Context, id string, actor domain.Us
 	defer lock.Unlock()
 	suppressed := ""
 	if s.config.Native != nil {
-		if identity, e := s.config.Native.Identity(ctx, id); e == nil {
+		if identity, e := s.config.Native.Identity(ctx, id); e == nil && identity.InstanceID == id && identity.PID > 0 && identity.StartIdentity != "" && !identity.StartedAt.IsZero() {
 			suppressed = generation(identity)
 		}
+	}
+	// An uncertain identity cannot provide an exact generation to suppress.
+	// Persist suspension in the same transaction as the stop epoch so that a
+	// restored observation or manager restart cannot revive the stopped intent.
+	reason := "Deliberate operator stop cancels crash recovery."
+	if suppressed == "" {
+		reason = "Deliberate stop could not verify native identity; crash recovery is suspended. An administrator must review and explicitly re-enable it."
 	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return e
 	}
 	defer tx.Rollback()
-	_, e = tx.ExecContext(ctx, `INSERT INTO crash_recovery(instance_id,enabled,actor_id,epoch,last_generation,reason,updated_at) VALUES(?,0,?,1,?,'Deliberate operator stop cancels crash recovery.',?) ON CONFLICT(instance_id) DO UPDATE SET epoch=crash_recovery.epoch+1,last_generation=excluded.last_generation,reason=excluded.reason,updated_at=excluded.updated_at`, id, actor.ID, suppressed, stamp(s.now()))
+	_, e = tx.ExecContext(ctx, `INSERT INTO crash_recovery(instance_id,enabled,actor_id,epoch,last_generation,reason,updated_at) VALUES(?,0,?,1,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET enabled=CASE WHEN excluded.last_generation='' THEN 0 ELSE crash_recovery.enabled END,epoch=crash_recovery.epoch+1,last_generation=excluded.last_generation,reason=excluded.reason,updated_at=excluded.updated_at`, id, actor.ID, suppressed, reason, stamp(s.now()))
 	if e != nil {
 		return e
 	}

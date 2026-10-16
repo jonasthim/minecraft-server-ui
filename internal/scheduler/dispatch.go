@@ -13,7 +13,24 @@ import (
 // Reconcile runs before the timer loop starts, after feature/job recovery.
 // Unclaimed triggers missed while offline are skipped as one durable report.
 // A pre-crash claimed trigger remains accepted intent and is retried by key.
-func (s *Service) Reconcile(ctx context.Context) error { return s.claimDue(ctx, true) }
+func (s *Service) Reconcile(ctx context.Context) error {
+	// Drain every batch against one startup cutoff. Re-reading the wall clock
+	// between batches could consume future live triggers or leave downtime work
+	// for the normal timer to admit once queue dispatch resumes.
+	cutoff := s.now()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		count, err := s.claimDueBatch(ctx, true, cutoff)
+		if err != nil {
+			return err
+		}
+		if count < 100 {
+			return nil
+		}
+	}
+}
 func (s *Service) Tick(ctx context.Context) error {
 	if e := s.claimDue(ctx, false); e != nil {
 		return e
@@ -47,15 +64,18 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 }
 func (s *Service) claimDue(ctx context.Context, recovering bool) error {
-	now := s.now()
+	_, err := s.claimDueBatch(ctx, recovering, s.now())
+	return err
+}
+func (s *Service) claimDueBatch(ctx context.Context, recovering bool, now time.Time) (int, error) {
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
-		return e
+		return 0, e
 	}
 	defer tx.Rollback()
 	rows, e := tx.QueryContext(ctx, `SELECT id,instance_id,actor_id,definition_json,next_run_at FROM schedules WHERE enabled=1 AND next_run_at!='' AND next_run_at<=? ORDER BY next_run_at,id LIMIT 100`, stamp(now))
 	if e != nil {
-		return e
+		return 0, e
 	}
 	type due struct {
 		id, instance, raw, next string
@@ -66,25 +86,25 @@ func (s *Service) claimDue(ctx context.Context, recovering bool) error {
 		var d due
 		if e = rows.Scan(&d.id, &d.instance, &d.actor, &d.raw, &d.next); e != nil {
 			rows.Close()
-			return e
+			return 0, e
 		}
 		pending = append(pending, d)
 	}
 	if e = errors.Join(rows.Err(), rows.Close()); e != nil {
-		return e
+		return 0, e
 	}
 	for _, d := range pending {
 		var definition domain.Schedule
 		if e = json.Unmarshal([]byte(d.raw), &definition); e != nil {
-			return e
+			return 0, e
 		}
 		next, e := Next(definition.Expression, definition.Timezone, now)
 		if e != nil {
-			return e
+			return 0, e
 		}
 		dueAt, e := time.Parse(time.RFC3339Nano, d.next)
 		if e != nil {
-			return e
+			return 0, e
 		}
 		state, reason := "claimed", ""
 		if recovering || now.Sub(dueAt) >= time.Minute {
@@ -93,7 +113,7 @@ func (s *Service) claimDue(ctx context.Context, recovering bool) error {
 			var active bool
 			e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schedule_runs r LEFT JOIN jobs j ON j.id=r.job_id WHERE r.schedule_id=? AND (r.state='claimed' OR (r.state='admitted' AND COALESCE(j.state,'queued') IN('queued','running'))))`, d.id).Scan(&active)
 			if e != nil {
-				return e
+				return 0, e
 			}
 			if active {
 				state, reason = "skipped_overlap", "An earlier occurrence is still pending; this occurrence was coalesced."
@@ -101,16 +121,19 @@ func (s *Service) claimDue(ctx context.Context, recovering bool) error {
 		}
 		id, e := key()
 		if e != nil {
-			return e
+			return 0, e
 		}
 		if _, e = tx.ExecContext(ctx, `INSERT INTO schedule_runs(id,schedule_id,instance_id,actor_id,due_at,definition_json,state,reason) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(schedule_id,due_at) DO NOTHING`, id, d.id, d.instance, d.actor, d.next, d.raw, state, reason); e != nil {
-			return e
+			return 0, e
 		}
 		if _, e = tx.ExecContext(ctx, `UPDATE schedules SET next_run_at=? WHERE id=? AND next_run_at=?`, stamp(next), d.id, d.next); e != nil {
-			return e
+			return 0, e
 		}
 	}
-	return tx.Commit()
+	if e := tx.Commit(); e != nil {
+		return 0, e
+	}
+	return len(pending), nil
 }
 func (s *Service) dispatchClaims(ctx context.Context) error {
 	rows, e := s.db.QueryContext(ctx, `SELECT id,schedule_id,instance_id,actor_id,definition_json FROM schedule_runs WHERE state='claimed' ORDER BY due_at,id LIMIT 100`)

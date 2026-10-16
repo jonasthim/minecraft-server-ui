@@ -85,3 +85,24 @@ Artifacts (temporary local evidence):
 - Reproduction scripts: `task19-browser.mjs`, `task19-roles-browser.mjs`, `task19-final-browser.mjs` in the same temporary directory. The long workflow script stops after user creation because its direct mobile Sign out target is in the closed navigation; role checks were completed using separate clean browser contexts. This was test navigation, not a scheduler failure.
 
 Post-fix verification: `npm run build`, temporary `go build`, `npm run typecheck`, `npm run lint`, `go test -race ./internal/scheduler`, and the targeted startup test all PASS. The isolated test manager was shut down after evidence collection. The broader touched-package tests/race checks above passed before the UI-only label correction; unaffected suites were not repeated.
+
+## Independent review fix round 1 — base `37df25b`
+
+The independent groundwork review requested changes for two Important findings. Both were reproduced by deterministic regressions before implementation. Only owned scheduler files and this report were changed; there are no schema, UI, lifecycle, native, notification or main composition changes in this round.
+
+1. **Deliberate stop with uncertain native identity:** `CancelRecovery` previously preserved enabled recovery while recording an empty suppression generation after identity lookup failure. It now persists `enabled=false` in the same transaction as the newer stop epoch and cancellation whenever the native service is absent, identity lookup fails, or returned identity is incomplete/mismatched. A persisted safe reason explicitly requires administrator review and re-enablement. Restored observation or a fresh manager service cannot silently lift that suspension; even a later observed generation stays suspended until the existing administrator configuration API explicitly enables recovery. A successfully identified stop still suppresses its exact generation while preserving the existing configured policy.
+
+   Regression: `internal/scheduler/recovery_test.go`, `TestDeliberateStopWithUncertainIdentitySuspendsRecovery`. Three cases (lookup failure, absent native capability, incomplete identity) each reproduced the original unsafe new pending attempt. The fixed test checks cancelled prior intent, persisted disabled state/reason through a fresh service, no retry after restored/successor identity observation, refusal of operator re-enablement, and successful explicit administrator re-enablement. Existing public `enabled` and `reason` fields expose the suspension; no new API field is needed.
+
+2. **Startup batches above 100 schedules:** startup reconciliation now captures one fixed startup cutoff and drains each bounded due batch before returning. Every definition that was due at that cutoff records a downtime skip and advances beyond the same cutoff before ordinary timer processing or startup queue Resume can follow. Advancing wall clock between batches cannot cause future live occurrences to be consumed by startup. Cancellation is checked between batches and SQL operations keep their existing context cancellation.
+
+   Regressions: new `internal/scheduler/dispatch_test.go`. `TestStartupReconcileDrainsAllDueSchedulesAtFixedCutoff` creates 101 enabled definitions across two instances (respecting the 100-per-instance bound), restarts ten seconds after their due time, and first reproduced only 100 skips. It now verifies all 101 downtime records, no due definition left behind, all next triggers at 12:02 using one captured cutoff despite an advancing injected clock, and no producer admission on the first normal tick. `TestStartupReconcileCancellationReturnsBeforeAdmission` verifies a cancelled startup returns cancellation without admission and a successful reconciliation retry still skips the missed trigger before the first timer tick.
+
+Observed scoped commands/results:
+
+- `go test ./internal/scheduler -run '^TestDeliberateStopWithUncertainIdentitySuspendsRecovery$'` — FAIL before the fix in all three cases; PASS after the fix.
+- `go test ./internal/scheduler -run '^TestStartupReconcile'` — FAIL before the fix (`startup skipped 100 schedules; want all 101`); PASS after the fix.
+- `go test -race ./internal/scheduler` — PASS after both fixes, including existing policy, admission, recovery and dispatch tests.
+- `git diff --check -- internal/scheduler docs/reports/task19.md` — PASS.
+
+Unchanged broader suites and browser checks were not rerun. The integrator owns review acceptance and commit; this worker performed no stage/commit action. Full Task 19 still requires Task 18 composition and the previously recorded real game/native qualification.
