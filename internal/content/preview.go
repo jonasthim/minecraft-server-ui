@@ -130,20 +130,6 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 			if !contains(v.Compatibility.Minecraft, manifest.Tuple.Minecraft) || !contains(v.Compatibility.Loaders, manifest.Tuple.Loader) || v.Compatibility.ServerSide == "unsupported" || v.Compatibility.Environment == "client" || v.Compatibility.Environment == "client_only" {
 				p.Preview.Blockers = append(p.Preview.Blockers, "Publisher compatibility does not establish this exact server tuple.")
 			}
-			for _, dep := range v.Dependencies {
-				found := false
-				for _, installed := range manifest.Items {
-					if installed.Enabled && installed.Selection != nil && installed.Selection.Provider == dep.Provider && (dep.ProjectID != "" && installed.Selection.ProjectID == dep.ProjectID || dep.VersionID != "" && installed.Selection.VersionID == dep.VersionID) && (dep.VersionID == "" || installed.Selection.VersionID == dep.VersionID) {
-						found = true
-					}
-				}
-				if dep.Required && !found {
-					p.Preview.Blockers = append(p.Preview.Blockers, "Required publisher dependency needs explicit installation: "+dependencyLabel(dep))
-				}
-				if dep.Relation == "incompatible" && found {
-					p.Preview.Blockers = append(p.Preview.Blockers, "Publisher declares an installed incompatibility: "+dependencyLabel(dep))
-				}
-			}
 			if upload.ID == "" {
 				p.Preview.Manual = &ManualItem{*m.Selection, f.Filename, f.OfficialURL, f.Hashes, f.ManualReason}
 				p.Preview.Blockers = append(p.Preview.Blockers, "Publisher file requires administrator verified upload from its official page.")
@@ -184,39 +170,6 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 		}
 		if descriptor.Unknown && !p.Preview.Unknown {
 			p.Preview.Blockers = append(p.Preview.Blockers, "Publisher artifact lacks a supported descriptor; use explicit unknown upload trial.")
-		}
-		{
-			p.Preview.Blockers = append(p.Preview.Blockers, compatibilityBlockers(descriptor, manifest.Tuple, m.Kind, manifest.Items, p.Preview.Unknown && m.Trial)...)
-			for _, installed := range manifest.Items {
-				if previous != nil && installed.ID == previous.ID {
-					continue
-				}
-				if installed.Enabled {
-					if req, ok := installed.Descriptor.Conflicts[descriptor.ID]; ok && satisfies(descriptor.Version, req) {
-						p.Preview.Blockers = append(p.Preview.Blockers, "Enabled content declares a descriptor incompatibility: "+installed.ID)
-					}
-					if m.Selection != nil {
-						for _, dependency := range installed.Dependencies {
-							if dependency.Relation == "incompatible" && dependencyMatches(dependency, *m.Selection) {
-								p.Preview.Blockers = append(p.Preview.Blockers, "Enabled content declares a publisher incompatibility: "+installed.ID)
-							}
-						}
-					}
-				}
-				if installed.Enabled && descriptor.ID != "" && installed.Descriptor.ID == descriptor.ID {
-					p.Preview.Blockers = append(p.Preview.Blockers, "Content descriptor identity is already installed: "+descriptor.ID)
-				}
-				if previous != nil && installed.Enabled {
-					if req, ok := installed.Descriptor.Required[descriptor.ID]; ok && !satisfies(descriptor.Version, req) {
-						p.Preview.Blockers = append(p.Preview.Blockers, "Update would break an enabled descriptor dependency: "+installed.ID)
-					}
-					for _, dependency := range installed.Dependencies {
-						if dependency.Required && dependency.VersionID != "" && previous.Selection != nil && dependency.Provider == previous.Selection.Provider && dependency.ProjectID == previous.Selection.ProjectID && (m.Selection == nil || dependency.VersionID != m.Selection.VersionID) {
-							p.Preview.Blockers = append(p.Preview.Blockers, "Update would break a pinned publisher dependency: "+installed.ID)
-						}
-					}
-				}
-			}
 		}
 		if !portable(p.Filename) || !strings.HasSuffix(strings.ToLower(p.Filename), ".jar") {
 			return p.Preview, invalid("publisher filename is not a portable JAR filename")
@@ -279,9 +232,9 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 		next := *previous
 		if m.Action == "enable" {
 			next.Enabled = true
-			p.Preview.Blockers = append(p.Preview.Blockers, compatibilityBlockers(next.Descriptor, manifest.Tuple, next.Kind, manifest.Items, next.Unknown && next.TrialTuple != nil && *next.TrialTuple == manifest.Tuple)...)
-			if next.Unknown && (next.TrialTuple == nil || *next.TrialTuple != manifest.Tuple) {
-				p.Preview.Blockers = append(p.Preview.Blockers, "Unknown trial belongs to a different exact server tuple.")
+			p.Preview.Dependencies = next.Dependencies
+			if p.Preview.Dependencies == nil {
+				p.Preview.Dependencies = []catalog.Dependency{}
 			}
 		}
 		if m.Action == "disable" {
@@ -345,6 +298,7 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 	default:
 		return p.Preview, invalid("unknown content action")
 	}
+	p.Preview.Blockers = append(p.Preview.Blockers, proposedEnabledBlockers(manifest.Tuple, manifest.Items, p)...)
 	for _, operation := range p.Operations {
 		p.Preview.Changes = append(p.Preview.Changes, OwnedFile{operation.Path, operation.After})
 	}
@@ -481,26 +435,40 @@ func (s *Service) checkCollision(ctx context.Context, r *os.Root, destination st
 		return e
 	}
 	defer dir.Close()
-	entries, e := dir.ReadDir(-1)
-	if e != nil {
-		return e
-	}
-	for _, entry := range entries {
-		if !strings.EqualFold(entry.Name(), base) {
-			continue
+	visited := 0
+	for {
+		if e := ctx.Err(); e != nil {
+			return e
 		}
-		owned := false
-		if previous != nil {
-			for _, f := range previous.Files {
-				if f.Path == destination && entry.Name() == base {
-					owned = true
+		entries, readErr := dir.ReadDir(64)
+		for _, entry := range entries {
+			visited++
+			if visited > 4096 {
+				return conflict("content directory exceeds collision verification entry limit")
+			}
+			if !strings.EqualFold(entry.Name(), base) {
+				continue
+			}
+			owned := false
+			if previous != nil {
+				for _, file := range previous.Files {
+					if file.Path == destination && entry.Name() == base {
+						owned = true
+					}
 				}
 			}
+			if !owned {
+				return conflict("content filename collides with an existing local file")
+			}
 		}
-		if !owned {
-			return conflict("content filename collides with an existing local file")
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return readErr
 		}
 	}
+
 	return ctx.Err()
 }
 
@@ -529,5 +497,11 @@ func compatibilityBlockers(d Descriptor, t Tuple, kind catalog.Kind, items []Ins
 }
 
 func dependencyMatches(d catalog.Dependency, s catalog.Selection) bool {
-	return d.Provider == s.Provider && (d.ProjectID != "" && d.ProjectID == s.ProjectID || d.VersionID != "" && d.VersionID == s.VersionID) && (d.VersionID == "" || d.VersionID == s.VersionID)
+	if d.Provider != s.Provider || d.ProjectID == "" && d.VersionID == "" {
+		return false
+	}
+	if d.ProjectID != "" && d.ProjectID != s.ProjectID {
+		return false
+	}
+	return d.VersionID == "" || d.VersionID == s.VersionID
 }

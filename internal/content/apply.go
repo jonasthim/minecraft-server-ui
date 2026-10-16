@@ -55,13 +55,12 @@ func (s *Service) Enqueue(ctx context.Context, id, preview string, actor domain.
 	if len(p.Preview.Blockers) > 0 || p.Preview.Manual != nil {
 		return jobs.Job{}, conflict("resolve preview blockers before applying")
 	}
-	res, e := s.db.ExecContext(ctx, "UPDATE content_previews SET state='queued' WHERE id=? AND state='preview'", preview)
+	ownership, e := s.reconcilePreviewJob(ctx, id, preview)
 	if e != nil {
 		return jobs.Job{}, e
 	}
-	n, e := res.RowsAffected()
-	if e != nil || n != 1 {
-		return jobs.Job{}, conflict("preview is already queued")
+	if ownership.Live || ownership.Journal {
+		return jobs.Job{}, conflict("preview is owned by a live job or recovery journal")
 	}
 	payload, _ := json.Marshal(struct {
 		PreviewID string `json:"preview_id"`
@@ -69,8 +68,27 @@ func (s *Service) Enqueue(ctx context.Context, id, preview string, actor domain.
 	}{preview, actor.ID})
 	j, e := s.queue.Enqueue(ctx, jobs.Request{InstanceID: id, Kind: "content_mutation", Payload: payload, RequestedBy: actor.ID, Cancellable: true})
 	if e != nil {
-		s.db.ExecContext(ctx, "UPDATE content_previews SET state='preview' WHERE id=? AND state='queued'", preview)
+		return j, e
 	}
+	if s.fault != nil {
+		if fault := s.fault("enqueue"); fault != nil {
+			return j, fault
+		}
+	}
+	// The durable job payload already owns the preview. A cancelled request or
+	// manager crash here is repaired from that job; never reset it speculatively.
+	result, bindErr := s.db.ExecContext(ctx, "UPDATE content_previews SET state='queued',job_id=? WHERE id=? AND state='preview'", j.ID, preview)
+	if bindErr != nil {
+		return j, bindErr
+	}
+	changed, bindErr := result.RowsAffected()
+	if bindErr != nil {
+		return j, bindErr
+	}
+	if changed != 1 {
+		return j, conflict("durable content job admitted; refresh its preview ownership before retrying")
+	}
+
 	return j, e
 }
 func (s *Service) run(ctx context.Context, execution *jobs.Execution) (result error) {
@@ -90,6 +108,13 @@ func (s *Service) run(ctx context.Context, execution *jobs.Execution) (result er
 		}
 		if e := s.CheckReady(ctx, p.Preview.InstanceID); e != nil {
 			return e
+		}
+		ownership, e := s.reconcilePreviewJob(ctx, p.Preview.InstanceID, p.Preview.ID)
+		if e != nil {
+			return e
+		}
+		if !ownership.Live || ownership.JobID != execution.Job.ID {
+			return conflict("current durable job does not own this preview")
 		}
 		actor, e := s.actor(ctx, request.ActorID, needsAdmin(p.Mutation))
 		if e != nil {
@@ -135,6 +160,9 @@ func (s *Service) run(ctx context.Context, execution *jobs.Execution) (result er
 		}
 		if len(p.Preview.Blockers) > 0 || p.Preview.Manual != nil {
 			return conflict("preview has unresolved blockers")
+		}
+		if len(proposedEnabledBlockers(m.Tuple, m.Items, p)) > 0 {
+			return conflict("proposed enabled content has unresolved compatibility contradictions")
 		}
 		if p.Mutation.Selection != nil {
 			v, e := s.catalog.Version(ctx, p.Mutation.Selection.Provider, p.Mutation.Selection.ProjectID, p.Mutation.Selection.VersionID)
@@ -328,7 +356,7 @@ func (s *Service) recoverJournal(ctx context.Context, root *os.Root, id string) 
 	}
 	defer tx.Rollback()
 	if state != "committed" {
-		_, e = tx.ExecContext(ctx, "UPDATE content_previews SET state='preview' WHERE id=?", p.Preview.ID)
+		_, e = tx.ExecContext(ctx, "UPDATE content_previews SET state=CASE WHEN EXISTS(SELECT 1 FROM jobs WHERE jobs.instance_id=content_previews.instance_id AND kind='content_mutation' AND "+contentJobPreview+"=content_previews.id AND jobs.state IN ('queued','running')) THEN 'queued' ELSE 'preview' END WHERE id=?", p.Preview.ID)
 	}
 	if e == nil && state != "committed" {
 		_, e = tx.ExecContext(ctx, "UPDATE content_journals SET state='rolled_back' WHERE instance_id=?", id)
@@ -411,8 +439,14 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			return e
 		}
 	}
-	_, e = s.db.ExecContext(ctx, "UPDATE content_previews SET state='preview' WHERE state='queued' AND id NOT IN (SELECT preview_id FROM content_journals)")
-	return e
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, id := range all {
+		if e = s.reconcileInstancePreviewJobs(ctx, id); e != nil {
+			return e
+		}
+	}
+	return nil
 }
 
 // PreviewNeedsAdministrator lets the API apply the same token scope as the private action.

@@ -170,7 +170,7 @@ func (s *Service) expire(ctx context.Context, id string) error {
 	if n > 0 {
 		return nil
 	}
-	if _, e := s.db.ExecContext(ctx, "DELETE FROM content_previews WHERE instance_id=? AND (created_at<? OR state='applied')", id, cutoff()); e != nil {
+	if _, e := s.db.ExecContext(ctx, "DELETE FROM content_previews WHERE instance_id=? AND (created_at<? OR state='applied') AND NOT EXISTS(SELECT 1 FROM jobs WHERE jobs.instance_id=content_previews.instance_id AND kind='content_mutation' AND "+contentJobPreview+"=content_previews.id AND jobs.state IN ('queued','running'))", id, cutoff()); e != nil {
 		return e
 	}
 	return s.cleanupStages(ctx, id, 0, true)
@@ -223,11 +223,30 @@ func (s *Service) Discard(ctx context.Context, id, preview string, actor domain.
 		return conflict("recover transaction before discarding stages")
 	}
 	if preview != "" {
-		if _, e := s.db.ExecContext(ctx, "DELETE FROM content_previews WHERE id=? AND instance_id=? AND actor_id=? AND state='preview'", preview, id, actor.ID); e != nil {
+		ownership, e := s.reconcilePreviewJob(ctx, id, preview)
+		if e != nil {
 			return e
+		}
+		if ownership.ActorID != actor.ID {
+			return domain.E(domain.CodeForbidden, "content preview belongs to another actor")
+		}
+		if ownership.Live || ownership.Journal {
+			return conflict("preview is owned by a live job or recovery journal")
+		}
+		result, e := s.db.ExecContext(ctx, "DELETE FROM content_previews WHERE id=? AND instance_id=? AND actor_id=? AND NOT EXISTS(SELECT 1 FROM jobs WHERE jobs.instance_id=content_previews.instance_id AND kind='content_mutation' AND "+contentJobPreview+"=content_previews.id AND jobs.state IN ('queued','running'))", preview, id, actor.ID)
+		if e != nil {
+			return e
+		}
+		count, e := result.RowsAffected()
+		if e != nil {
+			return e
+		}
+		if count != 1 {
+			return conflict("preview ownership changed before discard")
 		}
 		return nil
 	}
+
 	return s.cleanupStages(ctx, id, actor.ID, false)
 }
 func (s *Service) audit(ctx context.Context, id string, u domain.User, action, target, outcome string) error {
