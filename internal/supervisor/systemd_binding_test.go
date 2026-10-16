@@ -21,7 +21,7 @@ func TestLinuxControlRejectsDifferentDataRoot(t *testing.T) {
 	}
 }
 func TestLinuxLoadedUnitMustBindInstalledRootAndExecutable(t *testing.T) {
-	good := UnitStatus{State: domain.StateStopped, LoadState: "loaded", FragmentPath: "/etc/systemd/system/minecraft@.service", ExecStart: "{ path=/usr/local/bin/minecraft-ui ; argv[]=/usr/local/bin/minecraft-ui launch --data-dir /var/lib/minecraft-ui --instance test --stop-timeout 90s ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }", User: "minecraft-ui", Group: "minecraft-ui", Restart: "no", KillMode: "mixed"}
+	good := UnitStatus{State: domain.StateStopped, LoadState: "loaded", FragmentPath: "/etc/systemd/system/minecraft@.service", ExecStart: "{ path=/usr/local/bin/minecraft-ui ; argv[]=/usr/local/bin/minecraft-ui launch --data-dir /var/lib/minecraft-ui --instance test --stop-timeout 90s ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }", User: "minecraft-ui", Group: "minecraft-ui", Restart: "no", KillMode: "mixed", PrivateUsers: "yes"}
 	if err := validateUnitBinding("test", good); err != nil {
 		t.Fatal(err)
 	}

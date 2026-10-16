@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,7 +70,7 @@ func launchHelper(t *testing.T, mode string, eof bool) (InstancePaths, domain.Pr
 	}
 	go func() {
 		defer close(done)
-		done <- Run(ctx, Config{DataDir: data, InstanceID: "test", StopTimeout: stopTimeout, StopOnStdinEOF: eof}, reader)
+		done <- run(ctx, Config{DataDir: data, InstanceID: "test", StopTimeout: stopTimeout, StopOnStdinEOF: eof}, reader, func(context.Context, Config, domain.LaunchSpec) error { return nil })
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -298,5 +299,109 @@ func TestOperatorStopRequiresDurableIntent(t *testing.T) {
 	alive, err := ProbeIdentity(id)
 	if err != nil || !alive {
 		t.Fatal("rejected stop operated on JVM", err)
+	}
+}
+
+func TestAcceptedStopClassifiesExitBeforeQueueConsumption(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := CaptureIdentity("race", os.Getpid(), domain.LaunchSpec{Executable: exe, WorkingDir: cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "stop.json")
+	session := &session{identity: identity, stop: make(chan string, 1), persistStop: func(reason string) error {
+		return WriteJSON(path, Exit{Identity: identity, Deliberate: true, Reason: reason})
+	}}
+	body, err := json.Marshal(Request{Identity: identity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/stop", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	session.handle(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	if len(session.stop) != 1 {
+		t.Fatal("stop request not queued")
+	}
+	// Model the done-winning select: the stop queue has deliberately not been
+	// consumed. Final classification must inherit the already accepted intent.
+	final := session.finalizeExit(Exit{Identity: identity, ExitedAt: time.Now().UTC(), ExitCode: 0})
+	if !final.Deliberate || final.Reason != "operator" {
+		t.Fatalf("accepted stop classified as crash: %+v", final)
+	}
+}
+
+func TestEOFReportsRecoveryFailureAfterCleanJVMExit(t *testing.T) {
+	p, _, done, writer := launchHelper(t, "", true)
+	saved := p.State + "-saved"
+	if err := os.Rename(p.State, saved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.State, []byte("block stop intent writes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	restored := false
+	restore := func() {
+		if !restored {
+			os.Remove(p.State)
+			os.Rename(saved, p.State)
+			restored = true
+		}
+	}
+	defer restore()
+	writer.Close()
+	waitLog(t, p, "received stop")
+	restore()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "recovery") {
+			t.Fatalf("EOF hid failed durable recovery: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("EOF did not wait for JVM")
+	}
+	var exit Exit
+	if err := ReadJSON(filepath.Join(p.State, "exit.json"), &exit); err != nil {
+		t.Fatal(err)
+	}
+	if exit.ExitCode != 0 || exit.WatchdogError == "" {
+		t.Fatal(exit)
+	}
+}
+
+func TestProductionRunRejectsUnmanagedExecutableBeforeSpawn(t *testing.T) {
+	root := t.TempDir()
+	p, err := Paths(root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = prepare(p); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := domain.LaunchSpec{Executable: exe, WorkingDir: p.Server, Args: []string{"-test.run=^TestJVMHelper$"}, Env: map[string]string{"MINECRAFT_TEST_JVM": "1"}}
+	if err = WriteSpec(root, "test", spec); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	err = Run(ctx, Config{DataDir: root, InstanceID: "test", StopTimeout: time.Second}, nil)
+	if err == nil || !strings.Contains(err.Error(), "managed runtime") {
+		t.Fatalf("production launcher executed unmanaged helper: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(p.State, "identity.json")); !os.IsNotExist(err) {
+		t.Fatal("unmanaged process was spawned", err)
 	}
 }

@@ -52,7 +52,7 @@ func (s *Supervisor) UnitStatus(ctx context.Context, id string) (UnitStatus, err
 	if err != nil {
 		return UnitStatus{}, err
 	}
-	out, err := exec.CommandContext(ctx, "/usr/bin/systemctl", "show", unit, "--property=LoadState,ActiveState,SubState,Result,UnitFileState,FragmentPath,DropInPaths,ExecStart,User,Group,Restart,KillMode").Output()
+	out, err := exec.CommandContext(ctx, "/usr/bin/systemctl", "show", unit, "--property=LoadState,ActiveState,SubState,Result,UnitFileState,FragmentPath,DropInPaths,ExecStart,User,Group,Restart,KillMode,PrivateUsers,MainPID,ControlGroup,InvocationID").Output()
 	if err != nil {
 		return UnitStatus{State: domain.StateUnknown}, fmt.Errorf("query instance unit: %w", err)
 	}
@@ -133,7 +133,7 @@ func validateUnitBinding(id string, status UnitStatus) error {
 	expected := "/usr/local/bin/minecraft-ui launch --data-dir /var/lib/minecraft-ui --instance " + id + " --stop-timeout 90s"
 	_, tail, ok := strings.Cut(status.ExecStart, "argv[]=")
 	argv, _, end := strings.Cut(tail, " ; ignore_errors=")
-	if !ok || !end || argv != expected || !strings.HasPrefix(status.ExecStart, "{ path=/usr/local/bin/minecraft-ui ; ") || strings.Count(status.ExecStart, "{ path=") != 1 || status.User != "minecraft-ui" || status.Group != "minecraft-ui" || status.Restart != "no" || status.KillMode != "mixed" {
+	if !ok || !end || argv != expected || !strings.HasPrefix(status.ExecStart, "{ path=/usr/local/bin/minecraft-ui ; ") || strings.Count(status.ExecStart, "{ path=") != 1 || status.User != "minecraft-ui" || status.Group != "minecraft-ui" || status.Restart != "no" || status.KillMode != "mixed" || (status.PrivateUsers != "yes" && status.PrivateUsers != "self") {
 		return domain.E(domain.CodeUnavailable, "loaded instance unit does not match the fixed native launch contract")
 	}
 	return nil

@@ -21,3 +21,12 @@ func TestLaunchDispatchRejectsUnsafeInstance(t *testing.T) {
 		t.Fatalf("unsafe launch did not reach validation: %v", err)
 	}
 }
+
+func TestNativeInspectDispatchRejectsCallerSelectedProcessOrPath(t *testing.T) {
+	for _, args := range [][]string{{"native-inspect", "--pid", "1"}, {"native-inspect", "--instance", "../manager"}, {"native-inspect", "--instance", "test", "--data-dir", "/tmp"}, {"native-inspect", "--instance", "test", "--pid", "1"}} {
+		var out bytes.Buffer
+		if err := run(context.Background(), args, &out); err == nil || out.Len() != 0 {
+			t.Fatalf("unsafe native inspection arguments accepted %q: %v", args, err)
+		}
+	}
+}

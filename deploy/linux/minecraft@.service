@@ -22,13 +22,16 @@ StandardOutput=journal
 StandardError=journal
 UMask=0077
 NoNewPrivileges=true
+PrivateUsers=yes
 ProtectSystem=strict
 ProtectHome=true
 # A private mount namespace hides manager.db, other instances and credentials
 # from arbitrary server/mod code while exposing this instance and runtime cache.
 TemporaryFileSystem=/var/lib/minecraft-ui:ro
-BindPaths=/var/lib/minecraft-ui/instances/%i /var/lib/minecraft-ui/locks/%i.lock
-BindReadOnlyPaths=/var/lib/minecraft-ui/runtimes
+# Parent and immutable mountpoints are pinned to prevent unlink/rename bypasses.
+BindReadOnlyPaths=/var/lib/minecraft-ui/instances/%i /var/lib/minecraft-ui/runtimes
+BindPaths=/var/lib/minecraft-ui/instances/%i/server /var/lib/minecraft-ui/instances/%i/logs /var/lib/minecraft-ui/instances/%i/state /var/lib/minecraft-ui/locks/%i.lock
+ReadOnlyPaths=/var/lib/minecraft-ui/instances/%i/server/.manager /var/lib/minecraft-ui/instances/%i/state/launch.json
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
@@ -45,7 +48,7 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
-# Block cross-process tracing of the manager despite the common service UID.
+# Defense in depth; PrivateUsers provides the cross-process capability boundary.
 SystemCallFilter=~@debug
 LimitNOFILE=65536
 

@@ -94,7 +94,7 @@ func (s *Supervisor) platformAutostart(ctx context.Context, specs map[string]dom
 		if e != nil {
 			return e
 		}
-		alive, e := launcher.ProbeIdentity(identity)
+		alive, e := s.probe(ctx, identity)
 		if e != nil {
 			return e
 		}

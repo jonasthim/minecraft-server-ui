@@ -2,11 +2,14 @@ package supervisor
 
 import (
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
+	"strconv"
 	"strings"
 )
 
 type UnitStatus struct {
 	FragmentPath, DropInPaths, ExecStart, User, Group, Restart, KillMode string
+	PrivateUsers, ControlGroup, InvocationID                             string
+	MainPID                                                              int
 	State                                                                domain.InstanceState
 	Result                                                               string
 	Autostart                                                            bool
@@ -21,7 +24,8 @@ func parseSystemd(out string) UnitStatus {
 			props[key] = value
 		}
 	}
-	status := UnitStatus{State: domain.StateUnknown, Result: props["Result"], LoadState: props["LoadState"], FragmentPath: props["FragmentPath"], DropInPaths: props["DropInPaths"], ExecStart: props["ExecStart"], User: props["User"], Group: props["Group"], Restart: props["Restart"], KillMode: props["KillMode"]}
+	mainPID, _ := strconv.Atoi(props["MainPID"])
+	status := UnitStatus{PrivateUsers: props["PrivateUsers"], ControlGroup: props["ControlGroup"], InvocationID: props["InvocationID"], MainPID: mainPID, State: domain.StateUnknown, Result: props["Result"], LoadState: props["LoadState"], FragmentPath: props["FragmentPath"], DropInPaths: props["DropInPaths"], ExecStart: props["ExecStart"], User: props["User"], Group: props["Group"], Restart: props["Restart"], KillMode: props["KillMode"]}
 	if props["LoadState"] != "loaded" {
 		return status
 	}

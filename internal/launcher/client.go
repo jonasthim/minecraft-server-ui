@@ -23,7 +23,10 @@ func Send(ctx context.Context, dataDir string, id domain.ProcessIdentity, path s
 	if err != nil {
 		return Response{}, err
 	}
-	if err = VerifyIdentity(id); err != nil {
+	if filepath.Clean(id.WorkingDir) != p.Server {
+		return Response{}, fmt.Errorf("identity working directory differs from configured instance")
+	}
+	if err = VerifyIdentityContext(ctx, id); err != nil {
 		return Response{}, err
 	}
 	var ctl Control

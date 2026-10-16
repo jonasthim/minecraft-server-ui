@@ -44,13 +44,14 @@ func processIdentity(pid int) (start, exe, cwd string, err error) {
 	if _, e = strconv.ParseUint(fields[19], 10, 64); e != nil {
 		return "", "", "", e
 	}
+	start = bootID + ":" + fields[19]
 	exe, e = os.Readlink(base + "/exe")
 	if e != nil {
-		return "", "", "", e
+		return start, "", "", e
 	}
 	cwd, e = os.Readlink(base + "/cwd")
 	if e != nil {
-		return "", "", "", e
+		return start, "", "", e
 	}
 	return bootID + ":" + fields[19], filepath.Clean(exe), filepath.Clean(cwd), nil
 }

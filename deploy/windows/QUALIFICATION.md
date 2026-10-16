@@ -56,3 +56,21 @@ The Windows process identity binds the boot GUID, creation FILETIME and image
 path. Win32 has no stable documented remote cwd API; the private launcher record
 and authenticated identity-bound control carry the working directory. This limit
 must stay explicit in the review and host evidence.
+
+## Current security boundary
+
+The JVM currently runs as the same Windows account as the manager. Job Objects
+provide lifetime containment; they do not provide a credential or filesystem
+security boundary. No restricted token or per-instance ACL isolation has been
+implemented or qualified. A JVM/mod/plugin can access manager.db and other
+instance files wherever that service account has permission. Restricting the
+data tree from other accounts does not isolate games from their manager or each
+other. This limitation must be resolved/reviewed before claiming instance
+security isolation on Windows; the current cross build cannot establish it.
+
+Production launch now verifies managed runtime provenance/inventory and immutable
+provider artifacts/argv offline. All LaunchSpec.Env overrides are rejected until
+a typed policy is approved. These checks do not change the same-account access
+limitation. EOF/SCM recovery failures now yield a nonzero launcher result even if
+the JVM exits zero; native tests must confirm SCM shutdown reports such failures
+and waits for final bookkeeping.

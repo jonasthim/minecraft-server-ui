@@ -60,6 +60,7 @@ type session struct {
 	lease         *leaseGuard
 	stop          chan string
 	stopping      bool
+	stopReason    string
 	watchdogError string
 	persistStop   func(string) error
 }
@@ -124,7 +125,7 @@ func (s *session) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "process identity mismatch", http.StatusConflict)
 		return
 	}
-	if err := VerifyIdentity(req.Identity); err != nil {
+	if err := verifyOwnedChild(r.Context(), req.Identity); err != nil {
 		http.Error(w, "process identity no longer matches", http.StatusConflict)
 		return
 	}
@@ -153,6 +154,7 @@ func (s *session) handle(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		s.stopping = true
+		s.stopReason = "operator"
 		select {
 		case s.stop <- "operator":
 		default:
@@ -173,6 +175,12 @@ func (s *session) handle(w http.ResponseWriter, r *http.Request) {
 // Run owns the child until Wait returns. ctx controls launcher shutdown only;
 // a manager request's context is never inherited by the JVM.
 func Run(ctx context.Context, cfg Config, parentStdin io.Reader) error {
+	return run(ctx, cfg, parentStdin, verifyProductionLaunch)
+}
+
+// The verifier argument is private to package tests. No CLI, Config, environment
+// variable or exported constructor can disable the production verification gate.
+func run(ctx context.Context, cfg Config, parentStdin io.Reader, verify func(context.Context, Config, domain.LaunchSpec) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -180,20 +188,23 @@ func Run(ctx context.Context, cfg Config, parentStdin io.Reader) error {
 	if err != nil {
 		return err
 	}
-	if err = prepare(p); err != nil {
-		return err
-	}
 	unlock, err := AcquireAdmission(cfg.DataDir, cfg.InstanceID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	if err = prepare(p); err != nil {
+		return err
+	}
 	var disk diskSpec
 	if err = ReadJSON(filepath.Join(p.State, "launch.json"), &disk); err != nil {
 		return fmt.Errorf("read launch specification: %w", err)
 	}
 	disk.Spec.Env = disk.Env
 	if err = ValidateSpec(disk.Spec, p); err != nil {
+		return err
+	}
+	if err = verify(ctx, cfg, disk.Spec); err != nil {
 		return err
 	}
 	if cfg.StopTimeout <= 0 {
@@ -309,6 +320,9 @@ func Run(ctx context.Context, cfg Config, parentStdin io.Reader) error {
 		}
 		s.mu.Lock()
 		s.stopping = true
+		if s.stopReason == "" {
+			s.stopReason = reason
+		}
 		if s.lease.id != "" {
 			if e := s.lease.restore(); e != nil {
 				s.watchdogError = e.Error()
@@ -357,16 +371,15 @@ loop:
 	if cmd.ProcessState != nil {
 		exit.ExitCode = cmd.ProcessState.ExitCode()
 	}
-	s.mu.Lock()
-	if s.watchdogError != "" {
-		exit.WatchdogError = s.watchdogError
-	}
-	s.mu.Unlock()
+	exit = s.finalizeExit(exit)
 	if err = WriteJSON(filepath.Join(p.State, "exit.json"), exit); err != nil {
 		return fmt.Errorf("persist process exit: %w", err)
 	}
 	if exit.Forced {
 		return fmt.Errorf("JVM required forced termination after graceful stop timeout")
+	}
+	if exit.WatchdogError != "" {
+		return fmt.Errorf("launcher recovery failed: %s", exit.WatchdogError)
 	}
 	if waitErr != nil {
 		return fmt.Errorf("JVM exit: %w", waitErr)
@@ -377,6 +390,13 @@ func environment(overrides map[string]string) []string {
 	values := map[string]string{}
 	for _, s := range os.Environ() {
 		k, v, ok := strings.Cut(s, "=")
+		switch strings.ToUpper(k) {
+		case "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "CLASSPATH", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "GCONV_PATH":
+			continue
+		}
+		if strings.HasPrefix(strings.ToUpper(k), "LD_") {
+			continue
+		}
 		if ok {
 			values[k] = v
 		}
@@ -394,4 +414,23 @@ func environment(overrides map[string]string) []string {
 		out = append(out, k+"="+values[k])
 	}
 	return out
+}
+
+// finalizeExit shares the acceptance mutex with /stop. A done-winning select
+// cannot erase an operator intent that was already durably accepted.
+func (s *session) finalizeExit(exit Exit) Exit {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopReason != "" {
+		exit.Deliberate = true
+		exit.Reason = s.stopReason
+	}
+	if s.watchdogError != "" {
+		if exit.WatchdogError != "" && exit.WatchdogError != s.watchdogError {
+			exit.WatchdogError += "; " + s.watchdogError
+		} else {
+			exit.WatchdogError = s.watchdogError
+		}
+	}
+	return exit
 }

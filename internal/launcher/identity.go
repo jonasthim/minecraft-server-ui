@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,33 +29,39 @@ func CaptureIdentity(id string, pid int, s domain.LaunchSpec) (domain.ProcessIde
 	return out, nil
 }
 func VerifyIdentity(id domain.ProcessIdentity) error {
-	if err := domain.ValidateInstanceID(id.InstanceID); err != nil {
+	return VerifyIdentityContext(context.Background(), id)
+}
+func VerifyIdentityContext(ctx context.Context, id domain.ProcessIdentity) error {
+	alive, err := ProbeIdentityContext(ctx, id)
+	if err != nil {
 		return err
 	}
-	if id.PID <= 0 || id.StartIdentity == "" || !filepath.IsAbs(id.Executable) || !filepath.IsAbs(id.WorkingDir) {
-		return fmt.Errorf("incomplete process identity")
-	}
-	start, exe, cwd, err := processIdentity(id.PID)
-	if err != nil {
-		return fmt.Errorf("inspect process identity: %w", err)
-	}
-	if start != id.StartIdentity || !equalExecutable(exe, id.Executable) || !sameWorkingDirectory(cwd, id) {
-		return fmt.Errorf("process identity mismatch; refusing reused PID")
+	if !alive {
+		return fmt.Errorf("process identity mismatch; refusing exited or reused PID")
 	}
 	return nil
 }
 
-// ProbeIdentity distinguishes a conclusively exited original process (including
-// a different boot/start token) from unreadable or ambiguous process metadata.
-// It never signals the PID, including when that PID now belongs to a stranger.
+// ProbeIdentity distinguishes conclusive original exit from unavailable metadata.
 func ProbeIdentity(id domain.ProcessIdentity) (bool, error) {
+	return ProbeIdentityContext(context.Background(), id)
+}
+func ProbeIdentityContext(ctx context.Context, id domain.ProcessIdentity) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if err := domain.ValidateInstanceID(id.InstanceID); err != nil {
 		return false, err
 	}
 	if id.PID <= 0 || id.StartIdentity == "" || !filepath.IsAbs(id.Executable) || !filepath.IsAbs(id.WorkingDir) {
 		return false, fmt.Errorf("incomplete process identity")
 	}
-	start, exe, cwd, err := processIdentity(id.PID)
+	start, exe, cwd, err := inspectIdentity(ctx, id)
+	// Reading boot/start is independent of cross-user-namespace image access. A
+	// changed token proves original exit even when the new PID's image is hidden.
+	if start != "" && start != id.StartIdentity {
+		return false, nil
+	}
 	if err != nil {
 		if IsMissingProcess(err) {
 			return false, nil
@@ -117,4 +124,21 @@ func rejectSymlinks(path string) error {
 			return nil
 		}
 	}
+}
+
+// verifyOwnedChild is used only by the launcher's own authenticated handler.
+// The production launcher has checked its namespace before creating this child;
+// it must not invoke sudo from inside that deliberately unprivileged namespace.
+func verifyOwnedChild(ctx context.Context, id domain.ProcessIdentity) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	start, exe, cwd, err := processIdentity(id.PID)
+	if err != nil {
+		return err
+	}
+	if start != id.StartIdentity || !equalExecutable(exe, id.Executable) || !sameWorkingDirectory(cwd, id) {
+		return fmt.Errorf("owned JVM identity mismatch")
+	}
+	return nil
 }

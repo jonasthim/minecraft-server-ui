@@ -120,7 +120,7 @@ func (s *Supervisor) Start(ctx context.Context, id string, spec domain.LaunchSpe
 	// launch window. The external launcher takes this same lock before spawn.
 	old, readErr := s.identity(id)
 	if readErr == nil {
-		alive, e := launcher.ProbeIdentity(old)
+		alive, e := s.probe(ctx, old)
 		if e != nil || alive {
 			admission()
 			return domain.ProcessIdentity{}, domain.Wrap(domain.CodeInstanceRunning, "previous process still active or unverifiable", e)
@@ -129,7 +129,7 @@ func (s *Supervisor) Start(ctx context.Context, id string, spec domain.LaunchSpe
 		admission()
 		return domain.ProcessIdentity{}, readErr
 	}
-	err = launcher.WriteSpec(s.cfg.DataDir, id, spec)
+	err = launcher.Seal(ctx, s.cfg.DataDir, id, spec)
 	admission()
 	if err != nil {
 		return domain.ProcessIdentity{}, err
@@ -144,7 +144,7 @@ func (s *Supervisor) Start(ctx context.Context, id string, spec domain.LaunchSpe
 	for {
 		identity, e := s.identity(id)
 		if e == nil && (identity.StartIdentity != old.StartIdentity || identity.PID != old.PID) {
-			if alive, e := launcher.ProbeIdentity(identity); e == nil && alive {
+			if alive, e := s.probe(ctx, identity); e == nil && alive {
 				if _, e = launcher.Send(ctx, s.cfg.DataDir, identity, "/status", launcher.Request{}); e == nil {
 					return identity, nil
 				}
@@ -184,7 +184,7 @@ func (s *Supervisor) Inspect(ctx context.Context, id domain.ProcessIdentity) (Ob
 	if err := ctx.Err(); err != nil {
 		return Observation{State: domain.StateUnknown}, err
 	}
-	alive, err := launcher.ProbeIdentity(id)
+	alive, err := s.probe(ctx, id)
 	if err != nil {
 		return Observation{State: domain.StateUnknown}, err
 	}
@@ -246,12 +246,14 @@ func (s *Supervisor) Stop(ctx context.Context, id domain.ProcessIdentity) error 
 	return s.stop(ctx, id)
 }
 func (s *Supervisor) stop(ctx context.Context, id domain.ProcessIdentity) error {
-	alive, err := launcher.ProbeIdentity(id)
+	alive, err := s.probe(ctx, id)
 	if err != nil {
 		return err
 	}
 	if !alive {
-		return nil
+		wait, cancel := context.WithTimeout(ctx, s.cfg.StopTimeout+10*time.Second)
+		defer cancel()
+		return s.waitExit(wait, id)
 	}
 	if _, err = launcher.Send(ctx, s.cfg.DataDir, id, "/stop", launcher.Request{}); err != nil {
 		return err
@@ -264,7 +266,7 @@ func (s *Supervisor) waitExit(ctx context.Context, id domain.ProcessIdentity) er
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		alive, err := launcher.ProbeIdentity(id)
+		alive, err := s.probe(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -285,6 +287,9 @@ func (s *Supervisor) waitExit(ctx context.Context, id domain.ProcessIdentity) er
 				}
 				if o.Exit.WatchdogError != "" {
 					return domain.E(domain.CodeInternal, "launcher reported a control or save recovery failure")
+				}
+				if !o.Exit.Deliberate || o.Exit.ExitCode != 0 {
+					return domain.E(domain.CodeInternal, "JVM completion was not a clean deliberate stop")
 				}
 
 				return nil
@@ -313,7 +318,7 @@ func (s *Supervisor) SetAutostart(ctx context.Context, id string, enabled bool) 
 		if e != nil {
 			return err
 		}
-		alive, e := launcher.ProbeIdentity(identity)
+		alive, e := s.probe(ctx, identity)
 		if e != nil || !alive {
 			return err
 		}
@@ -353,7 +358,7 @@ func (s *Supervisor) requireStopped(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	alive, err := launcher.ProbeIdentity(identity)
+	alive, err := s.probe(ctx, identity)
 	if err != nil {
 		return domain.Wrap(domain.CodeUnavailable, "cannot verify stopped process", err)
 	}
@@ -385,4 +390,19 @@ func sortedIDs(specs map[string]domain.LaunchSpec) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func (s *Supervisor) probe(ctx context.Context, id domain.ProcessIdentity) (bool, error) {
+	alive, err := launcher.ProbeIdentityContext(ctx, id)
+	if err != nil || !alive {
+		return alive, err
+	}
+	paths, err := launcher.Paths(s.cfg.DataDir, id.InstanceID)
+	if err != nil {
+		return false, err
+	}
+	if filepath.Clean(id.WorkingDir) != paths.Server {
+		return false, fmt.Errorf("live identity working directory differs from configured instance")
+	}
+	return true, nil
 }

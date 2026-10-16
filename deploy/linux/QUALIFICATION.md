@@ -15,13 +15,19 @@ with another root or executable fails closed before touching the production unit
 namespace. The smoke test explicitly supplies the canonical installed executable.
 Root-owned nonwritable executable/helper/template and ancestors are required;
 loaded unit FragmentPath, no drop-ins, exact argv, service identity, Restart=no
-and KillMode=mixed must match. Unknown property formatting fails closed and must
+KillMode=mixed and PrivateUsers=yes/self must match. Unknown property formatting fails closed and must
 be tested on the target systemd versions. Arbitrary dev roots or custom service
 overrides are not a qualified installation contract. The game unit has no
 PartOf/BindsTo relationship to the manager and has `Restart=no`; Task 19 owns
-bounded recovery. The instance unit's private mount namespace exposes only its
-instance, immutable runtimes and stable admission lock file. This namespace and
-JVM JIT behavior require actual-host testing. Neither daemon-reload nor manager
+bounded recovery. The game has a root-created private user namespace, zero effective capabilities
+and NoNewPrivileges. The user namespace is the process capability boundary that
+blocks same-account /proc/<managerPID>/{root,fd,environ} access; the mount namespace
+alone does not provide that boundary. The mount namespace hides the data root on
+read-only tmpfs, pins the instance parent read-only, exposes only server/logs/state
+and the stable lock writable, and pins server/.manager, state/launch.json and the
+runtime cache read-only. These actual mount modes and minimal UID/GID mappings
+are checked before JVM exec, not inferred from unit settings. Namespace, mount
+ordering and JVM JIT behavior require actual-host testing. Neither daemon-reload nor manager
 binary replacement should restart active game units.
 
 Prepare a dedicated disposable real Java instance using the approved managed
@@ -68,3 +74,65 @@ no autonomous restart. Also perform and record:
 Actual boot, service upgrade, failed-unit and forced-stop host results remain
 required even if the opt-in lifecycle test passes. No real-server/client or
 Minecraft version support claim follows from helper-process tests.
+
+## Private namespace inspection and immutable launch gate
+
+The unprivileged manager deliberately cannot inspect the JVM image/cwd across
+this boundary. The root-owned helper now has one additional read-only verb:
+`unitctl inspect <validated-instance-id>`. It invokes only the installed binary's
+hidden `native-inspect --instance ID` command. It accepts no PID, path, data root,
+command or environment parameter. The broker validates the fixed loaded template,
+derives MainPID/cgroup/invocation, requires exactly one direct JVM child, holds
+launcher/JVM pidfds during inspection, and checks shared unit cgroup, a distinct
+root-created user namespace and actual immutable/pinned mounts. It returns only
+bounded identity metadata, never argv/environment/file contents. The manager
+matches the full expected identity. This adds a narrow root read privilege; no
+manager CAP_SYS_PTRACE is granted. Unified cgroups, pidfds and namespace-owner
+inspection must work on each qualification host; absence fails closed.
+
+Production reattachment always uses this proof, including when direct /proc
+reads happen to succeed. A JVM from before PrivateUsers hardening is unknown /
+repair-needed after upgrade, even if the loaded unit file has been updated. It
+is not silently terminated or accepted. Arrange an explicit planned restart to
+establish the new boundary. Metrics code must consume verified identities and
+report any field unavailable across the namespace; the broker is not an arbitrary
+process/metrics read API.
+
+Seal and boot both rehash the managed runtime with runtime.Manager.Get, check
+exact runtime ID/checksum/image/host, and offline-verify immutable provider
+receipts, inventories/JAR hashes and exact argv (including loader argfiles).
+Only the canonical bounded Xms/Xmx pair is optional. Arbitrary JVM flags and all
+LaunchSpec.Env overrides are rejected. A future environment feature needs a
+coordinated typed policy and verifier change. Inherited Java/native code-loading
+variables are removed. Arbitrary helper executables exist only in private package
+tests; production Run has no bypass.
+
+Additional mandatory actual-unit evidence (not run in this session):
+
+- From actual game code, prove /proc/<managerPID>/root cannot expose manager.db,
+  another instance's state/control.json, manager fd links or environment; prove
+  the same for another game's /proc root. Confirm denial rather than just a
+  missing path inside the game mount namespace.
+- Attempt writes, unlink and rename of launch.json, server/.manager and its
+  parent, runtime files/cache parent, and instance server/state parents. All
+  immutable/parent replacement attempts must fail; world/log/state updates must
+  still work. Verify this using the installed unit, not a shell approximating it.
+- Reattach/Inspect after manager restart through the fixed broker. Compare JVM
+  boot/start/image/cwd identity; test a changed/absent namespace, mismatched
+  parent/cgroup/invocation, unavailable pidfd and missing read-only mount.
+- Replace only the loaded template while a disposable pre-hardening JVM remains:
+  reattachment must fail closed, leave the game untouched, and require a planned
+  restart. After that restart, namespace proof and console control must work.
+- Tamper a disposable sealed runtime/JAR/loader argfile before boot; no JVM must
+  spawn. Invalid Seal must preserve the prior activation. Confirm exact pinned
+  installation/runtime under enabled boot autostart.
+
+`systemd-analyze verify` still reports the absent installed canonical executable
+on this development host. No unit installation, real JVM/EULA action, namespace
+escape test, immutable rename test or native service qualification was performed.
+
+PrivateUsers=yes preserves the host service UID. The documented boundary is
+ptrace/process capabilities plus filesystem views, not distinct credentials for
+each game. Ordinary same-UID signal permission remains a denial-of-service risk
+to the manager/other games. No complete hostile-code sandbox claim is made; any
+stronger process isolation requires a separately reviewed credential/LSM design.

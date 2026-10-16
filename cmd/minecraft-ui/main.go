@@ -41,6 +41,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) > 0 {
 		command = args[0]
 	}
+	if command == "native-inspect" {
+		return runNativeInspect(ctx, args[1:], out)
+	}
 	if command == "launch" {
 		return runLaunch(ctx, args[1:], os.Stdin)
 	}
