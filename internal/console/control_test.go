@@ -20,7 +20,7 @@ import (
 func TestFreshLegacyAcknowledgement(t *testing.T) {
 	h, path := logFixture(t)
 	_ = os.WriteFile(path, []byte("[12:00:00] [Server thread/INFO]: Done (1s)! For help, type \"help\"\n[12:00:01] [Server thread/INFO]: There are 0 of a max of 20 players online: \n"), 0600)
-	cursor, err := newRawCursor(h.paths, "test")
+	cursor, err := newRawCursor(t.Context(), h.paths, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestFreshLegacyAcknowledgement(t *testing.T) {
 	if _, err = cursor.wait(ctx, ackList("1.21.9")); err == nil {
 		t.Fatal("historical list acknowledged new command")
 	}
-	cursor, err = newRawCursor(h.paths, "test")
+	cursor, err = newRawCursor(t.Context(), h.paths, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestFreshLegacyAcknowledgement(t *testing.T) {
 func TestLegacySaveFlushAndRotationGap(t *testing.T) {
 	h, path := logFixture(t)
 	_ = os.WriteFile(path, []byte("old\n"), 0600)
-	cursor, err := newRawCursor(h.paths, "test")
+	cursor, err := newRawCursor(t.Context(), h.paths, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestLegacySaveFlushAndRotationGap(t *testing.T) {
 	if err != nil || !strings.Contains(out, "Saved the world") {
 		t.Fatalf("legacy flush %q %v", out, err)
 	}
-	cursor, err = newRawCursor(h.paths, "test")
+	cursor, err = newRawCursor(t.Context(), h.paths, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

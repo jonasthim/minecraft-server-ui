@@ -12,6 +12,7 @@ import (
 
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
+	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 )
 
 type rawCursor struct {
@@ -23,12 +24,12 @@ type rawCursor struct {
 	discard  bool
 }
 
-func newRawCursor(paths instance.Paths, id string) (*rawCursor, error) {
+func newRawCursor(ctx context.Context, paths instance.Paths, id string) (*rawCursor, error) {
 	p, err := paths.For(id)
 	if err != nil {
 		return nil, err
 	}
-	root, err := os.OpenRoot(p.Logs)
+	root, err := safepath.OpenRoot(ctx, p.Logs)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +71,7 @@ func (c *rawCursor) poll(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, err := os.OpenRoot(p.Logs)
+	root, err := safepath.OpenRoot(ctx, p.Logs)
 	if err != nil {
 		return nil, err
 	}

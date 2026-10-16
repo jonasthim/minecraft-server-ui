@@ -23,6 +23,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 	managedruntime "github.com/jonasthim/minecraft-server-ui/internal/runtime"
+	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 )
 
 type Installer struct {
@@ -208,12 +209,7 @@ func (i *Installer) Publish(ctx context.Context, id string, plan domain.InstallP
 	}
 	// The instance coordinator must have provisioned the server directory. All
 	// creation below it is rooted; a symlink swap cannot escape the server tree.
-	dataRoot, err := os.OpenRoot(i.dataDir)
-	if err != nil {
-		return fail(fmt.Errorf("open manager data directory: %w", err))
-	}
-	defer dataRoot.Close()
-	serverRoot, err := dataRoot.OpenRoot(filepath.Join("instances", id, "server"))
+	serverRoot, err := safepath.OpenRoot(ctx, dirs.Server)
 	if err != nil {
 		return fail(fmt.Errorf("open provisioned server directory: %w", err))
 	}

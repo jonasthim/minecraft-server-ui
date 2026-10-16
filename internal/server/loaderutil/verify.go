@@ -15,6 +15,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 	managedruntime "github.com/jonasthim/minecraft-server-ui/internal/runtime"
+	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/launchargs"
 )
 
@@ -186,12 +187,7 @@ func VerifyLaunch(ctx context.Context, dataDir, id string, spec domain.LaunchSpe
 	if e != nil {
 		return e
 	}
-	data, e := os.OpenRoot(dataDir)
-	if e != nil {
-		return e
-	}
-	defer data.Close()
-	root, e := data.OpenRoot(filepath.Join("instances", id, "server", ".manager", "loaders", name))
+	root, e := safepath.OpenRoot(ctx, final)
 	if e != nil {
 		return e
 	}

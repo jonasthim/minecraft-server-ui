@@ -21,6 +21,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 	managedruntime "github.com/jonasthim/minecraft-server-ui/internal/runtime"
+	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/providerutil"
 )
 
@@ -259,12 +260,7 @@ func (p *Publisher) Publish(ctx context.Context, id string, plan domain.InstallP
 	if e != nil {
 		return fail(e)
 	}
-	data, e := os.OpenRoot(p.dataDir)
-	if e != nil {
-		return fail(e)
-	}
-	defer data.Close()
-	server, e := data.OpenRoot(filepath.Join("instances", id, "server"))
+	server, e := safepath.OpenRoot(ctx, dirs.Server)
 	if e != nil {
 		return fail(fmt.Errorf("open provisioned instance: %w", e))
 	}

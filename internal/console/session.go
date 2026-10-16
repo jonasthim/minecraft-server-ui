@@ -157,7 +157,7 @@ func (scope *sessionScope) legacy(ctx context.Context, command string, ack ackno
 	if err := scope.check(ctx); err != nil {
 		return result, err
 	}
-	cursor, err := newRawCursor(scope.service.paths, scope.identity.InstanceID)
+	cursor, err := newRawCursor(ctx, scope.service.paths, scope.identity.InstanceID)
 	if err != nil {
 		return result, domain.E(domain.CodeUnavailable, "a fresh native console cursor could not be established")
 	}
@@ -332,7 +332,7 @@ func (s *Session) ReleaseSaving(ctx context.Context, leaseID string) (domain.Com
 	operation, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	result := domain.CommandResult{}
-	cursor, cursorErr := newRawCursor(scope.service.paths, scope.identity.InstanceID)
+	cursor, cursorErr := newRawCursor(operation, scope.service.paths, scope.identity.InstanceID)
 	if err = scope.service.native.ReleaseSaveLease(operation, scope.identity, leaseID); err != nil {
 		return result, domain.E(domain.CodeUnavailable, "native save-on recovery could not be delivered")
 	}

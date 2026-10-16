@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
+	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 )
 
 type ReconcileDeferred struct {
@@ -107,7 +108,7 @@ func (s *Service) materialize(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(dirs.Root)
+	root, err := safepath.OpenRoot(ctx, dirs.Root)
 	if err != nil {
 		return fmt.Errorf("open owned instance for materialization: %w", err)
 	}
@@ -183,7 +184,7 @@ func (s *Service) recoverDeletion(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	parent, err := os.OpenRoot(filepath.Dir(dirs.Root))
+	parent, err := safepath.OpenRoot(ctx, filepath.Dir(dirs.Root))
 	if err != nil {
 		return err
 	}

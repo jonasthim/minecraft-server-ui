@@ -16,6 +16,7 @@ import (
 
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
+	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 )
 
 const maxLineBytes = 8192
@@ -80,8 +81,8 @@ func (h *History) Capture(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(dirs.Logs)
-	if os.IsNotExist(err) {
+	root, err := safepath.OpenRoot(ctx, dirs.Logs)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {

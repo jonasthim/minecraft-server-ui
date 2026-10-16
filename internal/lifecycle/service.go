@@ -21,6 +21,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"github.com/jonasthim/minecraft-server-ui/internal/launcher"
+	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/launchargs"
 	"github.com/jonasthim/minecraft-server-ui/internal/supervisor"
 )
@@ -72,7 +73,7 @@ func New(c Config) *Service {
 		if err != nil {
 			return err
 		}
-		root, err := os.OpenRoot(paths.State)
+		root, err := safepath.OpenRoot(ctx, paths.State)
 		if err != nil {
 			return err
 		}
@@ -310,7 +311,7 @@ func (s *Service) recoverActivation(ctx context.Context, id string) error {
 			return fmt.Errorf("restore committed activation: %w", err)
 		}
 	} else if domain.AsError(err).Code == domain.CodeInstanceNotInstalled {
-		if err = s.removeActivation(id); err != nil {
+		if err = s.removeActivation(ctx, id); err != nil {
 			return err
 		}
 	} else {
@@ -321,12 +322,12 @@ func (s *Service) recoverActivation(ctx context.Context, id string) error {
 	}
 	return s.clearIntent(ctx, id)
 }
-func (s *Service) removeActivation(id string) error {
+func (s *Service) removeActivation(ctx context.Context, id string) error {
 	p, err := launcher.Paths(s.dataDir, id)
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(p.State)
+	root, err := safepath.OpenRoot(ctx, p.State)
 	if err != nil {
 		return err
 	}

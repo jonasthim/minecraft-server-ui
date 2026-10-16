@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -16,6 +15,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/instance"
 	managedruntime "github.com/jonasthim/minecraft-server-ui/internal/runtime"
+	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/launchargs"
 )
 
@@ -53,12 +53,7 @@ func VerifyLaunch(ctx context.Context, dataDir, id string, spec domain.LaunchSpe
 	if !hex64.MatchString(name) || args[1] != filepath.Join(base, name, "server.jar") {
 		return fmt.Errorf("JAR launch is outside canonical immutable publication")
 	}
-	data, err := os.OpenRoot(dataDir)
-	if err != nil {
-		return err
-	}
-	defer data.Close()
-	root, err := data.OpenRoot(filepath.Join("instances", id, "server", ".manager", "artifacts"))
+	root, err := safepath.OpenRoot(ctx, base)
 	if err != nil {
 		return err
 	}

@@ -516,7 +516,7 @@ func (s *Service) uninstall(ctx context.Context, e *jobs.Execution, confirmation
 		if err = tx.Commit(); err != nil {
 			return err
 		}
-		if err = s.removeActivation(id); err != nil {
+		if err = s.removeActivation(ctx, id); err != nil {
 			return err
 		}
 		if err = launcher.ClearActivationPending(ctx, s.dataDir, id); err != nil {

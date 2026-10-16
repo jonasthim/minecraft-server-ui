@@ -19,6 +19,7 @@ import (
 
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	managedruntime "github.com/jonasthim/minecraft-server-ui/internal/runtime"
+	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 )
 
 // MutationGuard holds jobs admission and native lifecycle exclusion throughout
@@ -185,6 +186,36 @@ func portFree(ctx context.Context, tx *sql.Tx, id string, port int) error {
 	}
 	return nil
 }
+
+// createDataRoot preserves first-use creation of a missing configured directory.
+// Each mkdir uses an already checked parent; no absolute MkdirAll may follow an
+// ancestor substituted after Paths.For's string validation.
+func createDataRoot(ctx context.Context, absolute string) (*os.Root, error) {
+	root, err := safepath.OpenRoot(ctx, absolute)
+	if !errors.Is(err, os.ErrNotExist) {
+		return root, err
+	}
+	parentName := filepath.Dir(absolute)
+	if parentName == absolute {
+		return nil, err
+	}
+	parent, err := createDataRoot(ctx, parentName)
+	if err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err == nil {
+		err = parent.Mkdir(filepath.Base(absolute), 0700)
+		if errors.Is(err, os.ErrExist) {
+			err = nil
+		}
+	}
+	closeErr := parent.Close()
+	if err != nil || closeErr != nil {
+		return nil, errors.Join(err, closeErr)
+	}
+	return safepath.OpenRoot(ctx, absolute)
+}
+
 func (s *Service) Create(ctx context.Context, actor domain.User, d Draft) (Detail, error) {
 	if err := adminOnly(actor); err != nil {
 		return Detail{}, err
@@ -204,10 +235,15 @@ func (s *Service) Create(ctx context.Context, actor domain.User, d Draft) (Detai
 	if err != nil {
 		return Detail{}, err
 	}
-	if err = os.MkdirAll(filepath.Dir(dirs.Root), 0700); err != nil {
+	data, err := createDataRoot(ctx, s.paths.dataDir)
+	if err != nil {
+		return Detail{}, fmt.Errorf("open instance data directory: %w", err)
+	}
+	defer data.Close()
+	if err = data.MkdirAll("instances", 0700); err != nil {
 		return Detail{}, fmt.Errorf("create instance parent: %w", err)
 	}
-	parent, err := os.OpenRoot(filepath.Dir(dirs.Root))
+	parent, err := safepath.OpenRoot(ctx, filepath.Dir(dirs.Root))
 	if err != nil {
 		return Detail{}, err
 	}
@@ -356,7 +392,7 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 		if err != nil {
 			return err
 		}
-		root, err := os.OpenRoot(dirs.Root)
+		root, err := safepath.OpenRoot(ctx, dirs.Root)
 		if err != nil {
 			return fmt.Errorf("open instance root: %w", err)
 		}
@@ -499,7 +535,7 @@ func (s *Service) Delete(ctx context.Context, actor domain.User, id, confirmatio
 		if err != nil {
 			return err
 		}
-		parent, err := os.OpenRoot(filepath.Dir(dirs.Root))
+		parent, err := safepath.OpenRoot(ctx, filepath.Dir(dirs.Root))
 		if err != nil {
 			return err
 		}
