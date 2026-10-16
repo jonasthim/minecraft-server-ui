@@ -2,11 +2,14 @@ package instance
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
@@ -409,5 +412,208 @@ func TestPaperBuildIsNumericPinnedSelection(t *testing.T) {
 	d.Instance.LoaderVersion = "latest"
 	if _, e = s.Create(ctx, admin, d); domain.AsError(e).Code != domain.CodeValidationFailed {
 		t.Fatal(e)
+	}
+}
+
+func TestReplayPartialCleanupAfterInnerOwnerMarkerWasRemoved(t *testing.T) {
+	s, p, _ := setup(t)
+	ctx := context.Background()
+	_, err := s.Create(ctx, admin, draft("alpha", 25565))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := s.ownerToken(ctx, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := stageDeletion(t, s, p, "alpha", true)
+	if err = os.WriteFile(staged+".owner", []byte(token), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(staged, "server", "remaining-world"), []byte("world"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.RemoveAll(filepath.Join(staged, "state")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Reconcile(ctx); err != nil {
+		t.Fatal("partial deletion cannot resume", err)
+	}
+	for _, path := range []string{staged, staged + ".owner"} {
+		if _, err = os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("cleanup residue", path, err)
+		}
+	}
+}
+func TestFailedSavePreservesExactUnknownFilePropertyBytes(t *testing.T) {
+	s, p, _ := setup(t)
+	ctx := context.Background()
+	d, err := s.Create(ctx, admin, draft("alpha", 25565))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs, _ := p.For("alpha")
+	properties := filepath.Join(dirs.Server, "server.properties")
+	original, err := os.ReadFile(properties)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original = append(original, []byte("# externally added\nmod.flag : keep-this-value\n")...)
+	if err = os.WriteFile(properties, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(dirs.Server, "eula.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(filepath.Join(dirs.Server, "eula.txt"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	d.Config.MOTD = "Failed change"
+	if _, err = s.Update(ctx, admin, "alpha", Draft{Instance: d.Instance, Config: d.Config}); err == nil {
+		t.Fatal("save unexpectedly succeeded")
+	}
+	after, err := os.ReadFile(properties)
+	if err != nil || string(after) != string(original) {
+		t.Fatalf("failed save rewrote original properties: %s; err=%v", after, err)
+	}
+}
+func TestMaterializePreservesUnrelatedFileOnlyProperties(t *testing.T) {
+	s, p, _ := setup(t)
+	ctx := context.Background()
+	_, err := s.Create(ctx, admin, draft("alpha", 25565))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs, _ := p.For("alpha")
+	path := filepath.Join(dirs.Server, "server.properties")
+	if err = os.WriteFile(path, []byte("motd=not-canonical\nmod.flag=preserve-me\nenable-rcon=true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Materialize(ctx, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(raw), "mod.flag=preserve-me") {
+		t.Fatal(string(raw), err)
+	}
+	if strings.Contains(string(raw), "not-canonical") || strings.Contains(string(raw), "enable-rcon=true") {
+		t.Fatal("managed settings not canonical", string(raw))
+	}
+}
+
+func TestPartialCleanupPermissionErrorRetainsExternalOwnership(t *testing.T) {
+	if runtime.GOOS != "linux" || os.Geteuid() == 0 {
+		t.Skip("requires Linux directory permission enforcement")
+	}
+	s, p, _ := setup(t)
+	ctx := context.Background()
+	_, err := s.Create(ctx, admin, draft("alpha", 25565))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs, _ := p.For("alpha")
+	blocked := filepath.Join(dirs.Server, "blocked")
+	if err = os.Mkdir(blocked, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(blocked, "world"), []byte("world"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(blocked, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Delete(ctx, admin, "alpha", "alpha"); err == nil {
+		t.Fatal("cleanup unexpectedly succeeded")
+	}
+	var stagedName string
+	if err = s.db.QueryRow(`SELECT staged_name FROM instance_mutations WHERE instance_id='alpha'`).Scan(&stagedName); err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(filepath.Dir(dirs.Root), stagedName)
+	defer os.Chmod(filepath.Join(staged, "server", "blocked"), 0700)
+	if _, err = os.Stat(staged + ".owner"); err != nil {
+		t.Fatal("ownership proof lost", err)
+	}
+	if _, err = os.Stat(filepath.Join(staged, "state", "instance-owner")); !os.IsNotExist(err) {
+		t.Fatal("test did not reach partial marker deletion", err)
+	}
+	if err = os.Chmod(filepath.Join(staged, "server", "blocked"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Reconcile(ctx); err != nil {
+		t.Fatal("retry after permissions repaired", err)
+	}
+}
+func TestInterruptedConfigIntentPreservesBeforeExtrasAndRejectsFailedNewExtras(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before-commit", true: "after-commit"}[committed], func(t *testing.T) {
+			s, p, _ := setup(t)
+			ctx := context.Background()
+			d, err := s.Create(ctx, admin, draft("alpha", 25565))
+			if err != nil {
+				t.Fatal(err)
+			}
+			dirs, _ := p.For("alpha")
+			root, err := os.OpenRoot(dirs.Root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			original, err := os.ReadFile(filepath.Join(dirs.Server, "server.properties"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			original = append(original, []byte("mod.external=keep-before\n")...)
+			if err = os.WriteFile(filepath.Join(dirs.Server, "server.properties"), original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			before, err := snapshotManaged(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			token, err := s.ownerToken(ctx, "alpha")
+			if err != nil {
+				t.Fatal(err)
+			}
+			afterRevision := d.Instance.UpdatedAt.Add(time.Second)
+			if err = persistConfigIntent(ctx, root, configIntent{OwnerToken: token, BeforeUpdatedAt: d.Instance.UpdatedAt, AfterUpdatedAt: afterRevision, Before: before}); err != nil {
+				t.Fatal(err)
+			}
+			proposed := d.Config
+			proposed.MOTD = "Proposed"
+			proposed.Extra = map[string]string{"mod.external": "keep-before", "mod.new": "proposed-only"}
+			if err = writeManaged(ctx, root, d.Instance, proposed, EULA{Accepted: true}); err != nil {
+				t.Fatal(err)
+			}
+			if committed {
+				raw, _ := json.Marshal(proposed)
+				if _, err = s.db.Exec(`UPDATE instances SET config_json=?,updated_at=? WHERE id='alpha'`, string(raw), afterRevision.Format(time.RFC3339Nano)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = s.Materialize(ctx, "alpha"); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(filepath.Join(dirs.Server, "server.properties"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(raw), "mod.external=keep-before") {
+				t.Fatal("preexisting unknown lost", string(raw))
+			}
+			if strings.Contains(string(raw), "mod.new=proposed-only") != committed {
+				t.Fatal("failed intent was adopted or committed intent lost", string(raw))
+			}
+			if strings.Contains(string(raw), "motd=Proposed") != committed {
+				t.Fatal("incorrect known-setting revision", string(raw))
+			}
+			eula, err := os.ReadFile(filepath.Join(dirs.Server, "eula.txt"))
+			if err != nil || string(eula) != "eula=false\n" {
+				t.Fatal("unaccepted EULA survived", string(eula), err)
+			}
+			if _, err = os.Stat(filepath.Join(dirs.State, "config.pending.json")); !os.IsNotExist(err) {
+				t.Fatal("intent retained", err)
+			}
+		})
 	}
 }

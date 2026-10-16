@@ -115,6 +115,17 @@ func (s *Service) materialize(ctx context.Context, id string) error {
 	if err = s.verifyOwner(ctx, id, root); err != nil {
 		return err
 	}
+	if err = s.recoverConfig(ctx, root, d); err != nil {
+		return err
+	}
+	extras, err := unknownProperties(root)
+	if err != nil {
+		return err
+	}
+	mergeFileOnlyExtras(&d.Config, extras, d.Config.Extra)
+	if err = ValidateConfig(d.Config); err != nil {
+		return err
+	}
 	return writeManaged(ctx, root, d.Instance, d.Config, d.EULA)
 }
 func (s *Service) ownerToken(ctx context.Context, id string) (string, error) {
@@ -198,7 +209,24 @@ func (s *Service) recoverDeletion(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	stagedExists, err := existsOwned(staged)
+	proofPresent, err := cleanupProof(parent, staged, token)
+	if err != nil {
+		return err
+	}
+	stagedExists := false
+	if proofPresent {
+		info, statErr := parent.Lstat(staged)
+		if statErr == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return domain.E(domain.CodeConflict, "cleanup journal path is not a directory")
+			}
+			stagedExists = true
+		} else if !os.IsNotExist(statErr) {
+			return statErr
+		}
+	} else {
+		stagedExists, err = existsOwned(staged)
+	}
 	if err != nil {
 		return err
 	}
@@ -209,6 +237,9 @@ func (s *Service) recoverDeletion(ctx context.Context, id string) error {
 		return err
 	}
 	if present {
+		if proofPresent {
+			return domain.E(domain.CodeConflict, "cleanup proof exists for an undeleted instance")
+		}
 		current, err := s.ownerToken(ctx, id)
 		if err != nil {
 			return err
@@ -226,19 +257,93 @@ func (s *Service) recoverDeletion(ctx context.Context, id string) error {
 			if err = parent.Rename(staged, id); err != nil {
 				return fmt.Errorf("restore interrupted deletion: %w", err)
 			}
+			if err = syncDirectory(parent, "."); err != nil {
+				return err
+			}
 		}
 	} else {
 		if original {
 			return domain.E(domain.CodeConflict, "deleted instance has an unexpected original directory")
 		}
 		if stagedExists {
-			if err = parent.RemoveAll(staged); err != nil {
+			if err = cleanupOwnedDeletion(ctx, parent, staged, token); err != nil {
 				return fmt.Errorf("finish interrupted deletion: %w", err)
 			}
+		}
+	}
+	if proofPresent && !stagedExists {
+		if err = syncDirectory(parent, "."); err != nil {
+			return err
+		}
+		if err = parent.Remove(staged + ".owner"); err != nil && !os.IsNotExist(err) {
+			return err
 		}
 	}
 	if _, err = s.db.ExecContext(ctx, `DELETE FROM instance_mutations WHERE instance_id=?`, id); err != nil {
 		return fmt.Errorf("clear recovered instance journal: %w", err)
 	}
 	return nil
+}
+
+// The authenticated sibling proof survives deletion of any subtree, including
+// state/instance-owner. A failed RemoveAll or process interruption can therefore
+// resume without weakening ownership validation for unrelated directories.
+func cleanupProof(parent *os.Root, staged, token string) (bool, error) {
+	name := staged + ".owner"
+	info, err := parent.Lstat(name)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, domain.E(domain.CodeConflict, "cleanup proof is not a regular file")
+	}
+	f, err := parent.Open(name)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, 1024))
+	if err != nil {
+		return false, err
+	}
+	if token == "" || subtle.ConstantTimeCompare(raw, []byte(token)) != 1 {
+		return false, domain.E(domain.CodeConflict, "cleanup ownership proof does not match its durable journal")
+	}
+	return true, nil
+}
+func cleanupOwnedDeletion(ctx context.Context, parent *os.Root, staged, token string) error {
+	proof, err := cleanupProof(parent, staged, token)
+	if err != nil {
+		return err
+	}
+	if !proof {
+		root, err := parent.OpenRoot(staged)
+		if err != nil {
+			return err
+		}
+		err = verifyToken(root, token)
+		root.Close()
+		if err != nil {
+			return err
+		}
+		if err = atomicFile(ctx, parent, staged+".owner", []byte(token)); err != nil {
+			return fmt.Errorf("persist cleanup ownership proof: %w", err)
+		}
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if err = parent.RemoveAll(staged); err != nil {
+		return err
+	}
+	if err = syncDirectory(parent, "."); err != nil {
+		return err
+	}
+	if err = parent.Remove(staged + ".owner"); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return syncDirectory(parent, ".")
 }

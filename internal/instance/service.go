@@ -354,20 +354,22 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 		if err = s.verifyOwner(ctx, id, root); err != nil {
 			return err
 		}
+		if err = s.recoverConfig(ctx, root, previous); err != nil {
+			return err
+		}
+		token, err := s.ownerToken(ctx, id)
+		if err != nil {
+			return err
+		}
+		originalFiles, err := snapshotManaged(root)
+		if err != nil {
+			return err
+		}
 		existingExtras, err := unknownProperties(root)
 		if err != nil {
 			return domain.Wrap(domain.CodeValidationFailed, "existing server.properties cannot be safely read", err)
 		}
-		for key, value := range existingExtras {
-			if _, known := previous.Config.Extra[key]; !known {
-				if _, present := d.Config.Extra[key]; !present {
-					if d.Config.Extra == nil {
-						d.Config.Extra = map[string]string{}
-					}
-					d.Config.Extra[key] = value
-				}
-			}
-		}
+		mergeFileOnlyExtras(&d.Config, existingExtras, previous.Config.Extra)
 		if err = ValidateConfig(d.Config); err != nil {
 			return err
 		}
@@ -388,6 +390,9 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 		}
 		d.Instance.CreatedAt = previous.Instance.CreatedAt
 		d.Instance.UpdatedAt = time.Now().UTC()
+		if !d.Instance.UpdatedAt.After(previous.Instance.UpdatedAt) {
+			d.Instance.UpdatedAt = previous.Instance.UpdatedAt.Add(time.Nanosecond)
+		}
 		eula := previous.EULA
 		newAcceptance := d.AcceptEULA && !eula.Accepted
 		if newAcceptance {
@@ -414,20 +419,23 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 		if err = audit(ctx, tx, actor, id, "instance.update"); err != nil {
 			return err
 		}
+		if err = persistConfigIntent(ctx, root, configIntent{OwnerToken: token, BeforeUpdatedAt: previous.Instance.UpdatedAt, AfterUpdatedAt: d.Instance.UpdatedAt, Before: originalFiles}); err != nil {
+			return err
+		}
 		if err = writeManaged(ctx, root, d.Instance, d.Config, eula); err != nil {
 			cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			restoreErr := writeManaged(cleanup, root, previous.Instance, previous.Config, previous.EULA)
+			restoreErr := rollbackConfig(cleanup, root, originalFiles)
 			return errors.Join(err, restoreErr)
 		}
 		if err = tx.Commit(); err != nil {
 			cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			restoreErr := writeManaged(cleanup, root, previous.Instance, previous.Config, previous.EULA)
+			restoreErr := rollbackConfig(cleanup, root, originalFiles)
 			return errors.Join(fmt.Errorf("commit configuration: %w", err), restoreErr)
 		}
 		result = Detail{d.Instance, d.Config, eula, previous.Provisioning}
-		return nil
+		return clearConfigIntent(root)
 	})
 	return result, err
 }
@@ -498,10 +506,13 @@ func (s *Service) Delete(ctx context.Context, actor domain.User, id, confirmatio
 		if err = parent.Rename(id, trash); err != nil {
 			return fmt.Errorf("stage instance deletion: %w", err)
 		}
+		if err = syncDirectory(parent, "."); err != nil {
+			return errors.Join(err, parent.Rename(trash, id))
+		}
 		if err = tx.Commit(); err != nil {
 			return errors.Join(fmt.Errorf("commit deletion: %w", err), parent.Rename(trash, id))
 		}
-		if err = parent.RemoveAll(trash); err != nil {
+		if err = cleanupOwnedDeletion(ctx, parent, trash, token); err != nil {
 			return domain.Wrap(domain.CodeInternal, "instance record deleted; private directory cleanup remains journaled for reconciliation", err)
 		}
 		if _, err = s.db.ExecContext(ctx, `DELETE FROM instance_mutations WHERE instance_id=?`, id); err != nil {
@@ -555,5 +566,5 @@ func atomicFile(ctx context.Context, root *os.Root, path string, data []byte) er
 	if err = root.Rename(tmp, path); err != nil {
 		return fmt.Errorf("activate instance file: %w", err)
 	}
-	return nil
+	return syncDirectory(root, filepath.Dir(path))
 }

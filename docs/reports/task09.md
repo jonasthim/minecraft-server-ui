@@ -61,3 +61,27 @@ Tests cover two isolated instances and survival of the other after deletion; EUL
 - Port reservation is within this manager database; external applications can still occupy ports. Actual server startup must report real bind failures.
 - Property preservation uses bounded text parsing and intentionally excludes manager-owned control/credential properties. Exact distribution/version compatibility remains the provider's responsibility.
 - No extra dependencies, database fixtures, uploads, imports, runtime-cache deletion, staging or commits were introduced by this worker.
+
+## Review fix round 1 — base 4092144
+
+Both Important findings and the related startup-preservation issue were reproduced before correction. The focused regression command was:
+
+`go test ./internal/instance -run 'TestReplayPartialCleanup|TestFailedSavePreserves|TestMaterializePreserves' -count=1`
+
+It failed for all three expected reasons: a removed inner ownership marker blocked deletion replay; a failed EULA activation stripped a newly discovered unknown property from compensation; and startup materialization erased a file-only unknown property.
+
+### Changes
+
+- Cleanup now writes an authenticated sibling proof, `<journaled-staged-name>.owner`, outside the recursively removed directory before deleting any subtree. The exact persisted journal token authenticates that proof. It remains until the staged directory is completely removed, so partial `RemoveAll` and process interruption can resume even after `state/instance-owner` disappears. Invalid proof files, symlinks, conflicting original roots and unrelated directories still fail closed. Linux directory metadata is synced before advancing durable cleanup boundaries.
+- Update preflights and snapshots the exact original server.properties and eula.txt bytes. A nonregular managed path fails before any activation. A private, ownership-checked `state/config.pending.json` records those bounded snapshots plus the before/after DB revision before activating updated files. Ordinary compensation restores exact original bytes, including comments and file-only extras. An incomplete rollback retains its recovery intent.
+- Guarded startup/materialization first resolves any pending config intent against the persisted DB revision. An uncommitted update restores its before snapshot; a committed update retains the committed settings. It then materializes known settings and DB-tracked extras canonically while preserving unrelated, safe file-only properties. This prevents failed proposed extra properties from being silently accepted during startup.
+- File-only edits made after a pending transaction's snapshot cannot be distinguished from that transaction's proposed bytes. Recovery intentionally restores the recorded before snapshot for an uncommitted transaction. With no pending transaction, unrelated file-only extras are preserved. World files are never part of these snapshots or rewound by this flow.
+- No API, frontend, main wiring or lifecycle-session interface was changed in this fix round. The proposed explicit current-job admission/session interface remains separate future integration work.
+
+### Verification
+
+`go test ./internal/instance -run 'TestPartialCleanupPermission|TestInterruptedConfigIntent|TestReplayPartialCleanup|TestFailedSavePreserves|TestMaterializePreserves' -count=1 -v`: PASS. On this Linux user session the real permission-failure case ran without skipping: RemoveAll left the blocked server subtree after deleting its inner owner marker, then replay completed after permissions were repaired. Before-commit and after-commit config intents both recovered with the expected extras and canonical false EULA.
+
+`go test -race ./internal/instance ./internal/api`: PASS (`internal/instance` 2.473s, `internal/api` 1.815s in the final scoped run).
+
+Changed files for this fix: internal/instance/service.go, reconcile.go, service_test.go; new config_recovery.go, sync_linux.go and sync_other.go; this report. The non-Linux directory-sync helper retains portable file fsync/rename behavior; native Windows power-loss durability is still unqualified. No frontend checks were repeated because no frontend files changed. Independent scoped re-review and integrator acceptance remain pending.
