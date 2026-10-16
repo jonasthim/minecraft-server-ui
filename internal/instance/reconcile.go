@@ -126,7 +126,11 @@ func (s *Service) materialize(ctx context.Context, id string) error {
 	if err = ValidateConfig(d.Config); err != nil {
 		return err
 	}
-	return writeManaged(ctx, root, d.Instance, d.Config, d.EULA)
+	management, err := s.optionalManagement(ctx, id)
+	if err != nil {
+		return err
+	}
+	return writeManaged(ctx, root, d.Instance, d.Config, d.EULA, management)
 }
 func (s *Service) ownerToken(ctx context.Context, id string) (string, error) {
 	var token string

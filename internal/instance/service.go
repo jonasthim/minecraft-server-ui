@@ -174,9 +174,9 @@ func audit(ctx context.Context, tx *sql.Tx, actor domain.User, id, action string
 }
 func portFree(ctx context.Context, tx *sql.Tx, id string, port int) error {
 	var exists int
-	err := tx.QueryRowContext(ctx, `SELECT 1 FROM instances WHERE game_port=? AND id<>?`, port, id).Scan(&exists)
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM instance_tcp_ports WHERE port=? AND NOT(instance_id=? AND kind='game')`, port, id).Scan(&exists)
 	if err == nil {
-		return domain.E(domain.CodePortInUse, "game port is reserved by another instance")
+		return domain.E(domain.CodePortInUse, "TCP port is reserved by another instance protocol")
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("check game port: %w", err)
@@ -381,6 +381,10 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 		if err = ValidateConfig(d.Config); err != nil {
 			return err
 		}
+		management, err := s.optionalManagement(ctx, id)
+		if err != nil {
+			return err
+		}
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
@@ -430,7 +434,7 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 		if err = persistConfigIntent(ctx, root, configIntent{OwnerToken: token, BeforeUpdatedAt: previous.Instance.UpdatedAt, AfterUpdatedAt: d.Instance.UpdatedAt, Before: originalFiles}); err != nil {
 			return err
 		}
-		if err = writeManaged(ctx, root, d.Instance, d.Config, eula); err != nil {
+		if err = writeManaged(ctx, root, d.Instance, d.Config, eula, management); err != nil {
 			cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			restoreErr := rollbackConfig(cleanup, root, originalFiles)
@@ -537,8 +541,12 @@ func randomID() (string, error) {
 	}
 	return hex.EncodeToString(b[:]), nil
 }
-func writeManaged(ctx context.Context, root *os.Root, i domain.Instance, c domain.InstanceConfig, e EULA) error {
-	if err := atomicFile(ctx, root, "server/server.properties", Properties(i, c)); err != nil {
+func writeManaged(ctx context.Context, root *os.Root, i domain.Instance, c domain.InstanceConfig, e EULA, management ...*ManagementConfig) error {
+	var private *ManagementConfig
+	if len(management) > 0 {
+		private = management[0]
+	}
+	if err := atomicFile(ctx, root, "server/server.properties", propertiesWithManagement(i, c, private)); err != nil {
 		return err
 	}
 	value := "eula=false\n"

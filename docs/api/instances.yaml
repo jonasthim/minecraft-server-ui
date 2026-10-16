@@ -903,7 +903,7 @@
           "scope": {
             "type": "string",
             "enum": [
-              "all_discovered_worlds"
+              "native_server_rules"
             ]
           },
           "verification": {

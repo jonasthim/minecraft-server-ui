@@ -21,7 +21,7 @@ type SettingCapability struct {
 }
 
 // DesiredRuntimeSetting describes a requirement, never an applied/effective value.
-// Task10 must discover the rule, apply it to all appropriate worlds and read it
+// Task10 must discover the rule, apply the native server rule and read it
 // back. Unsupported requirements block readiness instead of silently succeeding.
 type DesiredRuntimeSetting struct {
 	Kind           string                  `json:"kind"`
@@ -125,7 +125,7 @@ func SettingsFor(i domain.Instance, c domain.InstanceConfig) SettingsProjection 
 		out.PVP = SettingCapability{false, "unsupported", reason}
 	}
 	out.PVP.Reason = reason
-	out.DesiredRuntime = []DesiredRuntimeSetting{{Kind: "boolean_gamerule", Rule: rule, Value: c.PVP, Status: "unverified", Supported: supported, Reason: reason, Source: source, Applicability: domain.VersionSelection{Flavor: i.Flavor, MinecraftVersion: i.MinecraftVersion, LoaderVersion: i.LoaderVersion}, Scope: "all_discovered_worlds", Verification: "native_rule_readback", GameplayEffect: "not_verified"}}
+	out.DesiredRuntime = []DesiredRuntimeSetting{{Kind: "boolean_gamerule", Rule: rule, Value: c.PVP, Status: "unverified", Supported: supported, Reason: reason, Source: source, Applicability: domain.VersionSelection{Flavor: i.Flavor, MinecraftVersion: i.MinecraftVersion, LoaderVersion: i.LoaderVersion}, Scope: "native_server_rules", Verification: "native_rule_readback", GameplayEffect: "not_verified"}}
 	return out
 }
 

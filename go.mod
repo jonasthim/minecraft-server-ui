@@ -3,6 +3,7 @@ module github.com/jonasthim/minecraft-server-ui
 go 1.27.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/pressly/goose/v3 v3.28.0
 	gopkg.in/yaml.v3 v3.0.1

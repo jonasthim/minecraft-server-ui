@@ -2040,6 +2040,918 @@
           }
         }
       }
+    },
+    "/api/v1/instances/{instanceId}/console/logs": {
+      "get": {
+        "operationId": "consoleLogs",
+        "tags": [
+          "console"
+        ],
+        "summary": "Viewer: bounded redacted durable console history. Cursor replay discloses retention gaps.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope or CSRF denied"
+          },
+          "404": {
+            "description": "Instance not found"
+          },
+          "409": {
+            "description": "Instance admission busy"
+          },
+          "422": {
+            "description": "Unsupported command or invalid cursor/input"
+          },
+          "503": {
+            "description": "Native control or stream capacity unavailable"
+          },
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsolePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/console/status": {
+      "get": {
+        "operationId": "consoleStatus",
+        "tags": [
+          "console"
+        ],
+        "summary": "Viewer: native readiness, process state and required native settings are separate.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope or CSRF denied"
+          },
+          "404": {
+            "description": "Instance not found"
+          },
+          "409": {
+            "description": "Instance admission busy"
+          },
+          "422": {
+            "description": "Unsupported command or invalid cursor/input"
+          },
+          "503": {
+            "description": "Native control or stream capacity unavailable"
+          },
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleStateResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/console/events": {
+      "get": {
+        "operationId": "consoleEvents",
+        "tags": [
+          "console"
+        ],
+        "summary": "Viewer: bounded SSE console snapshots; absolute 30 second authorization lifetime, 64 total subscribers, Last-Event-ID replay.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope or CSRF denied"
+          },
+          "404": {
+            "description": "Instance not found"
+          },
+          "409": {
+            "description": "Instance admission busy"
+          },
+          "422": {
+            "description": "Unsupported command or invalid cursor/input"
+          },
+          "503": {
+            "description": "Native control or stream capacity unavailable"
+          },
+          "200": {
+            "description": "SSE console event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "id: cursor; event: console; data: ConsoleEvent JSON. Reconnect reauthenticates and replays retained lines."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/console/commands": {
+      "post": {
+        "operationId": "consoleCommands",
+        "tags": [
+          "console"
+        ],
+        "summary": "Operator: queue exact list or say command. Admin and admin token scope required for seed. Transport delivery alone does not acknowledge execution.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope or CSRF denied"
+          },
+          "404": {
+            "description": "Instance not found"
+          },
+          "409": {
+            "description": "Instance admission busy"
+          },
+          "422": {
+            "description": "Unsupported command or invalid cursor/input"
+          },
+          "503": {
+            "description": "Native control or stream capacity unavailable"
+          },
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job": {
+                      "$ref": "#/components/schemas/Job"
+                    }
+                  },
+                  "required": [
+                    "job"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsoleCommandRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/world": {
+      "get": {
+        "operationId": "worldDiscover",
+        "tags": [
+          "worlds"
+        ],
+        "summary": "Viewer: discover the one configured saved world and standard/custom dimension paths. Observed directories and configured version are provenance, not compatibility qualification.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instanceId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Discovery succeeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldDiscoveryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required; includes expired/revoked token or disabled owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Viewer cannot export",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance or saved world absent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instance/export busy, ambiguous layout, or source changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unsafe path/link/special file, credential candidate, or export bounds exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Archive or required audit failed before HTTP success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "World export is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/world/download": {
+      "get": {
+        "operationId": "worldDownload",
+        "tags": [
+          "worlds"
+        ],
+        "summary": "Operator: download a validated ZIP of configured world roots, preserving observed layout and player/custom dimension data, with explicit omissions in world-export.json. Live best-effort copy, not a point-in-time or save-lease backup. Stage and validate before HTTP success; queue reservation ends before transfer. Two global active exports; 100000 entries, 256 dimensions, depth32, component255 bytes, path4096 bytes, aggregate relative paths8MiB, per-file8GiB, source16GiB, archive16GiB+32MiB, capture10min, transfer10min. Read PAT scope permits GET subject to current owner operator/admin role.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instanceId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated world ZIP",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "headers": {
+              "X-Archive-SHA256": {
+                "description": "SHA256 of the validated ZIP",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-World-Consistency": {
+                "description": "Always best-effort-live-copy",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "best-effort-live-copy"
+                  ]
+                }
+              },
+              "Content-Disposition": {
+                "description": "Attachment with safe instance-derived filename",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required; includes expired/revoked token or disabled owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Viewer cannot export",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance or saved world absent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instance/export busy, ambiguous layout, or source changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unsafe path/link/special file, credential candidate, or export bounds exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Archive or required audit failed before HTTP success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "World export is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/lifecycle/catalog": {
+      "get": {
+        "operationId": "lifecycleCatalog",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LifecycleCatalog"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "flavor",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "vanilla",
+                "paper",
+                "fabric",
+                "forge",
+                "neoforge"
+              ]
+            }
+          },
+          {
+            "name": "minecraft_version",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/instances/{instanceId}/lifecycle": {
+      "get": {
+        "operationId": "lifecycleState",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LifecycleState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "lifecycleOperate",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LifecycleJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecycleRequest"
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "instanceId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "/api/v1/instances/{instanceId}/lifecycle/preview": {
+      "post": {
+        "operationId": "lifecyclePreview",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LifecyclePreview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecycleSelection"
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "instanceId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
     }
   },
   "components": {
@@ -3605,7 +4517,7 @@
           "scope": {
             "type": "string",
             "enum": [
-              "all_discovered_worlds"
+              "native_server_rules"
             ]
           },
           "verification": {
@@ -3664,6 +4576,529 @@
           "pvp",
           "desired_runtime",
           "seed_reason"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleLine": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message": {
+            "type": "string"
+          },
+          "gap": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "message",
+          "gap"
+        ],
+        "additionalProperties": false
+      },
+      "ConsolePage": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsoleLine"
+            }
+          },
+          "next_cursor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "gap": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "lines",
+          "next_cursor",
+          "gap"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleState": {
+        "type": "object",
+        "properties": {
+          "process_running": {
+            "type": "boolean"
+          },
+          "control_connected": {
+            "type": "boolean"
+          },
+          "game_ready": {
+            "type": "boolean"
+          },
+          "required_settings_verified": {
+            "type": "boolean"
+          },
+          "ready_for_use": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "rule_scope": {
+            "type": "string"
+          },
+          "gameplay_effect": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "logs_available": {
+            "type": "boolean"
+          },
+          "logs_reason": {
+            "type": "string"
+          },
+          "logs_observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "process_running",
+          "control_connected",
+          "game_ready",
+          "required_settings_verified",
+          "ready_for_use",
+          "status",
+          "reason",
+          "source",
+          "rule_scope",
+          "gameplay_effect",
+          "observed_at",
+          "logs_available",
+          "logs_reason",
+          "logs_observed_at"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleEvent": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "$ref": "#/components/schemas/ConsolePage"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ConsoleState"
+          }
+        },
+        "required": [
+          "page",
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleStateResponse": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/ConsoleState"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleCommandRequest": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 516,
+            "description": "Exact lowercase list, say plain text (1\u2013512 UTF-8 bytes, no selectors), or admin seed. No aliases, wrappers, lifecycle/save/config or player-privilege commands."
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "WorldOmission": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "reason"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "WorldDimension": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "path",
+          "state",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "Validated path relative to the instance server root. Never an absolute filesystem path."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "present",
+              "absent"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "custom",
+              "unknown"
+            ]
+          }
+        }
+      },
+      "WorldDiscovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "level_name",
+          "state",
+          "layout",
+          "minecraft_version",
+          "flavor",
+          "provenance",
+          "dimensions",
+          "warnings",
+          "omitted",
+          "consistency"
+        ],
+        "properties": {
+          "level_name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "absent",
+              "present",
+              "ambiguous",
+              "unsupported"
+            ]
+          },
+          "layout": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "paper_legacy",
+              "namespaced_26_1",
+              "unknown"
+            ]
+          },
+          "minecraft_version": {
+            "type": "string"
+          },
+          "flavor": {
+            "type": "string"
+          },
+          "provenance": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorldDimension"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "omitted": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorldOmission"
+            }
+          },
+          "consistency": {
+            "type": "string"
+          }
+        }
+      },
+      "WorldDiscoveryResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "world"
+        ],
+        "properties": {
+          "world": {
+            "$ref": "#/components/schemas/WorldDiscovery"
+          }
+        }
+      },
+      "LifecycleSelection": {
+        "type": "object",
+        "properties": {
+          "flavor": {
+            "type": "string",
+            "enum": [
+              "vanilla",
+              "paper",
+              "fabric",
+              "forge",
+              "neoforge"
+            ]
+          },
+          "minecraft_version": {
+            "type": "string"
+          },
+          "loader_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "flavor",
+          "minecraft_version"
+        ],
+        "additionalProperties": false
+      },
+      "LifecycleCatalog": {
+        "type": "object",
+        "properties": {
+          "versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "loaders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "qualification": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "versions",
+          "loaders",
+          "qualification"
+        ],
+        "additionalProperties": false
+      },
+      "LifecycleState": {
+        "type": "object",
+        "properties": {
+          "installed": {
+            "type": "boolean"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/LifecycleSelection"
+          },
+          "process": {
+            "type": "string"
+          },
+          "process_running": {
+            "type": "boolean"
+          },
+          "readiness": {
+            "type": "string"
+          },
+          "autostart_desired": {
+            "type": "boolean"
+          },
+          "autostart_applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "autostart_error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "installed",
+          "process",
+          "process_running",
+          "readiness",
+          "autostart_desired",
+          "autostart_applied"
+        ],
+        "additionalProperties": false
+      },
+      "LifecyclePreview": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/LifecycleSelection"
+          },
+          "requirements": {
+            "type": "object",
+            "properties": {
+              "java_major": {
+                "type": "integer"
+              },
+              "min_java_major": {
+                "type": "integer"
+              },
+              "max_java_major": {
+                "type": "integer"
+              },
+              "requires_installer": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "java_major",
+              "min_java_major",
+              "requires_installer"
+            ],
+            "additionalProperties": false
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "filename": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                },
+                "checksum": {
+                  "type": "object",
+                  "properties": {
+                    "algorithm": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "algorithm",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "filename",
+                "size",
+                "checksum"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "selection",
+          "requirements",
+          "artifacts",
+          "warnings",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "LifecycleRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "install",
+              "start",
+              "stop",
+              "restart",
+              "autostart",
+              "uninstall"
+            ]
+          },
+          "preview_id": {
+            "type": "string"
+          },
+          "countdown_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600,
+            "default": 300
+          },
+          "emergency": {
+            "type": "boolean",
+            "default": false
+          },
+          "confirmation": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "additionalProperties": false
+      },
+      "LifecycleJobResponse": {
+        "type": "object",
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          }
+        },
+        "required": [
+          "job"
         ],
         "additionalProperties": false
       }
