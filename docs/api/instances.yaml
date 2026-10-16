@@ -1,0 +1,738 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Instance CRUD and settings contract",
+    "version": "0.0.0"
+  },
+  "paths": {
+    "/api/v1/instances": {
+      "get": {
+        "operationId": "instancesList",
+        "tags": [
+          "instances"
+        ],
+        "summary": "Viewer: read instance metadata.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "instances": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/InstanceDetail"
+                      }
+                    }
+                  },
+                  "required": [
+                    "instances"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, token scope, or CSRF denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instance busy/running, duplicate id/port, or confirmation mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid config, unsafe paths, or unavailable version-change workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Native lifecycle verification unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "instancesCreate",
+        "tags": [
+          "instances"
+        ],
+        "summary": "Administrator: mutate instance; update/delete require stopped process and no active jobs.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "$ref": "#/components/schemas/InstanceDetail"
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, token scope, or CSRF denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instance busy/running, duplicate id/port, or confirmation mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid config, unsafe paths, or unavailable version-change workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Native lifecycle verification unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstanceDraft"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}": {
+      "get": {
+        "operationId": "instancesGet",
+        "tags": [
+          "instances"
+        ],
+        "summary": "Viewer: read instance metadata.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "$ref": "#/components/schemas/InstanceDetail"
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, token scope, or CSRF denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instance busy/running, duplicate id/port, or confirmation mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid config, unsafe paths, or unavailable version-change workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Native lifecycle verification unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "put": {
+        "operationId": "instancesUpdate",
+        "tags": [
+          "instances"
+        ],
+        "summary": "Administrator: mutate instance; update/delete require stopped process and no active jobs.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "$ref": "#/components/schemas/InstanceDetail"
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, token scope, or CSRF denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instance busy/running, duplicate id/port, or confirmation mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid config, unsafe paths, or unavailable version-change workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Native lifecycle verification unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstanceDraft"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "instancesDelete",
+        "tags": [
+          "instances"
+        ],
+        "summary": "Administrator: mutate instance; update/delete require stopped process and no active jobs.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, token scope, or CSRF denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instance busy/running, duplicate id/port, or confirmation mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid config, unsafe paths, or unavailable version-change workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Native lifecycle verification unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstanceDelete"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "InstanceSpec": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "flavor": {
+            "$ref": "#/components/schemas/Flavor"
+          },
+          "minecraft_version": {
+            "type": "string"
+          },
+          "loader_version": {
+            "type": "string",
+            "description": "Exact loader version; for Paper this carries the positive numeric pinned Paper build. Empty is allowed for an uninstalled draft; Vanilla requires empty."
+          },
+          "java_major": {
+            "type": "integer",
+            "description": "Optional legacy input; server derives this requirement using reviewed runtime selection rules. Exact published provider build compatibility is checked before installation."
+          },
+          "memory_mib": {
+            "type": "integer"
+          },
+          "game_port": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "flavor",
+          "minecraft_version",
+          "memory_mib",
+          "game_port"
+        ],
+        "additionalProperties": false
+      },
+      "InstanceConfig": {
+        "type": "object",
+        "properties": {
+          "motd": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "difficulty": {
+            "type": "string",
+            "enum": [
+              "peaceful",
+              "easy",
+              "normal",
+              "hard"
+            ]
+          },
+          "game_mode": {
+            "type": "string",
+            "enum": [
+              "survival",
+              "creative",
+              "adventure",
+              "spectator"
+            ]
+          },
+          "max_players": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "online_mode": {
+            "type": "boolean"
+          },
+          "pvp": {
+            "type": "boolean"
+          },
+          "view_distance": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 32
+          },
+          "simulation_distance": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 32
+          },
+          "level_name": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "level_seed": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "extra": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "motd",
+          "difficulty",
+          "game_mode",
+          "max_players",
+          "online_mode",
+          "pvp",
+          "view_distance",
+          "simulation_distance",
+          "level_name",
+          "level_seed",
+          "extra"
+        ]
+      },
+      "InstanceEULA": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "accepted_by": {
+            "type": "integer"
+          },
+          "accepted_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "additionalProperties": false
+      },
+      "InstanceDraft": {
+        "type": "object",
+        "properties": {
+          "instance": {
+            "$ref": "#/components/schemas/InstanceSpec"
+          },
+          "config": {
+            "$ref": "#/components/schemas/InstanceConfig"
+          },
+          "accept_eula": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "instance",
+          "config"
+        ],
+        "additionalProperties": false
+      },
+      "InstanceDetail": {
+        "type": "object",
+        "properties": {
+          "instance": {
+            "$ref": "#/components/schemas/Instance"
+          },
+          "config": {
+            "$ref": "#/components/schemas/InstanceConfig"
+          },
+          "eula": {
+            "$ref": "#/components/schemas/InstanceEULA"
+          },
+          "provisioning": {
+            "type": "string",
+            "description": "Truthful persisted provisioning state; creating metadata does not install a server."
+          }
+        },
+        "required": [
+          "instance",
+          "config",
+          "eula",
+          "provisioning"
+        ],
+        "additionalProperties": false
+      },
+      "InstanceDelete": {
+        "type": "object",
+        "properties": {
+          "confirmation": {
+            "type": "string",
+            "description": "Exact instance id; confirms permanent removal of server, world, logs and local backups."
+          }
+        },
+        "required": [
+          "confirmation"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

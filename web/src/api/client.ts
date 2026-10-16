@@ -12,7 +12,7 @@ export async function api<T=unknown>(path:string, options:RequestInit={}):Promis
  const headers=new Headers(options.headers);if(options.body!==undefined&&!headers.has('Content-Type'))headers.set('Content-Type','application/json');
  if(csrfToken)headers.set('X-CSRF-Token',csrfToken);
  const response=await fetch(url,{...options,method,headers,credentials:'same-origin'});
- if(!response.ok){const body=await response.json().catch(()=>({}));throw new APIError(body.error?.code??'request_failed',body.error?.message??`Request failed (${response.status})`,body.error?.fields??[])}
+ if(!response.ok){const body=await response.json().catch(()=>({}));throw new APIError(body.error?.code??'request_failed',body.error?.message??`Request failed (${response.status})`,body.error?.details?.fields??body.error?.fields??[])}
  if(response.status===204)return undefined as T;
  return response.json() as Promise<T>;
 }
