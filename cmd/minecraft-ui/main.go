@@ -10,6 +10,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/auth"
 	"github.com/jonasthim/minecraft-server-ui/internal/config"
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
+	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"github.com/jonasthim/minecraft-server-ui/web"
 	"io"
 	"log/slog"
@@ -65,11 +66,17 @@ func serve(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("embedded frontend: %w", err)
 	}
 	identity := auth.NewService(database, auth.Config{BaseURL: cfg.BaseURL, InsecureCookies: cfg.InsecureCookies}, log)
-	handler := api.NewRouter(api.Dependencies{DB: database, Logger: log, Web: frontend, Mount: func(r chi.Router) { api.MountAuth(r, identity) }})
+	queue := jobs.New(database, log)
+	// Feature packages register their approved durable handlers before Start.
+	if err := queue.Start(ctx); err != nil {
+		return err
+	}
+	handler := api.NewRouter(api.Dependencies{DB: database, Logger: log, Web: frontend, Mount: func(r chi.Router) { mountAPI(r, identity, queue) }})
 	server := &http.Server{Addr: cfg.Address, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
 	done := make(chan struct{})
-	defer close(done)
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		select {
 		case <-ctx.Done():
 			shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -82,8 +89,25 @@ func serve(ctx context.Context, cfg config.Config) error {
 		}
 	}()
 	log.Info("Minecraft manager listening", "address", cfg.Address, "version", version)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve HTTP: %w", err)
+	serveErr := server.ListenAndServe()
+	close(done)
+	<-shutdownDone // Finish draining HTTP before closing the shared database.
+	cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stopErr := queue.Stop(cleanup)
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
 	}
-	return nil
+	if serveErr != nil {
+		serveErr = fmt.Errorf("serve HTTP: %w", serveErr)
+	}
+	return errors.Join(serveErr, stopErr)
+}
+
+func mountAPI(r chi.Router, identity *auth.Service, queue *jobs.Service) {
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(identity.Authenticate, identity.CSRF)
+		identity.MountRoutes(r)
+		api.MountJobs(r, queue)
+	})
 }

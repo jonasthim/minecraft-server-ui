@@ -6,12 +6,12 @@ No package has final acceptance yet. Scaffolding, plans, mocks, and package-loca
 
 | ID | Work package | Depends on | Owner / boundaries | Acceptance evidence | Status |
 |---|---|---|---|---|---|
-| 01 | Foundation, contracts, build | — | Scaffold owner; shared contracts/build/router | Empty DB migration, Linux build/check, generated API types, frozen reviewed interfaces | Reviewed; fixes pending |
-| 02 | Identity, OIDC, tokens, authorization, audit | 01 interfaces; can start before review without shared wiring | `internal/auth`, `internal/audit`, identity handlers/migrations | First-admin flow, local/OIDC auth, scoped token revoke/expiry, role matrix, redacted audit | Reviewed; fixes pending |
+| 01 | Foundation, contracts, build | — | Scaffold owner; shared contracts/build/router | Empty DB migration, Linux build/check, generated API types, frozen reviewed interfaces | Review fixes approved; integration evidence pending |
+| 02 | Identity, OIDC, tokens, authorization, audit | 01 interfaces; can start before review without shared wiring | `internal/auth`, `internal/audit`, identity handlers/migrations | First-admin flow, local/OIDC auth, scoped token revoke/expiry, role matrix, redacted audit | Review fixes approved; integration evidence pending |
 | 03 | Jobs, events, streaming | 01 | `internal/jobs`, `internal/events`, job/event handlers | Durable states, authorized streaming, cancellation/recovery/slow subscriber evidence | In Progress |
-| 04 | Linux supervision | 01, 03, 06 | Linux supervisor and deploy files | Real systemd lifecycle, survives manager restart, deliberate stop never retries | Pending |
-| 05 | Windows supervision | 01, 03, 06 | Windows supervisor and deploy files | Real qualification on Windows 10/11 and Server 2019+; graceful stop/wait/autostart | Pending |
-| 06 | Temurin runtime manager | 01, 03 | `internal/runtime` | Official hash-verified runtime, atomic activation, compatibility matrix and failure tests | Implemented; review pending |
+| 04 | Linux supervision | 01, 03, 06 | Linux supervisor and deploy files | Real systemd lifecycle, survives manager restart, deliberate stop never retries | In Progress |
+| 05 | Windows supervision | 01, 03, 06 | Windows supervisor and deploy files | Real qualification on Windows 10/11 and Server 2019+; graceful stop/wait/autostart | Implementation in progress; native qualification pending |
+| 06 | Temurin runtime manager | 01, 03 | `internal/runtime` | Official hash-verified runtime, atomic activation, compatibility matrix and failure tests | Review round 1 fix in progress |
 | 07 | Vanilla and Paper | 01, 03, 06 | `internal/server/vanilla`, `paper` | Real tested install/launch/update and recovery for supported tuples | Pending |
 | 08 | Fabric, Forge, NeoForge | 01, 03, 06 | `internal/server/fabric`, `forge`, `neoforge` | Tested tuple matrix, version floors, pre-mutation rejection, recoverable activation | Pending |
 | 09 | Instances, ports, config | 01, 03 | `internal/instance`, instance handlers/UI | Multiple isolated instances, validation, safe paths, role gates | Pending |
@@ -48,3 +48,15 @@ No package has final acceptance yet. Scaffolding, plans, mocks, and package-loca
 - Task 06 implementation is commit `abacb69`, awaiting independent review. Root ran `env MINECRAFT_UI_RUNTIME_SMOKE=1 go test ./internal/runtime -run '^TestOfficialTemurinSmoke$' -v -count=1 -timeout=20m`: PASS in 9.10 seconds. Official Temurin 17.0.20.1+1 linux/x64 archive: 193252603 bytes, SHA-256 `3808d1d15e3ec6bd5b84057fb5d84c33d8a1536a258146bcea2e603fc726e08e`. Vendor/version/architecture execution and fresh-manager verified reuse passed. This verifies that runtime tuple; it does not qualify Minecraft combinations or Windows execution.
 - Development uses the exact browser origin `http://127.0.0.1:5173`, fixed Vite port and loopback binding. Production origin/CSRF rules remain strict. Environment examples distinguish standalone embedded serving from the two-process development command.
 - Future backup/schedule/metrics/catalog service boundaries are DTO/interface contracts only. No unimplemented endpoints or successful placeholder operations are exposed by adding these contracts.
+
+## Review and handoffs after a56777b
+
+- Task 01: fix round 1/5 (missing feature contracts and development origin addressed, 0 open; commit a56777b). Independent scoped review: spec PASS, quality APPROVE. Required integrated build/first-user checks remain tracked separately.
+- Task 02: fix round 1/5 (generated identity DTOs and OIDC mutation audit addressed, 0 open; commit a56777b). Independent scoped review: spec PASS, quality APPROVE. Empty-database browser evidence is being collected with Task 03.
+- Task 06: independent review requested changes for the historical official Temurin 16 vendor string, Eclipse Foundation. Strict Eclipse Adoptium-only checks reject that verified official build. Runtime fix worker owns a narrow normalization, regression and real Java 16 smoke; other reviewed installer boundaries had no Important/Critical findings.
+- Task 03 owner now has explicit composition ownership for jobs startup/drain, shared authenticated API group, /jobs route/navigation, and empty-database browser checks. No public generic job enqueue API is added.
+- Ruling: job SSE connections end after at most 30 seconds and reconnect through authentication; durable logs replay from a cursor and bounded client buffers deduplicate. This caps revocation staleness while preserving narrow feature interfaces. Cost if wrong: streams may require active session invalidation wiring before release.
+- Ruling: retain immutable Temurin caches until a complete instance/process reference graph exists. Cost if wrong: extra disk use; deleting a runtime still in use is avoided.
+- Ruling: canonical per-instance layout is dataDir/instances/<validatedID>/{server,logs,backups,state}; shared immutable runtimes use dataDir/runtimes. Supervisor owns state launch/control/identity records and logs; instance service owns safe path derivation. Cost if wrong: coordinated path migration before release.
+- Tasks 04/05 implement together under one native supervision owner because launcher lifetime, identity, command and watchdog protocols are shared. Native Windows and real systemd host qualification remain required and cannot be replaced by cross-builds or mocks.
+- Ruling: launcher arms a save lease and emits save-off as one serialized operation; generic commands cannot bypass the lease with save-off. Separately arming then writing could race expiry and disable saving after the watchdog fired. Task 13 still verifies command completion through Task 10 and releases before archive work. Cost if wrong: adjust the backup/launcher interface together.

@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../features/auth/AuthProvider'
 import { notifications } from '@mantine/notifications'
 import { useDisclosure } from '@mantine/hooks'
-import { IconCube, IconServer, IconUser, IconUsers, IconLock, IconHistory } from '@tabler/icons-react'
+import { IconCube, IconServer, IconUser, IconUsers, IconLock, IconHistory, IconListCheck } from '@tabler/icons-react'
 
 export function Shell({ children }: { children: ReactNode }) {
   const [opened, { toggle, close }] = useDisclosure()
@@ -12,6 +12,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const links = [
     { to: '/', label: 'Servers', icon: IconServer },
+    { to: '/jobs', label: 'Jobs', icon: IconListCheck },
     { to: '/account', label: 'Account', icon: IconUser },
     ...(user?.role === 'admin' ? [
       { to: '/users', label: 'Users', icon: IconUsers },

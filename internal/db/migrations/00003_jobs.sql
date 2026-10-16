@@ -1,0 +1,20 @@
+-- +goose Up
+ALTER TABLE jobs ADD COLUMN requested_by INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN payload TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE jobs ADD COLUMN progress INTEGER NOT NULL DEFAULT 0 CHECK(progress BETWEEN 0 AND 100);
+ALTER TABLE jobs ADD COLUMN cancellable INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE job_logs (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+ created_at TEXT NOT NULL,
+ message TEXT NOT NULL
+);
+CREATE INDEX job_logs_job_id ON job_logs(job_id,id);
+-- +goose Down
+DROP TABLE job_logs;
+ALTER TABLE jobs DROP COLUMN cancel_requested;
+ALTER TABLE jobs DROP COLUMN cancellable;
+ALTER TABLE jobs DROP COLUMN progress;
+ALTER TABLE jobs DROP COLUMN payload;
+ALTER TABLE jobs DROP COLUMN requested_by;

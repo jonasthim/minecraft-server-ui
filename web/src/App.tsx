@@ -6,6 +6,7 @@ import { AuthGate, useAuth } from './features/auth/AuthProvider'
 const AccountPage = lazy(() => import('./features/auth/AccountPage').then(m => ({ default: m.AccountPage })))
 const UsersPage = lazy(() => import('./features/auth/UsersPage').then(m => ({ default: m.UsersPage })))
 const OIDCSettingsPage = lazy(() => import('./features/auth/OIDCSettingsPage').then(m => ({ default: m.OIDCSettingsPage })))
+const JobsPage = lazy(() => import('./features/jobs').then(m => ({ default: m.JobsPage })))
 const AuditPage = lazy(() => import('./features/auth/AuditPage').then(m => ({ default: m.AuditPage })))
 import { Shell } from './layout/Shell'
 
@@ -17,6 +18,7 @@ function AdminOnly({ children }: { children: ReactNode }) {
 export default function App() {
   return <BrowserRouter><AuthGate><Shell><Suspense fallback={<Center mih={240}><Loader aria-label="Loading page" /></Center>}><Routes>
     <Route path="/" element={<ServersPage />} />
+    <Route path="/jobs" element={<JobsPage />} />
     <Route path="/account" element={<AccountPage />} />
     <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
     <Route path="/settings/auth" element={<AdminOnly><OIDCSettingsPage /></AdminOnly>} />

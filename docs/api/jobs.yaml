@@ -1,0 +1,527 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Jobs feature contract fragment",
+    "version": "0.0.0"
+  },
+  "paths": {
+    "/api/v1/jobs": {
+      "get": {
+        "operationId": "jobsList",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Viewer: latest 100 jobs; optional instance_id filter.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Job"
+                      }
+                    }
+                  },
+                  "required": [
+                    "jobs"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{jobId}": {
+      "get": {
+        "operationId": "jobsGet",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Viewer: durable public metadata; payload is never returned.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job": {
+                      "$ref": "#/components/schemas/Job"
+                    }
+                  },
+                  "required": [
+                    "job"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{jobId}/cancel": {
+      "post": {
+        "operationId": "jobsCancel",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Operator: cancel own cancellable job; administrator: any cancellable job. Running work remains running until cleanup completes.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job": {
+                      "$ref": "#/components/schemas/Job"
+                    }
+                  },
+                  "required": [
+                    "job"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for browser sessions; from /auth/me."
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{jobId}/logs": {
+      "get": {
+        "operationId": "jobsLogs",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Viewer: durable redacted log page; after cursor, limit up to 500.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "logs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/JobLog"
+                      }
+                    }
+                  },
+                  "required": [
+                    "logs"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{jobId}/logs/download": {
+      "get": {
+        "operationId": "jobsLogDownload",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Viewer: download up to 5 MiB of redacted job output; truncation is explicit.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{jobId}/events": {
+      "get": {
+        "operationId": "jobsEvents",
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Viewer: bounded live SSE progress/log events; reconnect reloads job and durable logs. Heartbeat every 15 seconds; each connection lasts at most 30 seconds (including permission revocation delay); closes on shutdown or slow reader; reconnect reauthorizes.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobEvent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, token scope, ownership, or CSRF denied"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "409": {
+            "description": "Cancellation is unsafe or unavailable"
+          },
+          "422": {
+            "description": "Invalid identifier or cursor"
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Job": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "phase": {
+            "type": "string"
+          },
+          "progress": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "error": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "requested_by": {
+            "type": "integer"
+          },
+          "cancellable": {
+            "type": "boolean"
+          },
+          "cancel_requested": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "state",
+          "phase",
+          "progress",
+          "created_at",
+          "requested_by",
+          "cancellable",
+          "cancel_requested"
+        ],
+        "additionalProperties": false
+      },
+      "JobLog": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "job_id",
+          "created_at",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "JobEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "progress",
+              "log"
+            ]
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          },
+          "log": {
+            "$ref": "#/components/schemas/JobLog"
+          }
+        },
+        "required": [
+          "type",
+          "job_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
