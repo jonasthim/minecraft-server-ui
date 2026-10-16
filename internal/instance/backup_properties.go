@@ -36,6 +36,17 @@ func BackupProperties(raw []byte) ([]byte, error) {
 	}
 	for scanner.Scan() {
 		part := scanner.Text()
+		// Comments terminate at their natural newline even when they end in a
+		// backslash. A continuation line is already property data, so its first
+		// non-whitespace # or ! must not start a comment.
+		if !continued {
+			trimmed := strings.TrimLeft(part, " \t\f")
+			if len(trimmed) > 0 && (trimmed[0] == '#' || trimmed[0] == '!') {
+				out.WriteString(part)
+				out.WriteByte('\n')
+				continue
+			}
+		}
 		original.WriteString(part)
 		original.WriteByte('\n')
 		if continued {

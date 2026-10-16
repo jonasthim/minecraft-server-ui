@@ -33,3 +33,9 @@ Main composition tests prove native prior-process handling precedes lease repair
 ## Qualification limits
 
 No Minecraft server was installed, launched, stopped, or EULA accepted in this task. No service was installed. Native Windows execution and real game/version/platform backup/watchdog qualification remain unestablished. A Windows cross-compile is recorded only as compilation evidence. Live player data and local addon databases are explicitly imperfect even with native save flushing; external databases are excluded.
+
+## Fix round 1/5 — property comment grammar
+
+Independent review of `17e7a50` reported one Important Task14 export issue: a natural Java-properties comment ending in a backslash consumed the following private-control property into the preserved comment. The worker reproduced the credential-retention failure before changing code. The narrow export fix recognizes `#`/`!` natural comments before continuation handling; comments end at their newline while existing continued key/value lines retain literal comment markers. Lease, watchdog, startup and restore admission code is unchanged by this fix round.
+
+A separately root-assigned follow-up found the same grammar defect in shared `unknownPropertiesAt`: an ordinary property after such a comment was silently lost during materialization/restoration. A temporary read-only Go overlay reproduced both `#` and `!` cases. Root explicitly delegated the same narrow correction and `properties_comment_test.go`; no unrelated parser refactor was made. See Task14's fix section for regression and scoped verification evidence. Independent rereview and ledger acceptance remain with the integrator; real game/native qualification remains pending.

@@ -54,3 +54,24 @@ The opt-in browser harness processes were intentionally interrupted after browse
 ## Remaining qualification
 
 Real Minecraft version/layout combinations and Linux/Windows native archive/restore/watchdog workflows are not qualified by these fixtures/browser tests. No EULA, game or service installation occurred. Windows rename/directory durability remains native-host qualification work. Preimages are intentionally retained for reviewed cleanup and may use extra disk space. Scheduler/update consumers are separate Tasks18/19 using the frozen admitted backup primitives. The integrator must review evidence and update the ledger before acceptance.
+
+## Fix round 1/5 — Important export finding and assigned shared-parser follow-up
+
+Review basis: `17e7a50` (current task dispatch HEAD `4cb6e0e` included unrelated map changes). The Important finding was reproduced before the fix: a line such as `# ordinary comment \` followed by `management-server-secret=private-value` was retained by `BackupProperties`, so a validated archive could include that manager credential. Java natural comments terminate at newline regardless of trailing backslash.
+
+`BackupProperties` now recognizes natural `#`/`!` comments, after optional property whitespace, before counting continuation backslashes. It preserves the existing comment bytes and ordinary configuration. Lines belonging to a genuine continued property are not reclassified as comments, so literal `#`/`!` value text stays intact and continued private values remain fully omitted.
+
+`TestBackupPropertiesCommentBackslashDoesNotHidePrivateControls` failed before the fix and passed afterward across 60 combinations: both comment markers, leading property whitespace, every known management/RCON control family, future-prefixed controls, escaped keys and continued keys. `TestBackupPropertiesCommentMarkersInsideContinuedValuesRemainData` verifies ordinary continued values are preserved and private continued values containing these markers are removed.
+
+Separately from the review finding, the worker inspected shared `unknownPropertiesAt` and reproduced ordinary-property loss after the same two comment markers with a temporary Go overlay. Root explicitly assigned a narrow `properties.go` follow-up and new `properties_comment_test.go`. The shared parser now skips natural comments before continuation handling. New regressions fail on the prior parser and pass with the fix, proving the following ordinary property survives, continued values beginning `#`/`!` remain data, and legitimate key/value continuations and escaped separators retain their decoded values.
+
+Fix-round verification, limited to the affected instance/backup packages while other workers are active:
+
+```
+go test ./internal/instance -run '^(TestBackupProperties|TestUnknownProperties)' -count=1
+go test ./internal/instance ./internal/backup -count=1
+go test -race ./internal/instance ./internal/backup -count=1
+go vet ./internal/instance ./internal/backup
+```
+
+Focused red/green, scoped normal tests, scoped race tests and vet all passed. No main/App/launcher changes, dependencies, staging, commits or real game/native qualification were made in this round. Independent scoped rereview and integrator ledger acceptance remain required.

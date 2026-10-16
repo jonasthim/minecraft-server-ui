@@ -40,6 +40,14 @@ func unknownPropertiesAt(root *os.Root, name string) (map[string]string, error) 
 	continued := false
 	for scanner.Scan() {
 		part := scanner.Text()
+		// Natural comment lines never continue. Within an existing property
+		// continuation, # and ! are ordinary key/value data instead.
+		if !continued {
+			trimmed := strings.TrimLeft(part, " \t\f")
+			if len(trimmed) > 0 && (trimmed[0] == '#' || trimmed[0] == '!') {
+				continue
+			}
+		}
 		if continued {
 			part = strings.TrimLeft(part, " \t\f")
 		}
