@@ -1,0 +1,899 @@
+paths:
+  /api/v1/auth/status:
+    get:
+      operationId: authStatus
+      tags:
+      - identity
+      summary: Read first-run and enabled login methods
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthStatus'
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+  /api/v1/auth/setup:
+    post:
+      operationId: authSetup
+      tags:
+      - identity
+      summary: Create the first administrator exactly once
+      security: []
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthUserResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupRequest'
+  /api/v1/auth/login:
+    post:
+      operationId: authLogin
+      tags:
+      - identity
+      summary: Sign in with a local account
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthUserResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+  /api/v1/auth/oidc/login:
+    get:
+      operationId: authOIDCLogin
+      tags:
+      - identity
+      summary: Begin OIDC code flow with PKCE and nonce
+      security: []
+      responses:
+        '302':
+          description: Success
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+  /api/v1/auth/oidc/callback:
+    get:
+      operationId: authOIDCCallback
+      tags:
+      - identity
+      summary: Complete verified OIDC flow and redirect locally
+      security: []
+      responses:
+        '302':
+          description: Success
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+  /api/v1/auth/me:
+    get:
+      operationId: authMe
+      tags:
+      - identity
+      summary: Read current account and session CSRF token
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthUserResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+  /api/v1/auth/logout:
+    post:
+      operationId: authLogout
+      tags:
+      - identity
+      summary: Revoke current browser session
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: Success
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: &id001
+          type: string
+        description: Session-bound token returned by GET /auth/me.
+  /api/v1/auth/password:
+    put:
+      operationId: authChangePassword
+      tags:
+      - identity
+      summary: Change local password and revoke other sessions
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: Success
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: *id001
+        description: Session-bound token returned by GET /auth/me.
+  /api/v1/auth/sessions:
+    get:
+      operationId: authSessions
+      tags:
+      - identity
+      summary: List own active browser sessions
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuthSession'
+                additionalProperties: false
+                required:
+                - sessions
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+  /api/v1/auth/sessions/{sessionId}:
+    delete:
+      operationId: authRevokeSession
+      tags:
+      - identity
+      summary: Revoke an owned browser session
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: Success
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: *id001
+        description: Session-bound token returned by GET /auth/me.
+      - name: sessionId
+        in: path
+        required: true
+        schema: *id001
+  /api/v1/auth/sessions/revoke-others:
+    post:
+      operationId: authRevokeOtherSessions
+      tags:
+      - identity
+      summary: Revoke every other browser session
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: Success
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: *id001
+        description: Session-bound token returned by GET /auth/me.
+  /api/v1/auth/tokens:
+    get:
+      operationId: authTokens
+      tags:
+      - identity
+      summary: List own token metadata without secrets
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tokens:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuthToken'
+                additionalProperties: false
+                required:
+                - tokens
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+    post:
+      operationId: authCreateToken
+      tags:
+      - identity
+      summary: Create a personal token with role-capped scopes
+      security:
+      - sessionCookie: []
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateTokenResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTokenRequest'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: *id001
+        description: Session-bound token returned by GET /auth/me.
+  /api/v1/auth/tokens/{id}:
+    delete:
+      operationId: authRevokeToken
+      tags:
+      - identity
+      summary: Revoke an owned API token
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: Success
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: *id001
+        description: Session-bound token returned by GET /auth/me.
+      - &id002
+        name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+  /api/v1/users:
+    get:
+      operationId: usersList
+      tags:
+      - identity
+      summary: 'Administrator: list accounts'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuthUser'
+                additionalProperties: false
+                required:
+                - users
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+    post:
+      operationId: usersCreate
+      tags:
+      - identity
+      summary: 'Administrator: create an account'
+      security:
+      - sessionCookie: []
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthUserResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: *id001
+        description: Session-bound token returned by GET /auth/me.
+  /api/v1/users/{id}:
+    patch:
+      operationId: usersUpdate
+      tags:
+      - identity
+      summary: 'Administrator: update role, profile, or disabled state'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthUserResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: *id001
+        description: Session-bound token returned by GET /auth/me.
+      - *id002
+    delete:
+      operationId: usersDelete
+      tags:
+      - identity
+      summary: 'Administrator: delete an account and revoke access'
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: Success
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: *id001
+        description: Session-bound token returned by GET /auth/me.
+      - *id002
+  /api/v1/users/{id}/password:
+    put:
+      operationId: usersResetPassword
+      tags:
+      - identity
+      summary: 'Administrator: reset local password and revoke all sessions'
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: Success
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: *id001
+        description: Session-bound token returned by GET /auth/me.
+      - *id002
+  /api/v1/settings/auth:
+    get:
+      operationId: authSettingsGet
+      tags:
+      - identity
+      summary: 'Administrator: read redacted authentication settings'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSettings'
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+    put:
+      operationId: authSettingsPut
+      tags:
+      - identity
+      summary: 'Administrator: persist authentication and OIDC settings'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSettings'
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthSettings'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: *id001
+        description: Session-bound token returned by GET /auth/me.
+  /api/v1/audit:
+    get:
+      operationId: auditList
+      tags:
+      - identity
+      summary: 'Administrator: read newest audit events with before cursor'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditEntry'
+                additionalProperties: false
+                required:
+                - entries
+        '401':
+          description: Authentication required
+        '403':
+          description: Role, scope, browser-session, or CSRF requirement failed
+        '422':
+          description: Invalid request
+      parameters:
+      - name: before
+        in: query
+        schema: &id003
+          type: integer
+      - name: username
+        in: query
+        schema: *id001
+      - name: instance_id
+        in: query
+        schema: *id001
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: mcui_session
+    personalToken:
+      type: http
+      scheme: bearer
+      description: Bearer mcui_...; scopes read, operate, admin cap current owner
+        role. Identity mutation requires browser session.
+  schemas:
+    AuthUser:
+      type: object
+      properties:
+        id: *id003
+        username: *id001
+        display_name: *id001
+        email: *id001
+        role: &id007
+          type: string
+          enum:
+          - viewer
+          - operator
+          - admin
+        disabled: &id004
+          type: boolean
+        has_password: *id004
+        identities:
+          type: array
+          items:
+            type: object
+            properties:
+              provider: *id001
+              subject: *id001
+            additionalProperties: false
+            required:
+            - provider
+            - subject
+        created_at: &id005
+          type: string
+          format: date-time
+        last_login_at: *id005
+      additionalProperties: false
+      required:
+      - id
+      - username
+      - role
+      - disabled
+      - has_password
+      - identities
+      - created_at
+    AuthStatus:
+      type: object
+      properties:
+        needs_setup: *id004
+        local_login_enabled: *id004
+        oidc_enabled: *id004
+        oidc_provider_name: *id001
+      additionalProperties: false
+      required:
+      - needs_setup
+      - local_login_enabled
+      - oidc_enabled
+      - oidc_provider_name
+    SetupRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 2
+          maxLength: 32
+        password:
+          type: string
+          minLength: 10
+          maxLength: 128
+          writeOnly: true
+        display_name: *id001
+        email: *id001
+      additionalProperties: false
+      required:
+      - username
+      - password
+    LoginRequest:
+      type: object
+      properties:
+        username: *id001
+        password:
+          type: string
+          writeOnly: true
+      additionalProperties: false
+      required:
+      - username
+      - password
+    AuthUserResponse:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/AuthUser'
+        csrf_token: *id001
+      additionalProperties: false
+      required:
+      - user
+    ChangePasswordRequest:
+      type: object
+      properties:
+        current_password:
+          type: string
+          writeOnly: true
+        new_password:
+          type: string
+          minLength: 10
+          maxLength: 128
+          writeOnly: true
+      additionalProperties: false
+      required:
+      - current_password
+      - new_password
+    AuthSession:
+      type: object
+      properties:
+        id: *id001
+        created_at: *id005
+        last_seen_at: *id005
+        expires_at: *id005
+        ip: *id001
+        user_agent: *id001
+        current: *id004
+      additionalProperties: false
+      required:
+      - id
+      - created_at
+      - last_seen_at
+      - expires_at
+      - ip
+      - user_agent
+      - current
+    AuthToken:
+      type: object
+      properties:
+        id: *id003
+        name: *id001
+        prefix: *id001
+        scopes: &id006
+          type: array
+          items:
+            type: string
+            enum:
+            - read
+            - operate
+            - admin
+          minItems: 1
+        created_at: *id005
+        last_used_at: *id005
+        expires_at: *id005
+      additionalProperties: false
+      required:
+      - id
+      - name
+      - prefix
+      - scopes
+      - created_at
+    CreateTokenRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        expires_in_days:
+          type: integer
+          minimum: 0
+          maximum: 3650
+          default: 0
+        scopes: *id006
+      additionalProperties: false
+      required:
+      - name
+    CreateTokenResponse:
+      type: object
+      properties:
+        token:
+          $ref: '#/components/schemas/AuthToken'
+        secret:
+          type: string
+          description: Shown once; never stored or returned again.
+      additionalProperties: false
+      required:
+      - token
+      - secret
+    CreateUserRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 2
+          maxLength: 32
+        password:
+          type: string
+          maxLength: 128
+          writeOnly: true
+          description: Empty for an SSO-only account; otherwise at least 10 characters.
+        display_name: *id001
+        email: *id001
+        role: *id007
+      additionalProperties: false
+      required:
+      - username
+      - role
+    UpdateUserRequest:
+      type: object
+      properties:
+        display_name: *id001
+        email: *id001
+        role: *id007
+        disabled: *id004
+      additionalProperties: false
+    ResetPasswordRequest:
+      type: object
+      properties:
+        password:
+          type: string
+          minLength: 10
+          maxLength: 128
+          writeOnly: true
+      additionalProperties: false
+      required:
+      - password
+    AuthOIDCSettings:
+      type: object
+      properties:
+        enabled: *id004
+        provider_name: *id001
+        issuer_url: *id001
+        client_id: *id001
+        client_secret:
+          type: string
+          writeOnly: true
+          description: Blank preserves the stored secret; responses always return
+            an empty string.
+        scopes:
+          type: array
+          items: *id001
+        groups_claim: *id001
+        role_mapping:
+          type: object
+          additionalProperties: *id007
+        default_role:
+          type: string
+          enum:
+          - deny
+          - viewer
+          - operator
+          - admin
+        auto_create_users: *id004
+        sync_roles: *id004
+        link_unverified_email: *id004
+        redirect_uri:
+          type: string
+          readOnly: true
+      additionalProperties: false
+      required:
+      - enabled
+      - provider_name
+      - issuer_url
+      - client_id
+      - client_secret
+      - scopes
+      - groups_claim
+      - role_mapping
+      - default_role
+      - auto_create_users
+      - sync_roles
+      - link_unverified_email
+    AuthSettings:
+      type: object
+      properties:
+        auth:
+          type: object
+          properties:
+            local_login_enabled: *id004
+            oidc:
+              $ref: '#/components/schemas/AuthOIDCSettings'
+          additionalProperties: false
+          required:
+          - local_login_enabled
+          - oidc
+      additionalProperties: false
+      required:
+      - auth
+    AuditEntry:
+      type: object
+      properties:
+        id: *id003
+        ts: *id005
+        user_id: *id003
+        username: *id001
+        action: *id001
+        instance_id: *id001
+        target: *id001
+        details:
+          type: object
+          additionalProperties: true
+        ip: *id001
+      additionalProperties: false
+      required:
+      - id
+      - ts
+      - action

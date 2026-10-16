@@ -1,0 +1,88 @@
+// Package audit writes and reads the audit_log table (WP-01).
+package audit
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"github.com/jonasthim/minecraft-server-ui/internal/auth"
+	"github.com/jonasthim/minecraft-server-ui/internal/db"
+	"github.com/jonasthim/minecraft-server-ui/internal/domain"
+)
+
+// Recorder implements auth.Auditor on top of the audit_log table.
+type Recorder struct {
+	repo *db.AuditRepo
+	log  *slog.Logger
+}
+
+// New constructs a Recorder. log may be nil (defaults to slog.Default()).
+func New(repo *db.AuditRepo, log *slog.Logger) *Recorder {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Recorder{repo: repo, log: log}
+}
+
+// Record implements auth.Auditor. It reads the acting user and client IP from
+// the request/context, so handlers only need to name the action.
+func (r *Recorder) Record(req *http.Request, action, instanceID, target string, details map[string]any) {
+	entry := domain.AuditEntry{
+		Action:     action,
+		InstanceID: instanceID,
+		Target:     target,
+		Details:    Redact(details),
+		IP:         auth.ClientIP(req),
+	}
+	if u := auth.UserFrom(req.Context()); u != nil {
+		id := u.ID
+		entry.UserID = &id
+		entry.Username = u.Username
+	}
+	if err := r.repo.Insert(req.Context(), entry); err != nil {
+		r.log.Warn("audit: failed to record entry", "action", action, "err", err)
+	}
+}
+
+// List returns audit entries for the /audit endpoint, newest first.
+func (r *Recorder) List(ctx context.Context, instanceID, username string, limit int, before int64) ([]domain.AuditEntry, error) {
+	return r.repo.List(ctx, instanceID, username, limit, before)
+}
+
+// Redact recursively strips credential-bearing metadata before persistence.
+func Redact(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		key := strings.ToLower(k)
+		sensitive := false
+		for _, part := range []string{"password", "secret", "token", "authorization", "cookie", "credential"} {
+			if strings.Contains(key, part) {
+				sensitive = true
+			}
+		}
+		if sensitive {
+			out[k] = "[redacted]"
+			continue
+		}
+		if nested, ok := v.(map[string]any); ok {
+			v = Redact(nested)
+		}
+		if values, ok := v.([]any); ok {
+			copyValues := make([]any, len(values))
+			for i, value := range values {
+				if nested, yes := value.(map[string]any); yes {
+					value = Redact(nested)
+				}
+				copyValues[i] = value
+			}
+			v = copyValues
+		}
+		out[k] = v
+	}
+	return out
+}

@@ -1,0 +1,11 @@
+/bin/
+/data/
+/devdata/
+/web/node_modules/
+/web/dist/*
+!/web/dist/.gitkeep
+*.tsbuildinfo
+*.log
+.env
+.env.*
+!.env.example

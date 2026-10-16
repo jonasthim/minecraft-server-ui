@@ -1,0 +1,145 @@
+package domain
+
+import "time"
+
+// Role is the authorisation level of a user. Ordering matters: Level().
+type Role string
+
+const (
+	RoleViewer   Role = "viewer"
+	RoleOperator Role = "operator"
+	RoleAdmin    Role = "admin"
+)
+
+// Level returns a comparable rank; unknown roles rank below viewer.
+func (r Role) Level() int {
+	switch r {
+	case RoleViewer:
+		return 1
+	case RoleOperator:
+		return 2
+	case RoleAdmin:
+		return 3
+	}
+	return 0
+}
+
+// Valid reports whether r is one of the known roles.
+func (r Role) Valid() bool { return r.Level() > 0 }
+
+// AtLeast reports whether r grants at least the permissions of min.
+func (r Role) AtLeast(min Role) bool { return r.Level() >= min.Level() }
+
+// Identity links an external (OIDC) subject to a user.
+type Identity struct {
+	Provider string `json:"provider"` // issuer URL
+	Subject  string `json:"subject"`
+}
+
+// User is an account. PasswordHash is never serialised.
+type User struct {
+	ID           int64      `json:"id"`
+	Username     string     `json:"username"`
+	DisplayName  string     `json:"display_name,omitempty"`
+	Email        string     `json:"email,omitempty"`
+	Role         Role       `json:"role"`
+	Disabled     bool       `json:"disabled"`
+	HasPassword  bool       `json:"has_password"`
+	Identities   []Identity `json:"identities"`
+	CreatedAt    time.Time  `json:"created_at"`
+	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
+	PasswordHash string     `json:"-"`
+}
+
+// Session is a browser session. ID is the sha256 hex of the cookie token.
+type Session struct {
+	ID         string
+	UserID     int64
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	LastSeenAt time.Time
+	IP         string
+	UserAgent  string
+}
+
+// SessionInfo is a user's own session as shown on the account page.
+type SessionInfo struct {
+	ID         string    `json:"id"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	IP         string    `json:"ip"`
+	UserAgent  string    `json:"user_agent"`
+	Current    bool      `json:"current"`
+}
+
+// APIToken is a personal access token for script/monitor access (F-2.5). The
+// bearer secret itself is never stored or returned again after creation; only
+// its sha256 hash and a 12-character prefix (so a user can recognise the
+// token in the list) persist.
+type APIToken struct {
+	Scopes     []string   `json:"scopes"`
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Prefix     string     `json:"prefix"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+}
+
+// OIDCSettings configures the single external identity provider.
+type OIDCSettings struct {
+	Enabled         bool            `json:"enabled"`
+	ProviderName    string          `json:"provider_name"`
+	IssuerURL       string          `json:"issuer_url"`
+	ClientID        string          `json:"client_id"`
+	ClientSecret    string          `json:"client_secret"` // write-only over the API
+	Scopes          []string        `json:"scopes"`
+	GroupsClaim     string          `json:"groups_claim"`
+	RoleMapping     map[string]Role `json:"role_mapping"`
+	DefaultRole     string          `json:"default_role"` // viewer|operator|admin|deny
+	AutoCreateUsers bool            `json:"auto_create_users"`
+	SyncRoles       bool            `json:"sync_roles"`
+	// LinkUnverifiedEmail lets a login whose token carries no email_verified
+	// claim be linked to an existing local account with the same email.
+	// Off by default; never applies to administrator accounts.
+	LinkUnverifiedEmail bool   `json:"link_unverified_email"`
+	RedirectURI         string `json:"redirect_uri,omitempty"` // computed, read-only
+}
+
+// Settings is the single-row settings document.
+type Settings struct {
+	Auth struct {
+		LocalLoginEnabled bool         `json:"local_login_enabled"`
+		OIDC              OIDCSettings `json:"oidc"`
+	} `json:"auth"`
+}
+
+// DefaultSettings returns the settings used when the row does not exist yet.
+func DefaultSettings() Settings {
+	var s Settings
+	s.Auth.LocalLoginEnabled = true
+	s.Auth.OIDC = OIDCSettings{
+		ProviderName:    "SSO",
+		Scopes:          []string{"openid", "profile", "email", "groups"},
+		GroupsClaim:     "groups",
+		RoleMapping:     map[string]Role{},
+		DefaultRole:     string(RoleViewer),
+		AutoCreateUsers: true,
+		SyncRoles:       true,
+	}
+	return s
+}
+
+// AuditEntry is one row of the audit log.
+type AuditEntry struct {
+	ID         int64          `json:"id"`
+	TS         time.Time      `json:"ts"`
+	UserID     *int64         `json:"user_id,omitempty"`
+	Username   string         `json:"username,omitempty"`
+	Action     string         `json:"action"`
+	InstanceID string         `json:"instance_id,omitempty"`
+	Target     string         `json:"target,omitempty"`
+	Details    map[string]any `json:"details,omitempty"`
+	IP         string         `json:"ip,omitempty"`
+}

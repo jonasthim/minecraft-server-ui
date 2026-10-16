@@ -1,0 +1,5 @@
+html, body, #root { min-height: 100%; margin: 0; }
+body { min-width: 320px; }
+:root { --app-sidebar: #222925; }
+.mantine-AppShell-navbar { background: var(--app-sidebar); color: #eef3ee; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--mantine-color-forest-5); outline-offset: 3px; }
