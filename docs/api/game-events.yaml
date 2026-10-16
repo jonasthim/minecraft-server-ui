@@ -1,0 +1,257 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Game event history contract fragment",
+    "version": "0.0.0"
+  },
+  "paths": {
+    "/api/v1/instances/{instanceId}/game-events": {
+      "get": {
+        "operationId": "gameEventHistory",
+        "tags": [
+          "game-events"
+        ],
+        "summary": "Viewer: bounded observed deaths and advancements with explicit source/version uncertainty and gaps.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Partial retained observations; empty history does not prove no events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameEventPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role or token scope denied"
+          },
+          "404": {
+            "description": "Instance not found"
+          },
+          "422": {
+            "description": "Invalid cursor or limit"
+          },
+          "503": {
+            "description": "History unavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "GameEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "source_cursor": {
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "server_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Null: console HH:mm:ss does not establish a date, timezone or authoritative server timestamp."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "death",
+              "advancement",
+              "source_gap"
+            ]
+          },
+          "player": {
+            "$ref": "#/components/schemas/PlayerIdentity"
+          },
+          "message": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "redacted_native_console"
+            ]
+          },
+          "source_version": {
+            "type": "string",
+            "enum": [
+              "unknown"
+            ]
+          },
+          "parser_version": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "native_log_pattern",
+              "gap"
+            ]
+          },
+          "gap": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "instance_id",
+          "source_cursor",
+          "observed_at",
+          "server_time",
+          "kind",
+          "player",
+          "message",
+          "source",
+          "source_version",
+          "parser_version",
+          "confidence",
+          "gap"
+        ]
+      },
+      "GameEventCoverage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "configured_version": {
+            "type": "string"
+          },
+          "source_version": {
+            "type": "string",
+            "enum": [
+              "unknown"
+            ]
+          },
+          "parser_capability": {
+            "type": "string",
+            "enum": [
+              "static_reviewed_patterns",
+              "unverified_version",
+              "unavailable_26_3"
+            ]
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "logs_observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "available",
+          "configured_version",
+          "source_version",
+          "parser_capability",
+          "observed_at",
+          "logs_observed_at",
+          "reason"
+        ]
+      },
+      "GameEventPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "instance_id": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GameEvent"
+            }
+          },
+          "next_cursor": {
+            "type": "integer"
+          },
+          "retention_floor": {
+            "type": "integer"
+          },
+          "more": {
+            "type": "boolean"
+          },
+          "gap": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/GameEventCoverage"
+          }
+        },
+        "required": [
+          "instance_id",
+          "events",
+          "next_cursor",
+          "retention_floor",
+          "more",
+          "gap",
+          "reason",
+          "coverage"
+        ]
+      }
+    }
+  }
+}

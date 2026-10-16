@@ -1086,6 +1086,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{instanceId}/game-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: bounded observed deaths and advancements with explicit source/version uncertainty and gaps. */
+        get: operations["gameEventHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2156,6 +2173,53 @@ export interface components {
         NotificationHistory: {
             deliveries: components["schemas"]["NotificationDelivery"][];
             next_cursor: number;
+        };
+        GameEvent: {
+            id: number;
+            instance_id: string;
+            source_cursor: number;
+            /** Format: date-time */
+            observed_at: string;
+            /**
+             * Format: date-time
+             * @description Null: console HH:mm:ss does not establish a date, timezone or authoritative server timestamp.
+             */
+            server_time: string | null;
+            /** @enum {string} */
+            kind: "death" | "advancement" | "source_gap";
+            player: components["schemas"]["PlayerIdentity"];
+            message: string;
+            /** @enum {string} */
+            source: "redacted_native_console";
+            /** @enum {string} */
+            source_version: "unknown";
+            parser_version: string;
+            /** @enum {string} */
+            confidence: "native_log_pattern" | "gap";
+            gap: boolean;
+        };
+        GameEventCoverage: {
+            available: boolean;
+            configured_version: string;
+            /** @enum {string} */
+            source_version: "unknown";
+            /** @enum {string} */
+            parser_capability: "static_reviewed_patterns" | "unverified_version" | "unavailable_26_3";
+            /** Format: date-time */
+            observed_at: string;
+            /** Format: date-time */
+            logs_observed_at: string;
+            reason: string;
+        };
+        GameEventPage: {
+            instance_id: string;
+            events: components["schemas"]["GameEvent"][];
+            next_cursor: number;
+            retention_floor: number;
+            more: boolean;
+            gap: boolean;
+            reason: string;
+            coverage: components["schemas"]["GameEventCoverage"];
         };
     };
     responses: never;
@@ -6964,6 +7028,66 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
+            };
+        };
+    };
+    gameEventHistory: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Partial retained observations; empty history does not prove no events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GameEventPage"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role or token scope denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid cursor or limit */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description History unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
