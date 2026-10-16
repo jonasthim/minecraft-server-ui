@@ -743,6 +743,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{instanceId}/players": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: cached sampled roster with explicit identity provenance and gaps. */
+        get: operations["playerSnapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/players/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: independently paginated sampled sessions and native log events; observation times are not exact join times. */
+        get: operations["playerHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/players/lists/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: native runtime list or a bounded saved native JSON snapshot; plugin overrides remain unknown. */
+        get: operations["playerList"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/players/mutations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Operator: kick, whitelist and ban changes; administrator: OP grants and revocations. Explicit online/offline mode; queued authority recheck and readback. */
+        post: operations["playerMutate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1406,6 +1474,89 @@ export interface components {
             offset: number;
             limit: number;
             total: number;
+        };
+        PlayerIdentity: {
+            uuid?: string;
+            name?: string;
+            /** @enum {string} */
+            authority: "server_uuid" | "saved_uuid" | "name_only" | "unknown";
+            source: string;
+        };
+        PlayerSnapshot: {
+            instance_id: string;
+            generation: string;
+            /** Format: date-time */
+            observed_at: string;
+            known: boolean;
+            complete: boolean;
+            count: number;
+            players: components["schemas"]["PlayerIdentity"][];
+            gap: boolean;
+            reason: string;
+        };
+        PlayerListEntry: {
+            player: components["schemas"]["PlayerIdentity"];
+            permission_level?: number;
+            bypasses_player_limit?: boolean;
+        };
+        PlayerList: {
+            /** @enum {string} */
+            kind: "whitelist" | "bans" | "operators";
+            entries: components["schemas"]["PlayerListEntry"][];
+            source: string;
+            /** Format: date-time */
+            observed_at: string;
+            runtime_verified: boolean;
+        };
+        PlayerMutationRequest: {
+            /** @enum {string} */
+            mode: "online" | "offline";
+            /** @enum {string} */
+            action: "kick" | "whitelist_add" | "whitelist_remove" | "ban" | "unban" | "op" | "deop";
+            uuid?: string;
+            name?: string;
+            permission_level?: number;
+        };
+        PlayerSession: {
+            id: number;
+            player: components["schemas"]["PlayerIdentity"];
+            generation: string;
+            /** Format: date-time */
+            first_seen: string;
+            /** Format: date-time */
+            last_seen: string;
+            /** Format: date-time */
+            ended_at?: string;
+            gap: boolean;
+            end_reason: string;
+        };
+        PlayerHistoryEvent: {
+            id: number;
+            source_cursor: number;
+            /** Format: date-time */
+            observed_at: string;
+            /** @enum {string} */
+            kind: "join_observed" | "leave_observed" | "source_gap";
+            player: components["schemas"]["PlayerIdentity"];
+            gap: boolean;
+        };
+        PlayerHistoryPage: {
+            sessions: components["schemas"]["PlayerSession"][];
+            events: components["schemas"]["PlayerHistoryEvent"][];
+            next_cursor: number;
+            next_event_cursor: number;
+            gap: boolean;
+            event_gap: boolean;
+            reason: string;
+        };
+        PlayerSnapshotResponse: {
+            snapshot: components["schemas"]["PlayerSnapshot"];
+        };
+        PlayerListResponse: {
+            list: components["schemas"]["PlayerList"];
+        };
+        PlayerMutationResponse: {
+            job: components["schemas"]["Job"];
         };
     };
     responses: never;
@@ -4411,6 +4562,271 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
+            };
+        };
+    };
+    playerSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Player observations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerSnapshotResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, scope or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Instance admission busy */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identity, mode, action or cursor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Native state, acknowledgement or readback unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    playerHistory: {
+        parameters: {
+            query?: {
+                after?: number;
+                event_after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Player observations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerHistoryPage"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, scope or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Instance admission busy */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identity, mode, action or cursor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Native state, acknowledgement or readback unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    playerList: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+                kind: "whitelist" | "bans" | "operators";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Player observations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerListResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, scope or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Instance admission busy */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identity, mode, action or cursor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Native state, acknowledgement or readback unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    playerMutate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlayerMutationRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted job; inspect final job result before retrying partial operations. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerMutationResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, scope or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Instance admission busy */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identity, mode, action or cursor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Native state, acknowledgement or readback unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

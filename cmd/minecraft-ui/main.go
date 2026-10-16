@@ -17,6 +17,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"github.com/jonasthim/minecraft-server-ui/internal/launcher"
 	"github.com/jonasthim/minecraft-server-ui/internal/lifecycle"
+	"github.com/jonasthim/minecraft-server-ui/internal/players"
 	managedruntime "github.com/jonasthim/minecraft-server-ui/internal/runtime"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/fabric"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/forge"
@@ -118,11 +119,15 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	activation := &activationCoordinator{}
 	instances := instance.New(database, paths, guard, instance.WithJobMutationGuard(guard), instance.WithActivationCoordinator(activation), instance.WithRecoveryMutationGuard(guard))
 	control := console.New(database, paths, native, instances, queue)
+	playerService := players.New(database, paths, instances, control, queue, native)
 	operations := lifecycle.New(lifecycle.Config{DB: database, DataDir: cfg.DataDir, Instances: instances, Jobs: queue, Native: native, Runtime: managedruntime.New(cfg.DataDir, nil), Console: control, Providers: []domain.DistributionProvider{vanilla.New(cfg.DataDir, nil), paper.New(cfg.DataDir, nil), fabric.New(cfg.DataDir, nil), forge.New(cfg.DataDir, nil), neoforge.New(cfg.DataDir, nil)}})
 	activation.operations = operations
 	worlds := world.New(database, instances, paths, queue)
 	catalogs, err := catalog.New(catalog.Config{DB: database, ArtifactDir: filepath.Join(cfg.DataDir, "catalog", "artifacts"), UserAgent: "minecraft-server-ui/" + version + " (+https://github.com/jonasthim/minecraft-server-ui)"})
 	if err != nil {
+		return err
+	}
+	if err := playerService.Register(); err != nil {
 		return err
 	}
 	if err := control.Register(); err != nil {
@@ -138,6 +143,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 		mountAPIWithFeatures(r, identity, queue, instances, func(r chi.Router) {
 			api.MountLifecycle(r, operations)
 			api.MountConsole(r, control)
+			api.MountPlayers(r, playerService)
 			api.MountWorlds(r, worlds)
 			api.MountCatalog(r, catalogs)
 		})
@@ -154,6 +160,17 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 		}, log)
 	}()
 	defer func() { cancelConsole(); runErr = errors.Join(runErr, <-consoleDone) }()
+	playerCtx, cancelPlayers := context.WithCancel(ctx)
+	playerDone := make(chan error, 1)
+	go func() {
+		playerDone <- watchPlayers(playerCtx, playerService.Run, func(shutdown context.Context) error {
+			if err := server.Shutdown(shutdown); err != nil {
+				return errors.Join(err, server.Close())
+			}
+			return nil
+		}, log)
+	}()
+	defer func() { cancelPlayers(); runErr = errors.Join(runErr, <-playerDone) }()
 	done := make(chan struct{})
 	shutdownDone := make(chan struct{})
 	go func() {
@@ -246,6 +263,20 @@ func watchConsole(ctx context.Context, run func(context.Context) error, shutdown
 	cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return errors.Join(domain.E(domain.CodeUnavailable, "console observation stopped unexpectedly"), shutdown(cleanup))
+}
+
+func watchPlayers(ctx context.Context, run func(context.Context) error, shutdown func(context.Context) error, log *slog.Logger) error {
+	err := run(ctx)
+	if ctx.Err() != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil
+		}
+		return err
+	}
+	log.Error("Player observation stopped unexpectedly; shutting down manager", "code", domain.CodeUnavailable)
+	cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return errors.Join(domain.E(domain.CodeUnavailable, "player observation stopped unexpectedly"), shutdown(cleanup))
 }
 
 type startupNative interface {

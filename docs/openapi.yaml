@@ -3727,6 +3727,289 @@
           }
         ]
       }
+    },
+    "/api/v1/instances/{instanceId}/players": {
+      "get": {
+        "operationId": "playerSnapshot",
+        "tags": [
+          "players"
+        ],
+        "summary": "Viewer: cached sampled roster with explicit identity provenance and gaps.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Player observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerSnapshotResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, scope or CSRF denied"
+          },
+          "404": {
+            "description": "Instance not found"
+          },
+          "409": {
+            "description": "Instance admission busy"
+          },
+          "422": {
+            "description": "Invalid identity, mode, action or cursor"
+          },
+          "503": {
+            "description": "Native state, acknowledgement or readback unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/players/history": {
+      "get": {
+        "operationId": "playerHistory",
+        "tags": [
+          "players"
+        ],
+        "summary": "Viewer: independently paginated sampled sessions and native log events; observation times are not exact join times.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "event_after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Player observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerHistoryPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, scope or CSRF denied"
+          },
+          "404": {
+            "description": "Instance not found"
+          },
+          "409": {
+            "description": "Instance admission busy"
+          },
+          "422": {
+            "description": "Invalid identity, mode, action or cursor"
+          },
+          "503": {
+            "description": "Native state, acknowledgement or readback unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/players/lists/{kind}": {
+      "get": {
+        "operationId": "playerList",
+        "tags": [
+          "players"
+        ],
+        "summary": "Viewer: native runtime list or a bounded saved native JSON snapshot; plugin overrides remain unknown.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "whitelist",
+                "bans",
+                "operators"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Player observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, scope or CSRF denied"
+          },
+          "404": {
+            "description": "Instance not found"
+          },
+          "409": {
+            "description": "Instance admission busy"
+          },
+          "422": {
+            "description": "Invalid identity, mode, action or cursor"
+          },
+          "503": {
+            "description": "Native state, acknowledgement or readback unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/players/mutations": {
+      "post": {
+        "operationId": "playerMutate",
+        "tags": [
+          "players"
+        ],
+        "summary": "Operator: kick, whitelist and ban changes; administrator: OP grants and revocations. Explicit online/offline mode; queued authority recheck and readback.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted job; inspect final job result before retrying partial operations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerMutationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Role, scope or CSRF denied"
+          },
+          "404": {
+            "description": "Instance not found"
+          },
+          "409": {
+            "description": "Instance admission busy"
+          },
+          "422": {
+            "description": "Invalid identity, mode, action or cursor"
+          },
+          "503": {
+            "description": "Native state, acknowledgement or readback unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlayerMutationRequest"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6287,6 +6570,341 @@
           }
         },
         "additionalProperties": false
+      },
+      "PlayerIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]{1,16}$"
+          },
+          "authority": {
+            "type": "string",
+            "enum": [
+              "server_uuid",
+              "saved_uuid",
+              "name_only",
+              "unknown"
+            ]
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "authority",
+          "source"
+        ]
+      },
+      "PlayerSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "instance_id": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "known": {
+            "type": "boolean"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlayerIdentity"
+            }
+          },
+          "gap": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "generation",
+          "observed_at",
+          "known",
+          "complete",
+          "count",
+          "players",
+          "gap",
+          "reason"
+        ]
+      },
+      "PlayerListEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "player": {
+            "$ref": "#/components/schemas/PlayerIdentity"
+          },
+          "permission_level": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4
+          },
+          "bypasses_player_limit": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "player"
+        ]
+      },
+      "PlayerList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "whitelist",
+              "bans",
+              "operators"
+            ]
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlayerListEntry"
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "runtime_verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "entries",
+          "source",
+          "observed_at",
+          "runtime_verified"
+        ]
+      },
+      "PlayerMutationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "online",
+              "offline"
+            ]
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "kick",
+              "whitelist_add",
+              "whitelist_remove",
+              "ban",
+              "unban",
+              "op",
+              "deop"
+            ]
+          },
+          "uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]{1,16}$"
+          },
+          "permission_level": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4
+          }
+        },
+        "required": [
+          "mode",
+          "action"
+        ]
+      },
+      "PlayerSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "player": {
+            "$ref": "#/components/schemas/PlayerIdentity"
+          },
+          "generation": {
+            "type": "string"
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "gap": {
+            "type": "boolean"
+          },
+          "end_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "player",
+          "generation",
+          "first_seen",
+          "last_seen",
+          "gap",
+          "end_reason"
+        ]
+      },
+      "PlayerHistoryEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "source_cursor": {
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "join_observed",
+              "leave_observed",
+              "source_gap"
+            ]
+          },
+          "player": {
+            "$ref": "#/components/schemas/PlayerIdentity"
+          },
+          "gap": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "source_cursor",
+          "observed_at",
+          "kind",
+          "player",
+          "gap"
+        ]
+      },
+      "PlayerHistoryPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlayerSession"
+            }
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlayerHistoryEvent"
+            }
+          },
+          "next_cursor": {
+            "type": "integer"
+          },
+          "next_event_cursor": {
+            "type": "integer"
+          },
+          "gap": {
+            "type": "boolean"
+          },
+          "event_gap": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessions",
+          "events",
+          "next_cursor",
+          "next_event_cursor",
+          "gap",
+          "event_gap",
+          "reason"
+        ]
+      },
+      "PlayerSnapshotResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "snapshot": {
+            "$ref": "#/components/schemas/PlayerSnapshot"
+          }
+        },
+        "required": [
+          "snapshot"
+        ]
+      },
+      "PlayerListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "list": {
+            "$ref": "#/components/schemas/PlayerList"
+          }
+        },
+        "required": [
+          "list"
+        ]
+      },
+      "PlayerMutationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          }
+        },
+        "required": [
+          "job"
+        ]
       }
     }
   }

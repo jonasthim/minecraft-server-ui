@@ -7,6 +7,7 @@ const UsersPage = lazy(() => import('./features/auth/UsersPage').then(m => ({ de
 const OIDCSettingsPage = lazy(() => import('./features/auth/OIDCSettingsPage').then(m => ({ default: m.OIDCSettingsPage })))
 const InstancesPage = lazy(() => import('./features/instances').then(m => ({ default: m.InstancesPage })))
 const InstancePage = lazy(() => import('./features/instances').then(m => ({ default: m.InstancePage })))
+const PlayersPage = lazy(() => import('./features/players/PlayersPage').then(m => ({ default: m.PlayersPage })))
 const ConsolePage = lazy(() => import('./features/console/ConsolePage').then(m => ({ default: m.ConsolePage })))
 const WorldsPage = lazy(() => import('./features/worlds').then(m => ({ default: m.WorldsPage })))
 const CatalogPage = lazy(() => import('./features/catalog/CatalogPage').then(m => ({ default: m.CatalogPage })))
@@ -23,6 +24,7 @@ export default function App() {
   return <BrowserRouter><AuthGate><Shell><Suspense fallback={<Center mih={240}><Loader aria-label="Loading page" /></Center>}><Routes>
     <Route path="/" element={<InstancesPage />} />
     <Route path="/instances/:instanceId" element={<InstancePage />} />
+    <Route path="/instances/:instanceId/players" element={<PlayersPage />} />
     <Route path="/instances/:instanceId/console" element={<ConsolePage />} />
     <Route path="/instances/:instanceId/world" element={<WorldsPage />} />
     <Route path="/catalog" element={<CatalogPage />} />
