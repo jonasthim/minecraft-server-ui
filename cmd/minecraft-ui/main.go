@@ -18,6 +18,8 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"github.com/jonasthim/minecraft-server-ui/internal/launcher"
 	"github.com/jonasthim/minecraft-server-ui/internal/lifecycle"
+	"github.com/jonasthim/minecraft-server-ui/internal/mapdata"
+	"github.com/jonasthim/minecraft-server-ui/internal/mapview"
 	"github.com/jonasthim/minecraft-server-ui/internal/players"
 	managedruntime "github.com/jonasthim/minecraft-server-ui/internal/runtime"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/fabric"
@@ -124,6 +126,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	operations := lifecycle.New(lifecycle.Config{DB: database, DataDir: cfg.DataDir, Instances: instances, Jobs: queue, Native: native, Runtime: managedruntime.New(cfg.DataDir, nil), Console: control, Providers: []domain.DistributionProvider{vanilla.New(cfg.DataDir, nil), paper.New(cfg.DataDir, nil), fabric.New(cfg.DataDir, nil), forge.New(cfg.DataDir, nil), neoforge.New(cfg.DataDir, nil)}})
 	activation.operations = operations
 	worlds := world.New(database, instances, paths, queue)
+	maps := mapview.New(mapdata.New(worlds, paths), control)
 	backups := backup.New(backup.Config{DB: database, Paths: paths, Instances: instances, Jobs: queue, Console: control, Native: native, Worlds: worlds})
 	guard.ready = backups.CheckReady
 	if err := backups.Register(); err != nil {
@@ -151,6 +154,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 			api.MountConsole(r, control)
 			api.MountPlayers(r, playerService)
 			api.MountWorlds(r, worlds)
+			api.MountMap(r, maps)
 			api.MountBackups(r, backups)
 			api.MountCatalog(r, catalogs)
 		})
