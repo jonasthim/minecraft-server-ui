@@ -1,0 +1,62 @@
+{
+  "new_schemas": {
+    "ContentPackProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selection",
+        "pack_sha256",
+        "path",
+        "hashes",
+        "metadata_source",
+        "fetched_at"
+      ],
+      "properties": {
+        "selection": {
+          "$ref": "#/components/schemas/ContentSelection"
+        },
+        "pack_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 900
+        },
+        "hashes": {
+          "type": "object",
+          "maxProperties": 8,
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "file_project_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "file_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "metadata_source": {
+          "type": "string",
+          "enum": [
+            "modrinth",
+            "curseforge"
+          ]
+        },
+        "fetched_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  },
+  "ContentInstalled_optional_properties": {
+    "pack_member": {
+      "$ref": "#/components/schemas/ContentPackProvenance"
+    }
+  },
+  "note": "LanguageEvidence/Descriptor typed extension schema must follow actual internal/content/types.go and loaderutil/language_evidence.go fields; root owns shared schema merge."
+}

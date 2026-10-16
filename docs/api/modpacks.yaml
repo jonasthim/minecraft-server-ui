@@ -1,0 +1,997 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Modpack API fragment",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/instances/{instanceId}/modpack": {
+      "get": {
+        "operationId": "getModpack",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ModpackInstanceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Applied pack baseline and recovery blockers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModpackSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "modpacks"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "description": "Viewer metadata access."
+      }
+    },
+    "/api/v1/instances/{instanceId}/modpack/previews": {
+      "post": {
+        "operationId": "previewModpack",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ModpackInstanceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModpackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bound three-way preview, including unresolved manual files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModpackPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "modpacks"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "description": "Operator or administrator and matching personal token authority required. Current authority is rechecked by the service; apply is queued and requires a stopped server."
+      }
+    },
+    "/api/v1/instances/{instanceId}/modpack/previews/{previewId}": {
+      "delete": {
+        "operationId": "discardModpackPreview",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ModpackInstanceId"
+          },
+          {
+            "name": "previewId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Discarded unowned preview"
+          },
+          "400": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "modpacks"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "description": "Operator or administrator and matching personal token authority required. Current authority is rechecked by the service; apply is queued and requires a stopped server."
+      }
+    },
+    "/api/v1/instances/{instanceId}/modpack/previews/{previewId}/apply": {
+      "post": {
+        "operationId": "applyModpack",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ModpackInstanceId"
+          },
+          {
+            "name": "previewId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Durable stopped-only apply job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "job"
+                  ],
+                  "properties": {
+                    "job": {
+                      "$ref": "#/components/schemas/Job"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "modpacks"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "description": "Operator or administrator and matching personal token authority required. Current authority is rechecked by the service; apply is queued and requires a stopped server."
+      }
+    },
+    "/api/v1/instances/{instanceId}/modpack/previews/{previewId}/members/resume": {
+      "post": {
+        "operationId": "resumeModpackMember",
+        "summary": "Administrator: resume exact unresolved preview member with published digest verification",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ModpackInstanceId"
+          },
+          {
+            "name": "previewId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          },
+          {
+            "name": "member",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 900
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 2147483648
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New bound preview; old preview remains independently discardable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModpackPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "modpacks"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "description": "Administrator and matching personal token authority required. Current authority is rechecked by the service; apply is queued and requires a stopped server."
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "ModpackInstanceId": {
+        "name": "instanceId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+          "maxLength": 32
+        }
+      }
+    },
+    "schemas": {
+      "ModpackSelection": {
+        "type": "object",
+        "required": [
+          "optional",
+          "selected",
+          "pinned",
+          "excluded",
+          "disabled"
+        ],
+        "properties": {
+          "optional": {
+            "type": "boolean"
+          },
+          "selected": {
+            "type": "boolean"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "excluded": {
+            "type": "boolean"
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ModpackRequest": {
+        "type": "object",
+        "required": [
+          "pack",
+          "choices",
+          "selections",
+          "manual"
+        ],
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/ContentSelection"
+          },
+          "choices": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "keep",
+                "upstream"
+              ],
+              "maxLength": 2048
+            },
+            "maxProperties": 8192
+          },
+          "selections": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModpackSelection"
+            },
+            "maxProperties": 8192
+          },
+          "manual": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "description": "Task16 administrator upload IDs keyed by exact pack path",
+            "maxProperties": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "ModpackSource": {
+        "type": "object",
+        "required": [
+          "selection",
+          "official_url",
+          "name",
+          "sha256",
+          "provenance"
+        ],
+        "properties": {
+          "selection": {
+            "$ref": "#/components/schemas/ContentSelection"
+          },
+          "official_url": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "sha256": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "provenance": {
+            "type": "object",
+            "required": [
+              "source",
+              "fetched_at"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "fetched_at": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "ModpackChange": {
+        "type": "object",
+        "required": [
+          "path",
+          "baseline",
+          "before",
+          "upstream",
+          "action",
+          "reason",
+          "choice"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "baseline": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "before": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "upstream": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "add",
+              "update",
+              "delete",
+              "keep",
+              "conflict"
+            ],
+            "maxLength": 2048
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "choice": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        },
+        "additionalProperties": false
+      },
+      "ModpackBaseline": {
+        "type": "object",
+        "required": [
+          "source",
+          "revision",
+          "files",
+          "selections",
+          "content"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/ModpackSource"
+          },
+          "revision": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "files": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "maxProperties": 8192
+          },
+          "content": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "maxProperties": 8192
+          },
+          "selections": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModpackSelection"
+            },
+            "maxProperties": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "ModpackSnapshot": {
+        "type": "object",
+        "required": [
+          "blockers"
+        ],
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/ModpackBaseline"
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "maxItems": 8192
+          }
+        },
+        "additionalProperties": false
+      },
+      "ModpackPreview": {
+        "type": "object",
+        "required": [
+          "id",
+          "instance_id",
+          "tuple",
+          "revision",
+          "baseline_revision",
+          "source",
+          "changes",
+          "selections",
+          "manual",
+          "blockers",
+          "excluded",
+          "summary"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "instance_id": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "tuple": {
+            "$ref": "#/components/schemas/ContentTuple"
+          },
+          "revision": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "baseline_revision": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "source": {
+            "$ref": "#/components/schemas/ModpackSource"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModpackChange"
+            },
+            "maxItems": 8192
+          },
+          "selections": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModpackSelection"
+            },
+            "maxProperties": 8192
+          },
+          "manual": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "official_url",
+                "hashes",
+                "reason"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                "official_url": {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                "hashes": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "maxProperties": 8192
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 2048
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 8192
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "maxItems": 8192
+          },
+          "excluded": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "maxItems": 8192
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

@@ -370,7 +370,8 @@
         "type": "string",
         "enum": [
           "job_failed",
-          "job_succeeded"
+          "job_succeeded",
+          "server_crashed"
         ]
       },
       "NotificationDestination": {
@@ -447,9 +448,12 @@
               "type": "string",
               "enum": [
                 "job_failed",
-                "job_succeeded"
+                "job_succeeded",
+                "server_crashed"
               ]
-            }
+            },
+            "maxItems": 3,
+            "uniqueItems": true
           },
           "allow_private": {
             "type": "boolean"
@@ -503,9 +507,12 @@
               "type": "string",
               "enum": [
                 "job_failed",
-                "job_succeeded"
+                "job_succeeded",
+                "server_crashed"
               ]
-            }
+            },
+            "maxItems": 3,
+            "uniqueItems": true
           },
           "allow_private": {
             "type": "boolean"
@@ -569,7 +576,8 @@
             "type": "string",
             "enum": [
               "job_failed",
-              "job_succeeded"
+              "job_succeeded",
+              "server_crashed"
             ]
           },
           "status": {

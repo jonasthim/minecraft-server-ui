@@ -1103,6 +1103,165 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{instanceId}/modpack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Viewer metadata access. */
+        get: operations["getModpack"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/modpack/previews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Operator or administrator and matching personal token authority required. Current authority is rechecked by the service; apply is queued and requires a stopped server. */
+        post: operations["previewModpack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/modpack/previews/{previewId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Operator or administrator and matching personal token authority required. Current authority is rechecked by the service; apply is queued and requires a stopped server. */
+        delete: operations["discardModpackPreview"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/modpack/previews/{previewId}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Operator or administrator and matching personal token authority required. Current authority is rechecked by the service; apply is queued and requires a stopped server. */
+        post: operations["applyModpack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/modpack/previews/{previewId}/members/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Administrator: resume exact unresolved preview member with published digest verification
+         * @description Administrator and matching personal token authority required. Current authority is rechecked by the service; apply is queued and requires a stopped server.
+         */
+        post: operations["resumeModpackMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Viewer. Stored IANA timezone and policy; no downtime catch-up. Disabled definitions do not run. */
+        get: operations["listSchedules"];
+        put?: never;
+        /** @description Operator. Defaults disabled. Creator is reauthorized at dispatch and feature execution. Enabling unavailable update producer is refused. */
+        post: operations["createSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/schedules/{scheduleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Owner operator or administrator. Admitted occurrences retain their jobs when a definition is disabled or deleted. */
+        put: operations["saveSchedule"];
+        post?: never;
+        /** @description Owner operator or administrator. Removes future triggers; admitted jobs remain in job history. */
+        delete: operations["deleteSchedule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/schedules/{scheduleId}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Viewer. Newest 100 occurrence results, including concrete downtime and overlap skips. */
+        get: operations["scheduleHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Viewer. Recovery defaults disabled. Only exact proven unexpected native exits qualify. */
+        get: operations["getCrashRecovery"];
+        /** @description Administrator explicit enable. Three admissions maximum in inclusive rolling ten minutes, delays 10/30/60 seconds; deliberate stop cancels pending recovery and suppresses its exact generation. */
+        put: operations["configureCrashRecovery"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1928,6 +2087,14 @@ export interface components {
                 [key: string]: string;
             };
             unknown: boolean;
+            identities?: components["schemas"]["ContentModIdentity"][];
+            optional?: {
+                [key: string]: string;
+            };
+            java_requirement?: string;
+            language_loader?: string;
+            language_requirement?: string;
+            ordering?: components["schemas"]["ContentDependencyOrdering"][];
         };
         ContentInstalled: {
             id: string;
@@ -1944,6 +2111,8 @@ export interface components {
             trial_tuple?: components["schemas"]["ContentTuple"];
             descriptor: components["schemas"]["ContentDescriptor"];
             dependencies: components["schemas"]["ContentDependency"][];
+            pack_member?: components["schemas"]["ContentPackProvenance"];
+            language_evidence?: components["schemas"]["ContentLanguageEvidence"];
         };
         ContentManifest: {
             revision: string;
@@ -2115,7 +2284,7 @@ export interface components {
         /** @enum {string} */
         NotificationProvider: "discord" | "slack" | "ntfy" | "telegram" | "webhook" | "email";
         /** @enum {string} */
-        NotificationEventKind: "job_failed" | "job_succeeded";
+        NotificationEventKind: "job_failed" | "job_succeeded" | "server_crashed";
         NotificationDestination: {
             endpoint?: string;
             secret?: string;
@@ -2134,7 +2303,7 @@ export interface components {
             /** @enum {string} */
             provider: "discord" | "slack" | "ntfy" | "telegram" | "webhook" | "email";
             enabled: boolean;
-            events: ("job_failed" | "job_succeeded")[];
+            events: ("job_failed" | "job_succeeded" | "server_crashed")[];
             allow_private: boolean;
             configured: boolean;
             secret_set: boolean;
@@ -2145,7 +2314,7 @@ export interface components {
             /** @enum {string} */
             provider: "discord" | "slack" | "ntfy" | "telegram" | "webhook" | "email";
             enabled: boolean;
-            events: ("job_failed" | "job_succeeded")[];
+            events: ("job_failed" | "job_succeeded" | "server_crashed")[];
             allow_private: boolean;
             replace?: components["schemas"]["NotificationDestination"];
             clear: boolean;
@@ -2160,7 +2329,7 @@ export interface components {
             provider: "discord" | "slack" | "ntfy" | "telegram" | "webhook" | "email";
             instance_id: string;
             /** @enum {string} */
-            event_kind: "job_failed" | "job_succeeded";
+            event_kind: "job_failed" | "job_succeeded" | "server_crashed";
             /** @enum {string} */
             status: "queued" | "sending" | "sent" | "failed" | "unknown_after_crash";
             attempts: number;
@@ -2221,9 +2390,217 @@ export interface components {
             reason: string;
             coverage: components["schemas"]["GameEventCoverage"];
         };
+        ModpackSelection: {
+            optional: boolean;
+            selected: boolean;
+            pinned: boolean;
+            excluded: boolean;
+            disabled: boolean;
+        };
+        ModpackRequest: {
+            pack: components["schemas"]["ContentSelection"];
+            choices: {
+                [key: string]: "keep" | "upstream";
+            };
+            selections: {
+                [key: string]: components["schemas"]["ModpackSelection"];
+            };
+            /** @description Task16 administrator upload IDs keyed by exact pack path */
+            manual: {
+                [key: string]: string;
+            };
+        };
+        ModpackSource: {
+            selection: components["schemas"]["ContentSelection"];
+            official_url: string;
+            name: string;
+            sha256: string;
+            provenance: {
+                source: string;
+                fetched_at: string;
+            };
+        };
+        ModpackChange: {
+            path: string;
+            baseline: string;
+            before: string;
+            upstream: string;
+            /** @enum {string} */
+            action: "add" | "update" | "delete" | "keep" | "conflict";
+            reason: string;
+            choice: string;
+        };
+        ModpackBaseline: {
+            source: components["schemas"]["ModpackSource"];
+            revision: string;
+            files: {
+                [key: string]: string;
+            };
+            content: {
+                [key: string]: string;
+            };
+            selections: {
+                [key: string]: components["schemas"]["ModpackSelection"];
+            };
+        };
+        ModpackSnapshot: {
+            baseline?: components["schemas"]["ModpackBaseline"];
+            blockers: string[];
+        };
+        ModpackPreview: {
+            id: string;
+            instance_id: string;
+            tuple: components["schemas"]["ContentTuple"];
+            revision: string;
+            baseline_revision: string;
+            source: components["schemas"]["ModpackSource"];
+            changes: components["schemas"]["ModpackChange"][];
+            selections: {
+                [key: string]: components["schemas"]["ModpackSelection"];
+            };
+            manual: {
+                path: string;
+                official_url: string;
+                hashes: {
+                    [key: string]: string;
+                };
+                reason: string;
+            }[];
+            blockers: string[];
+            excluded: string[];
+            summary: string;
+        };
+        ScheduleInput: {
+            name: string;
+            enabled?: boolean;
+            /** @enum {string} */
+            action: "backup" | "command" | "announcement" | "restart" | "update";
+            expression: string;
+            timezone?: string;
+            command?: string;
+            announcement?: string;
+            /** @enum {string} */
+            backup_kind?: "world" | "full";
+            /** @default 300 */
+            countdown_seconds: number;
+        };
+        ScheduleRun: {
+            id: string;
+            schedule_id: string;
+            instance_id: string;
+            /** Format: date-time */
+            due_at: string;
+            /** @enum {string} */
+            state: "claimed" | "admitted" | "blocked" | "skipped_downtime" | "skipped_overlap";
+            job_id?: string;
+            /** @enum {string} */
+            job_state?: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+            reason?: string;
+        };
+        ScheduleRecord: {
+            id: string;
+            instance_id: string;
+            name: string;
+            enabled: boolean;
+            /** @enum {string} */
+            action: "backup" | "command" | "announcement" | "restart" | "update";
+            expression: string;
+            timezone: string;
+            command?: string;
+            announcement?: string;
+            /** @enum {string} */
+            backup_kind?: "world" | "full";
+            countdown_seconds: number;
+            /** Format: date-time */
+            next_run_at?: string;
+            actor_id: number;
+            disabled_reason: string;
+            last_run?: components["schemas"]["ScheduleRun"];
+        };
+        ScheduleListResponse: {
+            schedules: components["schemas"]["ScheduleRecord"][];
+            default_timezone: string;
+            time_policy: string;
+            available_actions: ("backup" | "command" | "announcement" | "restart" | "update")[];
+        };
+        ScheduleHistoryResponse: {
+            runs: components["schemas"]["ScheduleRun"][];
+        };
+        RecoveryAttempt: {
+            id: string;
+            /** Format: date-time */
+            due_at: string;
+            /** Format: date-time */
+            admitted_at?: string;
+            /** @enum {string} */
+            state: "pending" | "queued" | "admitted" | "cancelled" | "blocked";
+            job_id?: string;
+            reason?: string;
+        };
+        RecoveryStatus: {
+            enabled: boolean;
+            actor_id: number;
+            reason: string;
+            attempts: components["schemas"]["RecoveryAttempt"][];
+        };
+        RecoveryInput: {
+            enabled: boolean;
+        };
+        ContentPackProvenance: {
+            selection: components["schemas"]["ContentSelection"];
+            pack_sha256: string;
+            path: string;
+            hashes: {
+                [key: string]: string;
+            };
+            file_project_id?: string;
+            file_id?: string;
+            /** @enum {string} */
+            metadata_source: "modrinth" | "curseforge";
+            /** Format: date-time */
+            fetched_at: string;
+        };
+        ContentModIdentity: {
+            id: string;
+            version: string;
+            required: {
+                [key: string]: string;
+            };
+            optional: {
+                [key: string]: string;
+            };
+            conflicts: {
+                [key: string]: string;
+            };
+        };
+        ContentDependencyOrdering: {
+            owner: string;
+            target: string;
+            /** @enum {string} */
+            direction: "BEFORE" | "AFTER" | "NONE";
+        };
+        ContentLanguageArtifact: {
+            version: string;
+            path: string;
+            sha256: string;
+            /** @enum {string} */
+            source: "verified-loader-library-manifest";
+        };
+        ContentLanguageEvidence: {
+            selection: components["schemas"]["VersionSelection"];
+            generation: string;
+            runtime_id: string;
+            /** @enum {integer} */
+            java_major: 8 | 11 | 16 | 17 | 21 | 25;
+            languages: {
+                [key: string]: components["schemas"]["ContentLanguageArtifact"];
+            };
+        };
     };
     responses: never;
-    parameters: never;
+    parameters: {
+        ModpackInstanceId: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -7088,6 +7465,1034 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getModpack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["ModpackInstanceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Applied pack baseline and recovery blockers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModpackSnapshot"];
+                };
+            };
+            /** @description Structured operation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    previewModpack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["ModpackInstanceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModpackRequest"];
+            };
+        };
+        responses: {
+            /** @description Bound three-way preview, including unresolved manual files */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModpackPreview"];
+                };
+            };
+            /** @description Structured operation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    discardModpackPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["ModpackInstanceId"];
+                previewId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Discarded unowned preview */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Structured operation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    applyModpack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["ModpackInstanceId"];
+                previewId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Durable stopped-only apply job */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        job: components["schemas"]["Job"];
+                    };
+                };
+            };
+            /** @description Structured operation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    resumeModpackMember: {
+        parameters: {
+            query: {
+                member: string;
+            };
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["ModpackInstanceId"];
+                previewId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description New bound preview; old preview remains independently discardable */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModpackPreview"];
+                };
+            };
+            /** @description Structured operation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listSchedules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleListResponse"];
+                };
+            };
+            /** @description Structured error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    createSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleInput"];
+            };
+        };
+        responses: {
+            /** @description Successful operation */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleRecord"];
+                };
+            };
+            /** @description Structured error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    saveSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+                scheduleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleInput"];
+            };
+        };
+        responses: {
+            /** @description Successful operation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleRecord"];
+                };
+            };
+            /** @description Structured error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+                scheduleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Structured error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    scheduleHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+                scheduleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleHistoryResponse"];
+                };
+            };
+            /** @description Structured error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getCrashRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryStatus"];
+                };
+            };
+            /** @description Structured error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    configureCrashRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryInput"];
+            };
+        };
+        responses: {
+            /** @description Successful operation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryStatus"];
+                };
+            };
+            /** @description Structured error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
