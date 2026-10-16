@@ -385,6 +385,16 @@
           },
           "422": {
             "description": "Invalid identifier or cursor"
+          },
+          "503": {
+            "description": "Live job connection capacity is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "parameters": [

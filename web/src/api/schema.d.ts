@@ -4134,6 +4134,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Live job connection capacity is temporarily unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     instancesList: {
