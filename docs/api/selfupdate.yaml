@@ -431,7 +431,9 @@
           "trust_configured",
           "activation_available",
           "disabled_reason",
-          "schema_policy"
+          "schema_policy",
+          "stages",
+          "staging_error"
         ],
         "properties": {
           "current_version": {
@@ -457,6 +459,19 @@
             "enum": [
               "unchanged_schema_only"
             ]
+          },
+          "stages": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+              "$ref": "#/components/schemas/SelfUpdateStage"
+            },
+            "description": "Reverified immutable stages for this platform, current version, schema and trust. Invalid or expired stages are not offered."
+          },
+          "staging_error": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "Safe staging discovery failure; empty when discovery succeeded."
           }
         }
       },

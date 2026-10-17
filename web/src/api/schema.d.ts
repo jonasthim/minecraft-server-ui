@@ -2700,6 +2700,10 @@ export interface components {
             disabled_reason: string;
             /** @enum {string} */
             schema_policy: "unchanged_schema_only";
+            /** @description Reverified immutable stages for this platform, current version, schema and trust. Invalid or expired stages are not offered. */
+            stages: components["schemas"]["SelfUpdateStage"][];
+            /** @description Safe staging discovery failure; empty when discovery succeeded. */
+            staging_error: string;
         };
         SelfUpdateCheck: {
             version: string;
