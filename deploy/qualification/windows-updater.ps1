@@ -31,6 +31,7 @@ foreach ($path in @($target,$data,$updaterState)) {
  if (Test-Path -LiteralPath $path) { throw 'Refusing existing canonical state.' }
 }
 . (Join-Path $PSScriptRoot 'windows-updater-support.ps1')
+if (-not (Test-NativeUpdateDiagnosticsParser)) { throw 'Native update diagnostic parser fixture failed.' }
 $account = 'mcu' + [Guid]::NewGuid().ToString('N').Substring(0,12)
 if (Get-LocalUser -Name $account -ErrorAction SilentlyContinue) { throw 'Refusing existing service account.' }
 $scratch = Join-Path $env:RUNNER_TEMP ('minecraft-updater-' + [Guid]::NewGuid().ToString('N'))
@@ -43,6 +44,7 @@ $failed = $false
 $cleanupChecked = $false
 $script:assertionFailure = $null
 $stage = 'inputs'
+$diagnosticStart = Get-Date
 function Wait-NativeService([string]$Name, [string]$State, [int]$Seconds) {
  $service = Get-Service -Name $Name
  try { $service.WaitForStatus($State,[TimeSpan]::FromSeconds($Seconds)) } finally { $service.Dispose() }
@@ -207,6 +209,25 @@ try {
 } finally {
  try {
   if ($installStarted) {
+   try {
+    $diagnosticStartUtc = $diagnosticStart.ToUniversalTime().ToString('o')
+    $diagnosticXPath = "*[System[Provider[@Name='MinecraftUIUpdater'] and TimeCreated[@SystemTime>='$diagnosticStartUtc']]]"
+    try { $nativeEvents = @(Get-WinEvent -LogName Application -FilterXPath $diagnosticXPath -MaxEvents 1024 -ErrorAction Stop) }
+    catch {
+     if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound,*') { $nativeEvents = @() }
+     else { throw }
+    }
+    $nativeDiagnostics = Convert-NativeUpdateDiagnostics $nativeEvents
+    $nativeDiagnostics['capture_failed'] = $false
+   } catch {
+    $nativeDiagnostics = [ordered]@{format=1;event_counts=[ordered]@{activation_failure=0;probe_failure=0;probe_stopped=0};records=@();capture_failed=$true}
+   }
+   try {
+    ConvertTo-Json -Depth 5 -InputObject $nativeDiagnostics | Set-Content (Join-Path $OutputDirectory 'native-update-diagnostics.json')
+   } catch {
+    $failed = $true
+    Write-Output 'FAIL native updater diagnostic artifact write; continuing owned cleanup'
+   }
    @(Get-CimInstance Win32_Service -Filter "Name='MinecraftUI' OR Name='MinecraftUIUpdater' OR Name='MinecraftUIUpdateProbe'") | Select-Object Name,State,StartMode,ProcessId,ExitCode,ServiceSpecificExitCode | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'scm-summary.json')
    @(Get-WinEvent -FilterHashtable @{LogName='System';ProviderName='Service Control Manager';StartTime=(Get-Date).AddMinutes(-25)} -ErrorAction SilentlyContinue) | Group-Object Id | Select-Object Name,Count | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'event-summary.json')
    # Terminate an owned interrupted updater first, so no update goroutine can

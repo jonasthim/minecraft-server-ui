@@ -564,74 +564,101 @@ func (d windowsDriver) probe(ctx context.Context, source string, expectedImage I
 	var result Capability
 	bin, err := openProtectedRoot(ctx, d.paths.Bin)
 	if err != nil {
+		logWindowsProbeFailure("bin_open", err)
 		return result, err
 	}
 	defer bin.Close()
 	probe := "minecraft-ui-probe.exe"
 	if err := bin.Remove(probe); err != nil && !errors.Is(err, os.ErrNotExist) {
+		logWindowsProbeFailure("probe_remove", err)
 		return result, err
 	}
 	if err := copyVerified(ctx, bin, source, bin, probe, expectedImage); err != nil {
+		logWindowsProbeFailure("probe_copy", err)
 		return result, err
 	}
 	if err := d.Fence(ctx, bin); err != nil {
+		logWindowsProbeFailure("bin_fence", err)
 		return result, err
 	}
 	control, err := safepath.OpenRoot(ctx, controlDirectory(d.paths.Data))
 	if err != nil {
+		logWindowsProbeFailure("control_open", err)
 		return result, err
 	}
 	defer control.Close()
 	for _, name := range []string{"probe.json", "probe.pending", "capability.json"} {
 		if err := control.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logWindowsProbeFailure("control_remove", err)
 			return result, err
 		}
 	}
 	challenge, err := ReadChallenge(ctx, d.paths.Data)
 	if err != nil {
+		logWindowsProbeFailure("challenge_read", err)
 		return result, err
 	}
 	if capabilityOnly {
 		request := CandidateProbeRequest{Format: 1, Nonce: challenge.Nonce, Version: expectedImage.Version, Schema: expectedImage.Schema, SHA256: expectedImage.SHA256}
 		body, e := json.Marshal(request)
 		if e != nil {
+			logWindowsProbeFailure("capability_encode", e)
 			return result, e
 		}
 		if e := writeFile(ctx, control, "capability.json", bytesReader(body), int64(len(body)), ""); e != nil {
+			logWindowsProbeFailure("capability_write", e)
 			return result, e
 		}
 	}
 	defer control.Remove("capability.json")
 	m, service, err := openSCMService(probeService)
 	if err != nil {
+		logWindowsProbeFailure("service_open", err)
 		return result, err
 	}
 	defer m.Disconnect()
 	defer service.Close()
 	configuration, err := service.Config()
 	expected := `"` + filepath.Join(d.paths.Bin, probe) + `" update-schema-service`
-	if err != nil || !strings.EqualFold(configuration.BinaryPathName, expected) {
+	if err != nil {
+		logWindowsProbeFailure("service_config", err)
 		return result, errors.New("fixed Windows schema probe service binding mismatch")
+	}
+	if !strings.EqualFold(configuration.BinaryPathName, expected) {
+		failure := errors.New("fixed Windows schema probe service binding mismatch")
+		logWindowsProbeFailure("service_binding", failure)
+		return result, failure
 	}
 	accountSID, e := (&windowsUpdater{paths: d.paths}).accountSID(ctx)
 	if e != nil {
+		logWindowsProbeFailure("account_sid", e)
 		return result, e
 	}
 	configuredSID, _, _, e := windows.LookupSID("", configuration.ServiceStartName)
-	if e != nil || configuredSID.String() != accountSID {
+	if e != nil {
+		logWindowsProbeFailure("configured_sid", e)
 		return result, errors.New("schema probe must run as the configured unprivileged manager account")
+	}
+	if configuredSID.String() != accountSID {
+		failure := errors.New("schema probe must run as the configured unprivileged manager account")
+		logWindowsProbeFailure("configured_sid", failure)
+		return result, failure
 	}
 	actions, e := service.RecoveryActions()
 	if e != nil {
+		logWindowsProbeFailure("recovery_actions", e)
 		return result, e
 	}
 	for _, action := range actions {
 		if action.Type != mgr.NoAction {
-			return result, errors.New("schema probe recovery actions must be disabled")
+			failure := errors.New("schema probe recovery actions must be disabled")
+			logWindowsProbeFailure("recovery_action_check", failure)
+			return result, failure
 		}
 	}
 
 	if err := service.Start(); err != nil {
+		logWindowsProbeFailure("service_start", err)
 		return result, err
 	}
 	deadline, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -639,25 +666,32 @@ func (d windowsDriver) probe(ctx context.Context, source string, expectedImage I
 	for {
 		status, err := service.Query()
 		if err != nil {
+			logWindowsProbeFailure("service_query", err)
 			return result, err
 		}
 		if status.State == svc.Stopped {
+			logWindowsProbeStopped(status)
 			break
 		}
 		select {
 		case <-deadline.Done():
 			_, _ = service.Control(svc.Stop)
-			return result, errors.New("Windows schema probe timed out")
+			failure := errors.New("Windows schema probe timed out")
+			logWindowsProbeFailure("service_timeout", failure)
+			return result, failure
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 	body, err := readChecked(ctx, control, "probe.json", 4096)
 	if err != nil {
+		logWindowsProbeFailure("result_read", err)
 		return result, err
 	}
 	var report ProbeResult
 	if strictJSON(body, &report) != nil || report.Format != 1 || report.Nonce != challenge.Nonce || report.Version != expectedImage.Version || report.ExecutableSHA256 != expectedImage.SHA256 {
-		return result, errors.New("Windows schema probe identity mismatch")
+		failure := errors.New("Windows schema probe identity mismatch")
+		logWindowsProbeFailure("result_validate", failure)
+		return result, failure
 	}
 	authorized := report.ActorAuthorized
 	return Capability{Format: 1, Version: report.Version, Schema: report.Schema, ActorAuthorized: &authorized}, nil
