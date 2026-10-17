@@ -32,7 +32,17 @@ func platformPaths() nativePaths {
 }
 func openProtectedRoot(ctx context.Context, path string) (*os.Root, error) {
 	for p := path; ; p = filepath.Dir(p) {
-		if err := protectedWindowsPath(p); err != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		kind := windowsExistingAncestor
+		if p == path {
+			kind = windowsApplicationDirectory
+		}
+		// Walk outward only after the existing application directory has
+		// passed strict checks. Each ancestor therefore contains an already
+		// checked child which untrusted principals cannot delete or replace.
+		if err := protectedWindowsPath(p, kind); err != nil {
 			return nil, err
 		}
 		if p == filepath.Dir(p) {
@@ -59,24 +69,53 @@ func protectedFile(root *os.Root, name string) error {
 	if err != nil || closeErr != nil || attributes.NumberOfLinks != 1 || attributes.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		return errors.New("native update file is linked or unsafe")
 	}
-	return protectedWindowsPath(filepath.Join(root.Name(), name))
+	return protectedWindowsPath(filepath.Join(root.Name(), name), windowsRegularFile)
 }
-func protectedWindowsPath(path string) error {
+func protectedWindowsPath(path string, kind windowsPathKind) error {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return errors.New("native update path could not be verified")
+	}
+	attributes, err := windows.GetFileAttributes(name)
+	if err != nil || !safeWindowsPathAttributes(attributes, kind) {
+		return errors.New("native update path is missing, reparse, or has an unsafe type")
+	}
 	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return errors.New("native update ACL could not be verified")
-	}
-	dacl, _, err := sd.DACL()
-	if err != nil || dacl == nil {
-		return errors.New("native update ACL is unrestricted")
 	}
 	installer, _, _, e := windows.LookupSID("", `NT SERVICE\TrustedInstaller`)
 	if e != nil {
 		return errors.New("trusted installer identity unavailable")
 	}
+	return validateWindowsSecurityDescriptor(sd, kind, installer.String())
+}
+
+func safeWindowsPathAttributes(attributes uint32, kind windowsPathKind) bool {
+	if attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return false
+	}
+	switch kind {
+	case windowsExistingAncestor, windowsApplicationDirectory:
+		return attributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0
+	case windowsRegularFile:
+		return attributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0
+	default:
+		return false
+	}
+}
+
+func validateWindowsSecurityDescriptor(sd *windows.SECURITY_DESCRIPTOR, kind windowsPathKind, installer string) error {
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		return errors.New("native update ACL is unrestricted")
+	}
 	trusted := func(sid *windows.SID) bool {
+		if sid == nil {
+			return false
+		}
 		id := sid.String()
-		return id == "S-1-5-18" || id == "S-1-5-32-544" || id == installer.String()
+		return id == "S-1-5-18" || id == "S-1-5-32-544" || id == installer
 	}
 	owner, _, err := sd.Owner()
 	if err != nil || !trusted(owner) {
@@ -94,7 +133,7 @@ func protectedWindowsPath(path string) error {
 			return errors.New("native update ACL requires explicit review")
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if !trusted(sid) && ace.Mask&(windows.GENERIC_ALL|windows.GENERIC_WRITE|windows.DELETE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.FILE_WRITE_DATA|0x0040) != 0 {
+		if !trusted(sid) && untrustedWindowsAccess(uint32(ace.Mask), kind) {
 			return errors.New("native update path is writable by an untrusted principal")
 		}
 	}
