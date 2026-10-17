@@ -178,3 +178,46 @@ After correction: Ran18 tests; OK (0.194s).
 ```
 
 The added source guard rejects the exact unavailable type literal that this hosted job proved unsafe. It does not substitute for native PowerShell execution; `pwsh` remains unavailable locally. This correction needs source review and a later root-owned hosted run to expose the original npm-stage failure. Both hosted attempts remain failed and Task33 gameplay acceptance remains open. No source was staged or committed by this worker, and no local native operation or game was launched.
+
+## Third hosted attempt — run39038021693
+
+[Installed Minecraft acceptance39038021693](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39038021693) ran exact source `c41b2d654ccde2a7be9edbd6a1c7b40c39a9801c`. Both hosts still finished **failure**. The integrator provided the scrubbed artifact trees at `/home/thim/.cache/dilla-tmp/game-39038021693`; this worker reviewed them and the fixed Windows failure signals. No worker dispatch was performed.
+
+The Ubuntu manager SHA256 was `27d1ffe8cb1802283c79c28cf0949d6c5bbd8063d8d846edb57c848f483146fd`. This attempt establishes a real initial milestone for **Vanilla1.21.9 on Ubuntu24.04**: installed native process/readiness and required settings verification passed after the reviewed discovery-array correction. The native JVM was PID3000, with boot/start identity `e4546f71-b5c6-4088-b984-9ef7efe538bc:15368`. Two actual offline loopback `minecraft-protocol@1.68.0` PLAY connections each received49world chunks, one acknowledged teleport and one keepalive. The first sent gameplay yaw31.25; the second's server-supplied initial yaw was31.25, proving the saved player-view marker survived disconnect/reconnect. Their completed chunk-batch counts were12and6. This is real headless gameplay evidence for the stated disposable tuple, not Microsoft-authenticated/graphical-client qualification.
+
+The harness then failed at `online_backup` with HTTP409/`instance_busy`, **before an online backup job could be admitted**. There is no successful lease/archive/restore/restart assertion in this attempt. Exact-source inspection narrows the throwing request to `POST /instances/game-acceptance/backups`: the preceding backup-list and console-history GET implementations have no `instance_busy` path. Backup enqueue reaches `jobs.Enqueue`, which rejects an existing `s.idle` reservation. Background read-only console/player/map observation currently uses that same exclusive reservation. This establishes a job-admission race with read-only observation, but the artifacts do not identify the specific concurrent holder. It would be inaccurate to name one sampler as the observed holder.
+
+Root assigned the product admission correction separately. This worker did not change jobs, console, backup admission or retry/wait behavior. The owned harness now adds only a **fixed `api_operation` enum** to failed HTTP diagnostics. Exact allowlisted route/method shapes distinguish backup-create/list, console logs, lifecycle and other harness calls; unknown paths become `unclassified`. It retains no raw endpoint, identifier, request payload, URL or body and preserves the failed response. This makes a future409 directly attributable without source-path elimination.
+
+Windows manager SHA256 was `968b66f53d487505301f05bb1950d72df28b82f67cb362a2658c6be1e72c2f8f`. Its working catch now reports `dependency_npm`, `parameter_binding_validation`, source line47, covering the invocation containing an inline `Join-Path $PSScriptRoot` argument. Toolchain setup recorded Node24.21.0/npm11.19.0. Firewall/account/installer/game API work was not reached.
+
+## Windows npm scope reproduction and correction
+
+Root explicitly approved an official **portable PowerShell development tool in disposable task cache**, solely for harmless argument/scope fixtures. No system package was installed, no persistent PATH/profile change was made and no product dependency was added. The downloaded [official PowerShell7.6.7 release](https://github.com/PowerShell/PowerShell/releases/tag/v7.6.7) Linux-x64 archive SHA256 was verified as `6896f9e3a6b0a354bf470835a96da76d2f801cd50dcf047ad7c4563bf93bf431` against both the separate official `hashes.sha256` file and official release metadata. The checksums file itself matched its independently published SHA256 `6c2d5f481cc20c83df45d5c29e15f0d7e9e1db82eb5b8f7f2fe33b107f308325`. Both checks passed before extraction/execution. The tool is confined to `/home/thim/.cache/dilla-tmp/task33a-powershell-7.6.7`.
+
+The exact [upstream npm11.19.0 PowerShell shim](https://raw.githubusercontent.com/npm/cli/v11.19.0/bin/npm.ps1), SHA256 `3bf7c5ef339b71d6f8bc4ef4a7b7adb90727788674f0a3cef2ede8f5969ca327`, reparses the original invocation's argument expressions and executes them through `Invoke-Expression`. The inline `$PSScriptRoot` expression is re-evaluated there with an empty script root. With that actual shim, caller/dot-source fixtures and harmless local JS stubs standing in for npm-prefix/npm-cli, the original harness command reproduced `ParameterBindingValidationException`, parameter `Path`, and `ParameterArgumentValidationErrorEmptyStringNotAllowed,Microsoft.PowerShell.Commands.InvokeExpressionCommand`. A simple non-reparsing shim did not fail, isolating the re-evaluation behavior.
+
+The focused correction resolves `$gameClientDirectory` and `$npmLog` **before** invoking npm and passes those scalar variables. The actual upstream shim then passed the exact `ci`, `--ignore-scripts`, `--prefix`, and caller-relative directory arguments, including a directory containing spaces. It invokes no real npm installation in the reproduction. There is no npm.cmd workaround, shell-evaluation change, dependency/version change or increased wait.
+
+The permanent network-free regression extracts the **actual current dependency block** from `windows-game.ps1` and runs it in a temporary PowerShell caller against a purpose-written parser/re-evaluation stand-in. It copies no substantial upstream shim source into the repository, executes no package install and tests the space-containing directory and exact arguments. It runs with an explicitly supplied development tool or an available CI `pwsh`; it skips explicitly if neither exists.
+
+Verification:
+
+```text
+python3 -B -m unittest discover -s deploy/qualification -p game_api_test.py -v
+HTTP operation diagnostic before implementation: Ran20; FAILED (failures=6).
+After implementation: Ran20; OK (0.202s).
+
+MINECRAFT_UI_TEST_PWSH=/home/thim/.cache/dilla-tmp/task33a-powershell-7.6.7/runtime/pwsh python3 -B -m unittest discover -s deploy/qualification -p game_api_test.py -v
+Original npm dependency block: Ran21; FAILED (failures=1), empty Path in Invoke-Expression.
+Precomputed argument block: Ran21; OK (0.484s).
+
+Portable PowerShell Parser.ParseFile on windows-game.ps1 and windows-updater-support.ps1
+PASS: 0 parse errors for each (files parsed, not executed).
+python3 -m py_compile deploy/qualification/game_api.py deploy/qualification/game_api_test.py
+PASS (exit0)
+git diff --check -- deploy/qualification/game_api.py deploy/qualification/game_api_test.py deploy/qualification/windows-game.ps1 docs/reports/task33a.md
+PASS (exit0)
+```
+
+The portable Linux PowerShell fixture is language/argument evidence, **not Windows OS qualification**. Temporary fixture callers, outputs and JS stand-ins were removed. No service/account/firewall/LSA/native Windows function, Minecraft process or user preview was used locally. The native Windows hosted workflow must still execute the corrected path and all remaining game assertions. Source review and the independently owned observation-admission fix are required before root dispatches the next exact-source game run. Online backup/restore/restart and Task33 completion remain open.

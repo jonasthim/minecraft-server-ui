@@ -44,7 +44,11 @@ try {
  & node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)'
  if ($LASTEXITCODE -ne 0) { throw 'node_version' }
  $stage = 'dependency_npm'
- & npm ci --ignore-scripts --prefix (Join-Path $PSScriptRoot 'game-client') *> (Join-Path $scratch 'npm')
+ # npm.ps1 reparses the command in Invoke-Expression, where PSScriptRoot is
+ # empty. Resolve caller-relative arguments before invoking that shim.
+ $gameClientDirectory = Join-Path $PSScriptRoot 'game-client'
+ $npmLog = Join-Path $scratch 'npm'
+ & npm ci --ignore-scripts --prefix $gameClientDirectory *> $npmLog
  if ($LASTEXITCODE -ne 0) { throw 'npm_ci' }
  $stage = 'firewall'
  if (@(Get-NetFirewallProfile | Where-Object { -not $_.Enabled }).Count -ne 0) { throw 'firewall_disabled' }

@@ -99,6 +99,31 @@ def safe_id(value):
     return value
 
 
+def api_operation(path, payload):
+    method = "GET" if payload is None else "POST"
+    fixed = {
+        ("GET", "/api/v1/auth/status"): "auth_status", ("POST", "/api/v1/auth/setup"): "auth_setup",
+        ("GET", "/api/v1/auth/me"): "auth_me", ("POST", "/api/v1/instances"): "instance_create",
+        ("GET", PREFIX): "instance_detail", ("GET", PREFIX + "/lifecycle"): "lifecycle_state",
+        ("POST", PREFIX + "/lifecycle/preview"): "lifecycle_preview", ("POST", PREFIX + "/lifecycle"): "lifecycle_mutation",
+        ("GET", PREFIX + "/backups"): "backup_list", ("POST", PREFIX + "/backups"): "backup_create",
+        ("GET", PREFIX + "/console/status"): "console_status",
+    }
+    if (method, path) in fixed:
+        return fixed[(method, path)]
+    if method == "GET" and re.fullmatch(re.escape(PREFIX) + r"/console/logs\?after=[0-9]+&limit=500", path):
+        return "console_logs"
+    if re.fullmatch(re.escape(PREFIX) + r"/backups/[a-f0-9]{32}/restore", path) and method == "POST":
+        return "backup_restore"
+    if re.fullmatch(re.escape(PREFIX) + r"/backups/[a-f0-9]{32}/download", path) and method == "GET":
+        return "backup_download"
+    if re.fullmatch(r"/api/v1/jobs/[a-zA-Z0-9_-]{1,64}", path) and method == "GET":
+        return "job_state"
+    if re.fullmatch(r"/api/v1/jobs/[a-zA-Z0-9_-]{1,64}/logs\?after=0&limit=500", path) and method == "GET":
+        return "job_logs"
+    return "unclassified"
+
+
 def digest(path):
     value = hashlib.sha256()
     with open(path, "rb") as stream:
@@ -144,7 +169,7 @@ class API:
                 pass
             finally:
                 response.close()
-            raise Failure("api_http_status", http_status=status, api_code=code)
+            raise Failure("api_http_status", http_status=status, api_code=code, api_operation=api_operation(path, payload))
         return response
 
     def request(self, path, payload=None, expected=200, timeout=30):

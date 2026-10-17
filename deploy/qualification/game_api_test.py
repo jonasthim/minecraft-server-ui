@@ -9,6 +9,7 @@ import struct
 import tempfile
 import re
 import shlex
+import shutil
 import subprocess
 import unittest
 from unittest import mock
@@ -37,6 +38,46 @@ class Response(io.BytesIO):
 
 
 class Helpers(unittest.TestCase):
+    def test_windows_npm_arguments_survive_shim_reparse_scope(self):
+        pwsh = os.environ.get("MINECRAFT_UI_TEST_PWSH") or shutil.which("pwsh")
+        if not pwsh:
+            self.skipTest("PowerShell unavailable; source fixture requires an explicit development tool or native CI pwsh")
+        source = (game.HERE / "windows-game.ps1").read_text()
+        dependency = source[source.index(" $stage = 'dependency_npm'"):source.index(" $stage = 'firewall'")]
+        with tempfile.TemporaryDirectory(prefix="game-npm-scope-") as tmp:
+            root = Path(tmp)
+            caller = root / "caller with spaces"
+            caller.mkdir()
+            scratch = caller / "scratch"
+            scratch.mkdir()
+            (caller / "game-client").mkdir()
+            (root / "helper.ps1").write_text("function harmless-helper { return 1 }\n")
+            # Purpose-written reproduction of npm11.19's command re-evaluation,
+            # without invoking npm/Node/installers or copying its implementation.
+            (root / "npm.ps1").write_text(r'''$statement = $MyInvocation.Statement
+$tokens = $null; $parseErrors = $null
+$tree = [Management.Automation.Language.Parser]::ParseInput($statement,[ref]$tokens,[ref]$parseErrors)
+$elements = $tree.EndBlock.Statements[0].PipelineElements[0].CommandElements
+$argumentsText = ($elements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text }) -join ' '
+$capture = (Join-Path $PSScriptRoot 'capture.ps1').Replace("'", "''")
+Invoke-Expression ("& '" + $capture + "' " + $argumentsText)
+''')
+            (root / "capture.ps1").write_text("@{argv=@($args)} | ConvertTo-Json -Compress\n")
+            quote = lambda p: "'" + str(p).replace("'", "''") + "'"
+            script = caller / "fixture.ps1"
+            script.write_text("$ErrorActionPreference='Stop'\n"
+                              ". " + quote(root / "helper.ps1") + "\n"
+                              "$scratch=" + quote(scratch) + "\n"
+                              "Set-Alias npm " + quote(root / "npm.ps1") + "\n"
+                              "$LASTEXITCODE=0\n" + dependency)
+            env = {**os.environ, "POWERSHELL_TELEMETRY_OPTOUT": "1", "XDG_CACHE_HOME": str(root / "cache"),
+                   "XDG_CONFIG_HOME": str(root / "config"), "XDG_DATA_HOME": str(root / "data")}
+            result = subprocess.run([pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(script)],
+                                    capture_output=True, text=True, timeout=20, env=env)
+            self.assertEqual(result.returncode, 0, "npm reparse-scope fixture failed: " + result.stderr)
+            self.assertEqual(json.loads((scratch / "npm").read_text())["argv"],
+                             ["ci", "--ignore-scripts", "--prefix", str(caller / "game-client")])
+
     def test_windows_failure_handler_does_not_resolve_unavailable_exception_type(self):
         # GitHub run39036770835 proved this type literal itself throws inside
         # catch, replacing the original dependency error. This source guard is
@@ -142,13 +183,26 @@ class Helpers(unittest.TestCase):
         with mock.patch.object(api.client, "open", return_value=Response(body, 422)):
             with self.assertRaises(game.Failure) as failure:
                 api.request("/api/v1/instances", {})
-            self.assertEqual(failure.exception.evidence, {"http_status": 422, "api_code": "unsupported"})
+            self.assertEqual(failure.exception.evidence, {"http_status": 422, "api_code": "unsupported", "api_operation": "instance_create"})
             self.assertNotIn("secret", str(failure.exception))
         for path in ("https://attacker.invalid/", "/api/v1/x\r\nAuthorization: secret", "/api/v1/x\\evil"):
             with self.assertRaises(game.Failure):
                 api.request(path)
         with self.assertRaises(game.Failure):
             game.NoRedirect().redirect_request(None, None, 302, "", {}, "https://elsewhere.invalid")
+
+    def test_http_failure_diagnostic_identifies_fixed_operation_without_path_or_payload(self):
+        api = game.API()
+        for path, payload, expected in ((game.PREFIX + "/backups", None, "backup_list"),
+                                        (game.PREFIX + "/backups", {"kind": "full"}, "backup_create"),
+                                        (game.PREFIX + "/console/logs?after=12&limit=500", None, "console_logs"),
+                                        (game.PREFIX + "/backups/" + "a" * 32 + "/restore", {"confirmed": True}, "backup_restore"),
+                                        ("/api/v1/unknown/private-secret", {"password": "private-secret"}, "unclassified")):
+            with self.subTest(path=path), mock.patch.object(api.client, "open", return_value=Response(b'{"error":{"code":"instance_busy","message":"private-secret"}}', 409)):
+                with self.assertRaises(game.Failure) as failure:
+                    api.request(path, payload)
+                self.assertEqual(failure.exception.evidence, {"http_status": 409, "api_code": "instance_busy", "api_operation": expected})
+                self.assertNotIn("private-secret", json.dumps(failure.exception.evidence))
 
     def test_failed_job_emits_allowlisted_phase_without_raw_error(self):
         api = game.API()
