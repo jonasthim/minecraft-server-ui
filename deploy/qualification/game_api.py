@@ -120,7 +120,7 @@ class API:
                          urllib.request.HTTPCookieProcessor(self.jar))
         self.csrf = None
 
-    def open(self, path, payload=None, expected=200):
+    def open(self, path, payload=None, expected=200, timeout=30):
         require(path.startswith("/api/v1/") and not any(c in path for c in "\r\n\\"), "api_path_invalid")
         headers = {"Content-Type": "application/json", "Origin": BASE}
         if self.csrf:
@@ -128,7 +128,7 @@ class API:
         request = urllib.request.Request(BASE + path, headers=headers,
                        data=None if payload is None else json.dumps(payload).encode())
         try:
-            response = self.client.open(request, timeout=30)
+            response = self.client.open(request, timeout=timeout)
         except urllib.error.HTTPError as error:
             response = error
         if response.status != expected:
@@ -147,8 +147,8 @@ class API:
             raise Failure("api_http_status", http_status=status, api_code=code)
         return response
 
-    def request(self, path, payload=None, expected=200):
-        with self.open(path, payload, expected) as response:
+    def request(self, path, payload=None, expected=200, timeout=30):
+        with self.open(path, payload, expected, timeout) as response:
             require(response.headers.get_content_type() == "application/json", "api_not_json")
             raw = response.read((2 << 20) + 1)
             require(len(raw) <= 2 << 20, "api_body_bound")
@@ -166,7 +166,8 @@ class API:
                 phase = phase if isinstance(phase, str) and re.fullmatch(r"[a-z_]{1,64}", phase) else "unclassified"
                 if state != "succeeded":
                     raise Failure("job_terminal_failure", job_state=state, job_phase=phase,
-                                  job_diagnostics=self.job_diagnostics(identifier))
+                                  job_diagnostics=self.job_diagnostics(identifier),
+                                  console_diagnostics=self.console_diagnostics())
                 return job
             time.sleep(1)
         raise Failure("job_timeout")
@@ -204,6 +205,51 @@ class API:
             if isinstance(text, str) and len(text) <= 8192 and text in messages:
                 codes.add(messages[text])
         return sorted(codes) or ["unclassified"]
+
+    def console_diagnostics(self):
+        # Read-only status, with a short independent deadline. Never retain the
+        # native reason text, source fields, credentials, or raw response body.
+        reasons = {
+            "Fresh native readiness has not been verified.": "readiness_unverified",
+            "Fresh native readiness could not be verified.": "readiness_unverified",
+            "No managed JVM identity has been recorded.": "identity_absent",
+            "The managed JVM is not running.": "process_stopped",
+            "The managed JVM is stopping or has an unresolved control failure.": "process_control_unresolved",
+            "The native server has not acknowledged world readiness.": "world_not_ready",
+            "native management discovery or protocol version is unsupported": "discovery_unsupported",
+            "native management discovery contains invalid methods": "discovery_invalid_methods",
+            "native management discovery contains duplicate methods": "discovery_duplicate_methods",
+            "authenticated native management connection failed": "management_connection_failed",
+            "native readiness status method is unavailable": "status_method_unavailable",
+            "native readiness result is invalid": "status_result_invalid",
+            "a required native setting is unavailable": "required_setting_unavailable",
+            "native gamerule discovery is unavailable": "gamerule_discovery_unavailable",
+            "native gamerule response was invalid": "gamerule_result_invalid",
+            "required native boolean rule is ambiguous or unsupported": "required_rule_unsupported",
+            "required native rule was not discovered": "required_rule_missing",
+            "required native setting differs from the desired value": "required_setting_mismatch",
+            "native rule update is unavailable": "rule_update_unavailable",
+            "native rule update returned an invalid acknowledgement": "rule_ack_invalid",
+            "native rule update was not acknowledged exactly": "rule_ack_mismatch",
+            "native rule readback did not match the desired value": "rule_readback_mismatch",
+            "Fresh native readiness and required native rule values are verified. Plugin and mod gameplay overrides are unverified.": "native_ready",
+        }
+        try:
+            response = self.request(PREFIX + "/console/status", timeout=5)
+        except Exception:
+            return {"diagnostic_available": False, "reason_code": "status_unavailable"}
+        state = response.get("state") if isinstance(response, dict) else None
+        if not isinstance(state, dict):
+            return {"diagnostic_available": False, "reason_code": "status_malformed"}
+        status = state.get("status")
+        reason = state.get("reason")
+        result = {"diagnostic_available": True,
+                  "status": status if status in ("unknown", "stopped", "starting", "stopping", "running", "crashed", "settings_unverified", "ready") else "unclassified",
+                  "reason_code": reasons.get(reason, "unclassified") if isinstance(reason, str) else "unclassified"}
+        for key in ("process_running", "control_connected", "game_ready", "required_settings_verified", "ready_for_use", "logs_available"):
+            if type(state.get(key)) is bool:
+                result[key] = state[key]
+        return result
 
     def lifecycle(self, operation, **kwargs):
         return self.job(self.request(PREFIX + "/lifecycle", {"operation": operation, **kwargs}, 202), 900 if operation == "install" else 300)
@@ -553,7 +599,7 @@ def wait_game(api):
         if all(state.get(k) is True for k in ("process_running", "control_connected", "game_ready", "required_settings_verified", "ready_for_use")):
             return
         time.sleep(2)
-    raise Failure("game_readiness_timeout")
+    raise Failure("game_readiness_timeout", console_diagnostics=api.console_diagnostics())
 
 
 def execute(output, report):

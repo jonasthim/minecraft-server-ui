@@ -155,7 +155,34 @@ class Helpers(unittest.TestCase):
         with mock.patch.object(api, "request", return_value={"job": {"id": "abc", "state": "failed", "phase": "verifying_backup", "error": "secret"}}):
             with self.assertRaises(game.Failure) as failure:
                 api.job({"job": {"id": "abc"}})
-            self.assertEqual(failure.exception.evidence, {"job_state": "failed", "job_phase": "verifying_backup", "job_diagnostics": ["unclassified"]})
+            self.assertEqual(failure.exception.evidence, {"job_state": "failed", "job_phase": "verifying_backup", "job_diagnostics": ["unclassified"],
+                                                         "console_diagnostics": {"diagnostic_available": False, "reason_code": "status_malformed"}})
+
+    def test_console_diagnostics_allow_only_known_reason_enums_and_actual_booleans(self):
+        api = game.API()
+        state = {"status": "settings_unverified", "reason": "native readiness status method is unavailable", "process_running": True,
+                 "control_connected": False, "game_ready": False, "required_settings_verified": False, "ready_for_use": False,
+                 "logs_available": True, "password": "private", "source": "private/path", "other": {"token": "private"}}
+        with mock.patch.object(api, "request", return_value={"state": state}) as request:
+            result = api.console_diagnostics()
+            self.assertEqual(result, {"diagnostic_available": True, "status": "settings_unverified", "reason_code": "status_method_unavailable",
+                                      "process_running": True, "control_connected": False, "game_ready": False, "required_settings_verified": False,
+                                      "ready_for_use": False, "logs_available": True})
+            self.assertEqual(request.call_args.args, (game.PREFIX + "/console/status",))
+            self.assertEqual(request.call_args.kwargs, {"timeout": 5})
+        state.update(status="private arbitrary value", reason="native readiness status method is unavailable secret-suffix",
+                     process_running="true", control_connected=1, game_ready=None)
+        with mock.patch.object(api, "request", return_value={"state": state}):
+            result = api.console_diagnostics()
+            self.assertEqual(result["status"], "unclassified")
+            self.assertEqual(result["reason_code"], "unclassified")
+            self.assertNotIn("process_running", result)
+            self.assertNotIn("control_connected", result)
+            self.assertNotIn("game_ready", result)
+            self.assertNotIn("private", json.dumps(result))
+            self.assertNotIn("secret", json.dumps(result))
+        with mock.patch.object(api, "request", side_effect=game.Failure("api_http_status")):
+            self.assertEqual(api.console_diagnostics(), {"diagnostic_available": False, "reason_code": "status_unavailable"})
 
     def test_job_diagnostics_classify_only_exact_public_authored_messages(self):
         api = game.API()

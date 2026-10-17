@@ -32,11 +32,14 @@ type State struct {
 	GameplayEffect           string    `json:"gameplay_effect"`
 	ObservedAt               time.Time `json:"observed_at"`
 }
+type rpcParam struct {
+	Name     string          `json:"name"`
+	Schema   json.RawMessage `json:"schema"`
+	Required bool            `json:"required"`
+}
 type rpcMethod struct {
-	Name   string `json:"name"`
-	Params *struct {
-		Name string `json:"name"`
-	} `json:"params"`
+	Name   string     `json:"name"`
+	Params []rpcParam `json:"params"`
 	Result *struct {
 		Name   string          `json:"name"`
 		Schema json.RawMessage `json:"schema"`
@@ -100,9 +103,15 @@ func dialRPCGuarded(ctx context.Context, cfg instance.ManagementConfig, check fu
 		return nil, domain.E(domain.CodeUnsupported, "native management discovery or protocol version is unsupported")
 	}
 	for _, m := range discovery.Methods {
-		if m.Name == "" || len(m.Name) > 256 {
+		if m.Name == "" || len(m.Name) > 256 || m.Params == nil {
 			c.Close()
 			return nil, domain.E(domain.CodeUnsupported, "native management discovery contains invalid methods")
+		}
+		for _, param := range m.Params {
+			if param.Name == "" || len(param.Name) > 256 {
+				c.Close()
+				return nil, domain.E(domain.CodeUnsupported, "native management discovery contains invalid methods")
+			}
 		}
 		if _, exists := c.methods[m.Name]; exists {
 			c.Close()
@@ -115,7 +124,13 @@ func dialRPCGuarded(ctx context.Context, cfg instance.ManagementConfig, check fu
 func (c *rpcClient) Close() { _ = c.conn.CloseNow() }
 func (c *rpcClient) has(method, param, result string) bool {
 	m, ok := c.methods[method]
-	return ok && m.Result != nil && m.Result.Name == result && (param == "" && m.Params == nil || param != "" && m.Params != nil && m.Params.Name == param)
+	if !ok || m.Result == nil || m.Result.Name != result || m.Params == nil {
+		return false
+	}
+	if param == "" {
+		return len(m.Params) == 0
+	}
+	return len(m.Params) == 1 && m.Params[0].Name == param
 }
 func (c *rpcClient) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	operation, cancel := context.WithTimeout(ctx, 5*time.Second)

@@ -98,9 +98,9 @@ func playerRPCFixture(t *testing.T, protocol string, omitRead bool, handler func
 					if omitRead && m.name == "allowlist" {
 						continue
 					}
-					item := map[string]any{"name": "minecraft:" + m.name, "result": map[string]any{"name": m.result}}
+					item := map[string]any{"name": "minecraft:" + m.name, "params": []any{}, "result": map[string]any{"name": m.result}}
 					if m.param != "" {
-						item["params"] = map[string]any{"name": m.param}
+						item["params"] = []any{map[string]any{"name": m.param, "required": true}}
 					}
 					methods = append(methods, item)
 				}

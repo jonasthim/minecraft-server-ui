@@ -99,9 +99,9 @@ func rpcFixtureBeforeResponse(t *testing.T, protocol string, handler func(string
 			var result any
 			if request.Method == "rpc.discover" {
 				result = map[string]any{"openrpc": "1.3.2", "info": map[string]any{"version": protocol}, "methods": []any{
-					map[string]any{"name": "minecraft:server/status", "result": map[string]any{"name": "status", "schema": map[string]any{"$ref": "#/components/schemas/server_state"}}},
-					map[string]any{"name": "minecraft:gamerules", "result": map[string]any{"name": "gamerules", "schema": map[string]any{"type": "array"}}},
-					map[string]any{"name": "minecraft:gamerules/update", "params": map[string]any{"name": "gamerule"}, "result": map[string]any{"name": "gamerule"}},
+					map[string]any{"name": "minecraft:server/status", "params": []any{}, "result": map[string]any{"name": "status", "schema": map[string]any{"$ref": "#/components/schemas/server_state"}}},
+					map[string]any{"name": "minecraft:gamerules", "params": []any{}, "result": map[string]any{"name": "gamerules", "schema": map[string]any{"type": "array"}}},
+					map[string]any{"name": "minecraft:gamerules/update", "params": []any{map[string]any{"name": "gamerule", "required": true}}, "result": map[string]any{"name": "gamerule"}},
 				}}
 			} else {
 				result = handler(request.Method, request.Params)
@@ -119,6 +119,105 @@ func rpcFixtureBeforeResponse(t *testing.T, protocol string, handler func(string
 	t.Cleanup(srv.Close)
 	host, port := splitTestAddress(t, srv.Listener.Addr().String())
 	return instance.ManagementConfig{InstanceID: "test", Host: host, Port: port, Secret: strings.Repeat("a", 40), Protocol: protocol}
+}
+
+func TestMSMP1219OfficialDiscoveryShape(t *testing.T) {
+	// Shape provenance: official 1.21.9 server jar SHA1
+	// 11e54c2081420a4d49db3007e66c80a22579ff2a, MethodInfo (ats.class):
+	// ParamInfo.codec().listOf().xmap(...) is a required "params" array field,
+	// encoding an absent descriptor as [] and a present descriptor as [object].
+	// This is a synthetic authenticated socket probe, not a game-server run.
+	cfg := rpcFixture(t, "1.0.0", func(method string, _ json.RawMessage) any {
+		if method == "minecraft:server/status" {
+			return map[string]bool{"started": true}
+		}
+		return nil
+	})
+	c, err := dialRPC(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("official discovery array shape rejected: %v", err)
+	}
+	defer c.Close()
+	if !c.has("minecraft:server/status", "", "status") || !c.has("minecraft:gamerules/update", "gamerule", "gamerule") {
+		t.Fatal("zero/one descriptor discovery signature unavailable")
+	}
+	state, err := c.verify(t.Context(), nil, false)
+	if err != nil || !state.ReadyForUse {
+		t.Fatalf("official-shape readiness probe: %+v %v", state, err)
+	}
+}
+
+func TestMSMPDiscoveryArraySignatures(t *testing.T) {
+	for _, tc := range []struct {
+		name, params, expected string
+		decode, available      bool
+	}{
+		{"zero", `[]`, "", true, true},
+		{"one", `[{"name":"value","schema":{"type":"boolean"},"required":true}]`, "value", true, true},
+		{"unexpected_param", `[{"name":"value"}]`, "", true, false},
+		{"missing_param", `[]`, "value", true, false},
+		{"wrong_name", `[{"name":"other"}]`, "value", true, false},
+		{"extra_param", `[{"name":"value"},{"name":"other"}]`, "value", true, false},
+		{"duplicate_param", `[{"name":"value"},{"name":"value"}]`, "value", true, false},
+		{"null", `null`, "", true, false},
+		{"null_descriptor", `[null]`, "value", true, false},
+		{"empty_descriptor", `[{}]`, "value", true, false},
+		{"old_incorrect_object", `{"name":"value"}`, "value", false, false},
+		{"non_descriptor", `[42]`, "value", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var method rpcMethod
+			err := json.Unmarshal([]byte(`{"name":"minecraft:test","params":`+tc.params+`,"result":{"name":"out"}}`), &method)
+			if (err == nil) != tc.decode {
+				t.Fatalf("discovery decode=%v want %v", err, tc.decode)
+			}
+			if err != nil {
+				return
+			}
+			c := &rpcClient{methods: map[string]rpcMethod{method.Name: method}}
+			if c.has(method.Name, tc.expected, "out") != tc.available {
+				t.Fatal("accepted a different parameter cardinality/name or rejected exact signature")
+			}
+		})
+	}
+}
+
+func TestMSMPRejectsInvalidDiscoveryParameterDescriptors(t *testing.T) {
+	for _, params := range []string{"", `null`, `{"name":"value"}`, `[null]`, `[{}]`, `[42]`, `[{"name":"` + strings.Repeat("x", 257) + `"}]`} {
+		t.Run(params, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer "+strings.Repeat("a", 40) {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				c, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer c.CloseNow()
+				var request struct {
+					ID string `json:"id"`
+				}
+				if wsjson.Read(r.Context(), c, &request) != nil {
+					return
+				}
+				method := map[string]any{"name": "minecraft:server/status", "result": map[string]any{"name": "status"}}
+				if params != "" {
+					method["params"] = json.RawMessage(params)
+				}
+				result := map[string]any{"openrpc": "1.3.2", "info": map[string]any{"version": "1.0.0"}, "methods": []any{method}}
+				_ = wsjson.Write(r.Context(), c, map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+				_, _, _ = c.Read(r.Context())
+			}))
+			defer srv.Close()
+			host, port := splitTestAddress(t, srv.Listener.Addr().String())
+			client, err := dialRPC(t.Context(), instance.ManagementConfig{Host: host, Port: port, Secret: strings.Repeat("a", 40), Protocol: "1.0.0"})
+			if err == nil {
+				client.Close()
+				t.Fatal("malformed or missing discovery descriptors accepted")
+			}
+		})
+	}
 }
 func TestMSMPReadinessAndExactRuleReadback(t *testing.T) {
 	for _, protocol := range []string{"1.0.0", "2.0.0", "3.0.0", "3.1.0"} {

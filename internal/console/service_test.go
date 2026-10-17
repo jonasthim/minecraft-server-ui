@@ -430,3 +430,27 @@ func TestModernSessionRejectsGenerationChangesBeforeEffects(t *testing.T) {
 		})
 	}
 }
+
+func TestMSMP1219SessionUsesOfficialArrayDiscovery(t *testing.T) {
+	s, _, _ := serviceFixture(t)
+	cfg := rpcFixture(t, "1.0.0", func(method string, _ json.RawMessage) any {
+		switch method {
+		case "minecraft:server/status":
+			return map[string]bool{"started": true}
+		case "minecraft:gamerules":
+			return []any{map[string]any{"key": "pvp", "type": "boolean", "value": "false"}}
+		}
+		return nil
+	})
+	detail := instance.Detail{Instance: domain.Instance{ID: "test", Flavor: domain.FlavorVanilla, MinecraftVersion: "1.21.9"}, Settings: instance.SettingsProjection{DesiredRuntime: []instance.DesiredRuntimeSetting{{Kind: "boolean_gamerule", Rule: "pvp", Value: false, Supported: true, Scope: "native_server_rules"}}}}
+	s.instances = managedFixtureInstances{fixtureInstances: fixtureInstances{detail}, cfg: cfg}
+	var state State
+	err := s.withSession(t.Context(), "test", func(session *Session) error {
+		var err error
+		state, err = session.VerifyReady(t.Context())
+		return err
+	})
+	if err != nil || !state.ReadyForUse || !state.RequiredSettingsVerified || state.Source != "authenticated_msmp" {
+		t.Fatalf("1.21.9 session discovery/readback: %+v %v", state, err)
+	}
+}
