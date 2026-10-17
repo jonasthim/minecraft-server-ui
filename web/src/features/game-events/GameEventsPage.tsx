@@ -66,6 +66,6 @@ function EventRow({ event }: { event: Event }) {
     <Text style={{ overflowWrap: 'anywhere' }}>{event.message}</Text>
     {event.kind !== 'source_gap' && <Text size="sm">{event.player.name || 'Unknown name'} · {event.player.authority.replaceAll('_', ' ')} · UUID unknown</Text>}
     <details><summary>Event source</summary><Text size="sm" mt="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>Source: {event.source === 'redacted_native_console' ? 'Server console (redacted)' : event.source} · console line {event.source_cursor} · emitting version {event.source_version} · {event.confidence.replaceAll('_', ' ')} · parser {event.parser_version}</Text></details>
-    {event.gap && <Text size="sm" c="yellow">Source coverage has gaps.</Text>}
+    {event.gap && <Text size="sm" c="light-dark(#7a4b00, #ffd43b)">Source coverage has gaps.</Text>}
   </Stack></Paper>;
 }

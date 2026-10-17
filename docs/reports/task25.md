@@ -1,6 +1,6 @@
 # Task 25 — theme, accessibility and integration evidence
 
-Status: independent implementation checkpoint ready for integrator review. Files frozen; full Task 25 acceptance remains pending final Tasks 18/24 composition and whole-branch review. No ledger completion is claimed.
+Status: original checkpoint fix I1 and final Updates UI submission ready for integrator review. Owned files are frozen; full Task25 acceptance remains pending independent review, Tasks18/24 composition and native/release evidence. No ledger completion is claimed.
 
 ## Design plan, recorded before implementation
 
@@ -98,4 +98,72 @@ Supplemental stream classification: Playwright intercepted only job endpoints an
 
 Visual self-critique: the initial cards technically fitted the viewport while wasting their most important text column. The corrected grid resolves this; screenshots now show clear server names and a compact calm control surface. The original block mark provides the distinctive Minecraft cue; no added textures, pixel font or decorative animation compete with operational content.
 
-This checkpoint is ready for integrator review only. Still required: final composed instance update/rollback navigation and safety-confirmation checks after Task18, Task24 final UI integration/review, long publisher-filename interaction in the composed modpack flow, successful real content/config/backup/restore/native lifecycle flows on authorized hosts, actual Windows execution, game/client/version matrix evidence and whole-branch review. No EULA was accepted, game started, host unit installed, deployment performed, change staged/committed, vault modified or external message sent. Root owns ledger acceptance.
+At this original checkpoint, final update/rollback navigation and confirmations, Task24 composition, the long publisher-filename interaction and real native workflows remained pending. The continuation below records the subsequent UI checks; successful native game/client/content/backup/restore and release qualification remain unestablished. No EULA was accepted, game started, host unit installed, deployment performed, change staged/committed, vault modified or external message sent. Root owns ledger acceptance.
+
+## Final integration continuation — Updates UI plan (before code)
+
+Task25 now owns `web/src/features/updates/**`; root retains routes, schema/build wiring and all backend files. Keep the existing workbench tokens and Mantine components. Present target content and pack source inputs before preparation; show per-path choices next to affected paths, and official links/hashes next to required-file acquisition. Uploads create verified receipts and prepare a new typed preview; they never apply an update. Use full-width wrapping paths/file labels, normal sentence case, explicit pending-choice state, and existing separate update/world-rollback confirmations. Preserve cumulative draft choices/selections/receipts in-session. Saved immutable previews remain reviewable; editing restored previews discloses required file reacquisition because the API intentionally omits the private original request.
+
+Pre-build critique: a plain blocker list would leave manual downloads and conflicts unresolved. Replace it with the corresponding typed choice/upload controls while preserving each backend blocker and safety gate. No new visual metaphor or generic JSON editor is needed.
+
+## Updates UI submission — 2026-10-17
+
+Ownership transferred from Task18 to this worker: `web/src/features/updates/**`. Implementation files are `UpdatesPage.tsx`, `PackReview.tsx`, `ContentManualReview.tsx`, `draft.ts` and `draft.test.mjs`; the existing index export remains. Root owns App/instance navigation, OpenAPI/generated types, builds and backend changes. No backend or shared schema/build file was edited in this continuation.
+
+The page now uses the generated instance GET `{detail}` response. Optional content loading no longer prevents the instance/status screen from rendering. Terminal job status is set after final preview/log reads so effect cleanup cannot abort its own result refresh. A new preview is selected automatically only when exactly one previously unseen preview exists; ambiguous concurrent results require explicit selection.
+
+Exact content replacement controls preserve the publisher/project and accept an explicit release ID and file ID. Exact pack selection includes publisher/project/release/file ID. `Plan.pack` displays source, target tuple, per-path hashes/reasons, typed keep/upstream decisions (including upstream deletion), cumulative optional/disabled/pinned/excluded selections, required official archive/member links and hashes, and all backend blockers. Changing any draft field marks the displayed preview stale and disables Apply until a fresh verified preview is prepared. Source changes clear only receipts bound to that exact source while retaining path decisions. In-session full requests are retained for prepared previews. Restored public plans recover their path decisions/selections; the UI explains that omitted private receipts and standalone replacement selections may require reacquisition.
+
+Administrator archive uploads use the existing `/modpack/archives` endpoint with `archive_manual.selection` including exact file ID. Administrator member uploads use the OUTER update preview ID in `/updates/previews/{id}/pack/members?path=...`; the diagnostic inner pack ID is never used for actions. Returned receipts accumulate in `Request.pack.archive_receipt_id` and `Request.pack.manual[path]`, followed by a new typed asynchronous prepare job. The standalone required-file continuation uses generated `content_manual_required`, the existing administrator `/content/uploads?filename=...` endpoint and cumulative `Request.content_manual[id]`, copying the diagnostic exact selection into `content_selections[id]`. Standalone upload digests are labelled staged until the new preview checks publisher hashes and target descriptors. Upload/reload/preparation never invokes Apply.
+
+Update confirmation shows the exact target, pack release/file, countdown and safety-backup/start policy; its checkbox is initially false and receives keyboard focus. World rollback remains a separate administrator dialog requiring both the exact instance ID and explicit world-data rewind authorization. Backend blockers, expiry, pending edits, required files and absent changes prevent update activation.
+
+### Final browser/build evidence
+
+No first-use prerequisites were mocked or rerun. The actual route used the earlier shipping-UI-created `data-final`, accounts and instances on loopback port 12825. The original empty-DB evidence above remains the primary onboarding evidence.
+
+| Embedded binary | SHA-256 | Evidence boundary |
+|---|---|---|
+| `/home/thim/.cache/dilla-tmp/minecraft-ui-task25-updates` | `68418627ffa0487985a1b5675a71708649a88ce2a9085c9b921865b6cb63cbce` | Pack controls and first actual route check |
+| `/home/thim/.cache/dilla-tmp/minecraft-ui-task25-final` | `04b64b51e918dc7e1a9c16287edc2ed0fc6ebd011e086c0de18ed6cda071e339` | Complete content/pack receipt and confirmation fixture |
+| `/home/thim/.cache/dilla-tmp/minecraft-ui-task25-contrast` | `b863ecf6fddb0e5910266d88482c0d027ee046bf1d96054613320baa22e7cdbe` | Final shipping route/role/typed refusal plus review-I1 computed colors and mobile screenshots |
+
+Root ran successful production npm builds and CGO-disabled manager builds for these binaries. The latter two contain identical Updates UI; the last adds the separate contrast fix below. All are development evidence, not native platform qualification.
+
+Actual shipping checks: server feature navigation reached **Updates and rollback** by keyboard; current selection displayed 1.21.9/Vanilla; the screen fitted 390 px and desktop; viewer lacked Prepare and operator could see it; no page errors or Apply requests occurred. The initial backend checkpoint admitted a prepare job then returned a generic safe failure. This was reported to the backend owner. The final backend now refuses the uninstalled instance before admission with `instance_not_installed` and the visible action **Install the selected server files before preparing an update.** Successful preview/install/update is not claimed. No host service was installed and no game/EULA action occurred.
+
+The supplemental fixture uses actual signed-in accounts and intercepts only feature metadata/actions. It verifies exact content/pack file IDs, archive acquisition, two cumulative target-pack member receipts, a wrong-hash error and retry, keep/delete conflict choices, cumulative optional/disabled/pin/exclusion flags, a standalone content receipt without losing pack decisions, and countdown edits preserving every receipt while disabling stale Apply. Intercepted Apply calls require explicit update confirmation or exact-ID-plus-world-rewind rollback confirmation; none reaches the backend. Operator rendering has zero upload controls, retains conflict choices, keeps Apply blocked and sends no POST. These are UI contract/interaction tests, not successful native transactions or publisher verification evidence.
+
+The deferred modpack long-filename check uses intercepted publisher metadata only. The full accessible Preview label/title is retained, wraps normally to 56 px of text inside a 74 px button, and the page remains 390 px wide. It sends no preview/apply request and changes no pack semantics.
+
+Commands: `npm --prefix web run typecheck` PASS; `npm --prefix web run lint` PASS; `node --experimental-strip-types --test web/src/features/updates/draft.test.mjs` PASS (3 tests covering cumulative path flags/choices/receipts, public-plan restoration, source-bound receipt invalidation); scoped `git diff --check` PASS. No broad Go suite was run for this continuation. Browser commands are `node /home/thim/.cache/dilla-tmp/task25-updates/<script>.mjs` using the existing repository Playwright installation and isolated contexts.
+
+Artifacts under `/home/thim/.cache/dilla-tmp/task25-updates/`:
+
+- `shipping.mjs`, `shipping-results.json`: final actual route/nav/role/refusal; `evidence/shipping-updates390.png`, `shipping-preview-refusal390.png`, `shipping-updates-desktop.png`. `shipping-pack-checkpoint-results.json` retains the earlier generic-failure comparison.
+- `supplemental.mjs`, `supplemental-results.json`: pack-only checkpoint contract test.
+- `supplemental-content.mjs`, `supplemental-content-results.json`: final complete content+pack workflow; `evidence/supplemental-content-required-archive390.png`, `supplemental-content-pack-conflicts390.png`, `supplemental-content-update-confirm390.png`, `supplemental-content-update-confirm-desktop.png`, `supplemental-content-world-rollback-confirm390.png`.
+- `operator-gates.mjs`, `operator-gate-results.json`, `evidence/supplemental-operator-manual-gates390.png`: operator controls and blocked manual-acquisition state.
+- `modpack-long-label.mjs`, `modpack-long-label-results.json`, `evidence/supplemental-modpack-long-filename390.png`: deferred filename wrapping check.
+
+One initial fixture measured 406 px immediately after changing an open desktop dialog to a mobile viewport. Waiting for the breakpoint/scrollbar state to settle produced 390 px; no product CSS change was needed. Primary tests wait for settled page/dialog state. The full-page confirmation screenshots show fixed chrome at the capture's scroll position; the earlier actual viewport header check remains authoritative.
+
+## Checkpoint review fix round 1 — I1 contrast (separate submission)
+
+Independent review `.superpowers/sdd/2026-10-16-minecraft-server-ui/task25-review.md` found one Important issue and no other checkpoint findings: white-on-yellow warning badges and yellow-on-white source-gap text were 2.13:1. Verified the affected badge/text color choices and Mantine contrast behavior before changing them.
+
+Fix files are ONLY `web/src/theme.ts` and `web/src/features/game-events/GameEventsPage.tsx`, separate from the new Updates feature files. Filled badges now use Mantine `autoContrast` with luminance threshold 0.179; this chooses the readable black/white foreground for normal-size labels. Source-gap text uses `light-dark(#7a4b00, #ffd43b)`. All wording, event provenance and coverage semantics remain intact.
+
+On the exact `b863ecf6…22e7cdbe` binary, isolated 390 px browser contexts measured rendered computed colors on actual retained shipping event/coverage records:
+
+| Element | Light foreground/background | Light ratio | Dark foreground/background | Dark ratio |
+|---|---|---:|---|---:|
+| Partial-observation badge | `#000000` / `#f59f00` | 9.84:1 | `#000000` / `#ffd43b` | 14.73:1 |
+| Source-gap badge | `#000000` / `#f59f00` | 9.84:1 | `#000000` / `#ffd43b` | 14.73:1 |
+| Source-gap text | `#7a4b00` / `#ffffff` | 7.41:1 | `#ffd43b` / `#242424` | 10.89:1 |
+
+`contrast.mjs` / `contrast-results.json` records computed colors, relative-luminance calculations and assertions at or above 4.5:1. Screenshots: `evidence/contrast-actual-events-light390.png` and `contrast-actual-events-dark390.png`. Early supplemental source-gap screenshots are retained separately; final measured records existed in the shipping DB and needed no interception. Focused typecheck/lint passed after the fix. Independent acceptance of I1 remains with root/reviewer.
+
+## Final handback boundary
+
+Owned code/report is frozen for integrator review; the isolated 12825 manager is stopped. The UI-only deferred navigation, conflict/manual-file, long-label and confirmation checks are now recorded above. Full Task25 acceptance still requires independent review of this Updates submission, final Task18/24 backend composition/safety review, successful real content/config/backup/restore/game/client workflows, actual Linux service/Windows execution and the release version/layout matrix. The report makes no native or stable-release qualification claim. No commits, staging, deployments, host units, game launches, EULA acceptance, vault writes or external messages were performed by this worker.
