@@ -1,0 +1,120 @@
+# Valheim delivery and operations parity audit
+
+Date: 2026-10-17. Audit only; no product implementation, host service installation, game launch, EULA acceptance, signing key creation, publication, staging or commit performed.
+
+Minecraft baseline: `c13fb51`. Reference: read-only `/home/thim/Repositories/valheim-server-ui`, `dabec19585e3f401eceb127840c71542fa84dac1`, verified by the integrator against public main and `v1.21.3`. References prefixed **V:** are paths/line numbers in that repository; other references are Minecraft paths. UI feature parity is covered by a separate audit.
+
+## Finding
+
+Minecraft has substantial service, launcher and verified update implementation, but is not yet a distributable installed product comparable to Valheim. Missing delivery capabilities include release packaging/signing/publication, release-fetching installers, repeatable Windows upgrades, installer check/uninstall modes, release discovery and operator recovery tooling/documentation. Native service/game/restore qualification is a separate unfinished requirement; it cannot be completed by adding these capabilities alone.
+
+The approved design remains binding: stable releases only, tested compatibility claims, Linux game survival across manager restart, Windows graceful stop/wait/autostart, and no automatic world rollback. Valheim functionality outside that boundary is not a parity requirement.
+
+Read-only GitHub checks during this audit:
+
+- `gh release list --repo jonasthim/minecraft-server-ui --limit 3` returned no releases.
+- `gh release view v1.21.3 --repo jonasthim/valheim-server-ui --json tagName,publishedAt,assets` returned a stable release published `2026-10-09T16:51:19Z`, with `valheim-ui_linux_amd64.tar.gz`, `valheim-ui_windows_amd64.zip`, `install.sh`, `install.ps1`, `deploy.tar.gz`, `SHA256SUMS`, and three Valheim plugin archives. The Minecraft product does not need those mandatory/bundled Valheim plugins.
+- Both repositories are public and report MIT licensing. Both currently return empty homepage URLs and null repository topics. Repository visibility or adding metadata is not the material delivery gap.
+
+## Capability comparison and classification
+
+| Area | Valheim evidence | Minecraft evidence | Classification |
+|---|---|---|---|
+| Obtain a shipping application without build tools | **V:** `README.md` Install; release assets verified above | `README.md:9` starts with Go/Node/npm/Make and a local build; installers require supplied binaries | Missing distribution path |
+| Produce versioned archives and installer assets | **V:** `.github/workflows/ci.yml:214` builds version-stamped binaries, archives, deployment bundle, checksums and retained artifacts | `.github/workflows/ci.yml:98` builds `0.0.0-dev` manager/updater binaries but never archives or uploads them; `Makefile:1` defaults to dev | Missing packaging/retained delivery artifacts |
+| Publish releases through reviewed gates | **V:** `.github/workflows/ci.yml:170` selects versions; release depends on backend, Windows, frontend, contract, browser and install jobs | `.github/workflows/release-qualification.yml:1` is a refusal gate, followed by unconditional failure; no signer/publisher exists | Missing producer/publisher, deliberate safe refusal |
+| Download and verify an install | **V:** `deploy/install.sh:517`, `deploy/install.ps1:107` resolve releases and verify checksums | `deploy/linux/install.sh:5`, `deploy/windows/install.ps1:5` accept local binaries; no release resolution or publisher verification | Missing end-user bootstrap |
+| Linux installation substrate | **V:** installer provisions account, private data/config, units/helper and starts service | `deploy/linux/install.sh:11` provisions account/dirs/helper/units; optional updater; `:44` leaves startup to admin | Implemented substrate; actual installed behavior unqualified; no self-contained downloadable installer |
+| Windows installation substrate | **V:** `deploy/install.ps1:199` registers virtual service account and starts/awaits service | `deploy/windows/install.ps1:5` requires an existing dedicated account credential; `:25` creates service; `:28` leaves logon rights and startup to operator | Implemented substrate; first-use account/logon bootstrap and native qualification unfinished |
+| Repeat installer to upgrade safely | **V:** `deploy/install.sh:479` preserves previous executable; Windows installer `:145` stages and `:199` handles existing service | Linux `deploy/linux/install.sh:17` replaces binary but has no coordinated stop/drain, readiness, previous-image recovery or manager restart; Windows `:15` refuses an existing service | Missing supported installer upgrade procedure |
+| Check and remove installation | **V:** Linux `deploy/install.sh:534` / `:561`; Windows `deploy/install.ps1:78` / `:88` implement check/uninstall while keeping data | Neither Minecraft installer accepts check/uninstall arguments | Missing operational lifecycle controls |
+| Signed manager update verification | **V:** checksum/download/native wrapper path, **V:** `docs/RUNBOOK.md:240` | `internal/selfupdate/manifest.go:26`, `source.go:120`, `service.go:106` implement Ed25519 metadata verification, pinned GitHub source, strict stable versions, bounds and artifact hashes | Implemented, stronger independent publisher identity protocol; do not replace with adjacent unsigned checksums |
+| Production update trust and bootstrap | **V:** installed releases use configured public upstream and checksum source | `deploy/linux/update-trust.example.json:1` is empty; Windows installer `:63` writes empty trust; `cmd/minecraft-ui/main.go:133` disables unavailable trust; `service.go:75` refuses dev activation | Intentionally disabled; production key custody/trust bootstrap and actual release inputs missing |
+| Manager activation and recovery | **V:** native upgrade service/wrapper and rollback commands, **V:** `docs/RUNBOOK.md:248` | `docs/RUNBOOK.md:21` and `internal/selfupdate/native_linux.go`, `native_windows.go` describe/implement independent privileged activation, authenticated readiness and executable-only rollback | Implemented with local tests/review; installed systemd/SCM and crash/reboot qualification pending |
+| Find new manager releases | **V:** `internal/selfupdate/checker.go:20` periodically discovers latest, publishes availability and optionally upgrades when empty; `:119` manual check discovers latest | `internal/selfupdate/service.go:123` checks only caller-supplied exact tag; `CheckResult` at `:47` has no release notes/latest; `source.go:120` only fixed asset downloads | Missing latest-stable discovery/notes/notification backend; periodic automatic manager upgrade is additional Valheim parity, beyond the design's minimum explicit verified-update requirement |
+| Database-changing upgrades | **V:** explicit `migrate`/admin tooling, normal installer/update process | `docs/RUNBOOK.md:17` permits only unchanged-schema self-update and calls schema changes manual maintenance, without an executable end-user maintenance recipe | Deliberate self-update restriction; complete documented manual manager-state migration/recovery route is missing |
+| Locked-out admin recovery | **V:** `cmd/valheim-ui/admin.go:22` supports create/list/reset with session revocation | `cmd/minecraft-ui/main.go:63` exposes serve/version and internal launcher/probes, no admin recovery command | Missing operational parity; not a request to weaken first-admin/auth rules |
+| Installed service smoke in CI | **V:** `.github/workflows/ci.yml:145` installs real units/helper/sudoers on Ubuntu 22.04/24.04, exercises fake-server lifecycle and uninstall, gates release | Minecraft CI only package tests/vet/frontend/build/notices; opt-in systemd lifecycle requires prepared real instance (`deploy/linux/QUALIFICATION.md:40`) | Missing repeatable automated install/upgrade/uninstall smoke gate; native real-game evidence additionally required |
+| Browser and dependency security gates | **V:** `.github/workflows/ci.yml:31` govulncheck; `:94` npm audit; `:114` browser CI | `.github/workflows/ci.yml:76`–`:113` lacks these gates; isolated browser reports exist | Missing repeatable delivery gates, not evidence that current dependencies or browser workflows are broken |
+| Operator documentation | **V:** `docs/RUNBOOK.md` covers reverse proxies, upgrades, troubleshooting, uninstall, Windows and install smoke; `docs/SECURITY.md` covers threat model | Minecraft `docs/RUNBOOK.md` mostly describes update internals and evidence requirements; no normal install-to-operation manual, reverse-proxy recipes, data-preserving uninstall or lockout recovery | Missing operator-facing delivery documentation; current development caveats are accurate and must remain until qualified |
+
+## Native Linux risk to resolve before treating installation as usable
+
+`deploy/linux/minecraft-ui.service:22` enables `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs` and `RestrictSUIDSGID`, while `:27` says omitting explicit `NoNewPrivileges` preserves the `sudo unitctl` route. The sudo grant is `deploy/linux/sudoers:3`.
+
+The reference documents this exact class of failure in **V:** `docs/RUNBOOK.md:215`: seccomp-backed `ProtectKernel*` options imply `no_new_privs` on systemd before v255, breaking setuid sudo on Debian 12/Ubuntu 22.04; Valheim removed the conflicting manager-unit options. Minecraft's passing Ubuntu 24.04 package tests do not run the installed unit and cannot detect this. This audit did not reproduce a failure on a native host, so the finding is an evidence-backed risk, not a confirmed tested defect.
+
+Gate: on the oldest intended Debian/Ubuntu systemd versions, install the exact shipping unit on a disposable host; record effective `NoNewPrivileges` and service credentials; invoke the fixed helper from inside that actual manager service, including start/stop/inspect; prove successful real launcher/JVM lifecycle and game-unit isolation. Resolve any unit/helper conflict without removing the game process boundary or granting arbitrary privilege. Also exercise namespace/pidfd/cgroup and mount validation from `deploy/linux/QUALIFICATION.md`; newer systemd alone cannot establish older-host support.
+
+The exact production call is `/usr/bin/sudo -n /usr/local/lib/minecraft-ui/unitctl <action> <validated-id>` (`internal/supervisor/systemd_linux.go:42`). The wrapper allows only `start|stop|enable|disable|inspect`, validates argc and ID, then execs fixed `systemctl` or the installed `native-inspect` command (`deploy/linux/unitctl:7`). A successful `sudo` from the runner's login shell or `runuser` does not prove this works inside the restricted manager service.
+
+### First executable packet: installed manager smoke with no game launch
+
+This can run before packaging/publication or real-game authorization, on separate ephemeral GitHub VMs. Use Ubuntu 22.04 and 24.04 for the older/newer systemd contrast and Windows Server 2022 for SCM; Debian and other Windows qualification remain later gates. Build source and record hashes, install only on those disposable runner hosts, preserve production restrictions, and use an empty canonical data directory. Do not invoke the opt-in `TestSystemdHostLifecycle`: it requires a prepared real Java/Minecraft instance and is the wrong first smoke.
+
+Linux smoke: run the existing installer with an absolute local binary path, start/await the installed manager, assert its real setup endpoint/HTTP response (not merely a generic SPA 200), and verify the private database/data root and unprivileged service identity. Through a temporary *test-only manager unit* `ExecStartPost` or equivalent executed inside the actual installed unit's user and restrictions, run the exact helper with `enable delivery-smoke` then `disable delivery-smoke`; this changes only an ephemeral unit enablement link and starts no game. Require both helper exit statuses and immediate cleanup. Capture `/proc/<MainPID>/status` `NoNewPrivs`, `systemctl show` effective settings, systemd version and journal. Restart manager and verify same private data/setup state. Test invalid helper verbs/IDs fail. If the hardening conflict prevents helper success, fix the shipping unit, then show the formerly failing assertion pass on both runners. Do not treat a namespace-mirroring shell as the sole proof.
+
+Windows smoke: create a dedicated temporary unprivileged local account with service-logon rights on the disposable VM (never print/persist its random credential in artifacts), invoke the current installer through its credential parameter, start the installed service and await real setup readiness. Assert SCM identity, Program Files read/execute versus private data modify ACLs, persistence across stop/start, and no orphan manager processes. Exercise installed native updater/probe bootstrap/order in a separate bounded step if feasible without publishing/trusting a production release. Collect scrubbed SCM/event/journal diagnostics on failure. Any installer/startup failure becomes a concrete fix; no game processes, EULA acceptance or licensed client is needed for this manager-only evidence.
+
+Acceptance of this first packet is **installed-manager and helper/SCM smoke**, not full Task 04/05/24 acceptance, real game backup/restore or stable release qualification. No services on the user's own host are needed. Later fake/real game and full updater tests extend this evidence without relabeling it.
+
+## Prioritized concrete work packets
+
+The integrator owns contracts, shared wiring and acceptance/ledger changes. The following are proposed scopes and review gates, not completed packages.
+
+### P0 — A. Release artifact producer, before publishing
+
+Own release packaging scripts and a build-only workflow; shared version/build wiring remains integrator-owned. Define a single exact stable version/commit identity. Build both manager and privileged updater for Linux/Windows; package manager archives using the existing updater names (`manifest.go:96`) and exact expected member layout. Publish neither while qualification is incomplete. Produce retained CI artifacts containing deployment files/installers, license notices, hashes/inventory, candidate evidence and both native binary identities. Make deploy bundle and source templates demonstrably consistent.
+
+Implement the exact `release.json`/`release.sig` producer consumed by `manifest.go:45`: archive and raw executable size/hash, both platforms, schema-before/after, repository, stable version and validity. Use ephemeral fixture keys for dry-run verification; production signing remains a separate custody decision. Verify every packaged artifact with the shipping verifier offline and by a bounded download fixture. The updater binary, probe, units, helper and initial trust also need a reviewed bootstrap authenticity/version contract: the current signed self-update manifest only activates the manager executable.
+
+Acceptance: a retained, reproducible candidate artifact set can be independently extracted, verified and used by installers; malformed/traversal/hash/signature/expired/wrong-platform inputs fail before host mutation. Production release remains disabled.
+
+### P0 — B. Repeatable install, upgrade, check and uninstall
+
+Own `deploy/linux/**`, `deploy/windows/**`; coordinate frozen artifact/trust interfaces with A and updater owner. Make installers self-contained or supply a verified deploy bundle; current Linux script requires sibling unit/helper/trust files, so copying only `install.sh` is insufficient. Support explicit version pin and latest *stable* selection, verified release download, local-build qualification mode, preflight/check, clean install, repair/rerun, upgrade and data-preserving uninstall. Preserve reviewed config/trust and private state, never auto-accept the game EULA.
+
+Linux: provision documented environment and dependencies, verify host/architecture/systemd/prerequisites before mutation, stage before replacing, coordinate the manager drain/restart and previous-image recovery, leave active game units alive. Windows: settle dedicated service-account bootstrap (current account/credential approach is usable only with prepared account/logon rights), validate local paths/ACLs, stop/wait before replacement, update existing services, and restart/autostart only after readiness. Include independently installed updater/probe maintenance and failure recovery rather than silently leaving stale privileged helpers forever. Resolve the Linux unit risk above.
+
+Acceptance: exact packaged candidate installs on clean disposable native hosts; rerun and upgrade retain config/users/instances/worlds/backups/trust; check makes no mutations; uninstall removes services/helper grants/executables and preserves data. Failed install/upgrade reports partial state and has a working recovery path. Windows tests must use real SCM and service account ACLs.
+
+### P0 — C. Installed delivery CI and native qualification
+
+Own dedicated smoke harness/workflow with integrator review. First add fast disposable-VM install/check/start/stop/manager-restart/upgrade/uninstall smoke against a harmless fake process that the shipping supervisor can intentionally admit through a reviewed test-only boundary. Do not weaken production sealed-runtime/provider verification to admit fixtures. Real installed units must exercise sudo, namespace/mount restrictions and process lifetime. Collect diagnostic artifacts automatically. Windows must install actual services and prove stop/wait, ACLs, descendant cleanup, updater recovery ordering and file replacement.
+
+Then execute the approved separate real-game matrix from empty DB through first-admin/UI creation, official runtime/provider install, explicit EULA consent, real client connection, online backup/save-on, stopped confirmed restore+safety backup and reconnect. Record Debian and Ubuntu, Windows 10/11 and Server 2019+ families claimed, exact builds/hashes/game-loader-Java tuples and applicable version/layout matrix. Run real manager activation/failed-health rollback/crash/reboot recovery and competing-write/role/redaction failures. Do not classify mock systemd, package subprocesses, Wine or cross-build as installed qualification.
+
+Acceptance: independently reviewed evidence against the exact release candidate, linked from `release/qualification.json`, and integrator acceptance in the ledger. CI run `39024870612` already proves 38 Go packages passed on Ubuntu 24.04 and Windows Server 2022 with build/frontend checks; rerunning it cannot close these installed-service/game/client/restore gates.
+
+### P1 — D. Stable release discovery and update delivery
+
+Own `internal/selfupdate` discovery, with schema/API and composition integrated centrally. Add bounded latest-stable lookup, version comparison, cached release metadata/notes, configurable periodic checks and availability events. Discovery must not activate anything; every activation still follows the existing signed exact-tag verification/confirmation/drain protocol. Verify network failure, stale metadata, prerelease exclusion, revoked authorization, untrusted repository and incompatible schema behavior.
+
+A later explicit automatic-manager-upgrade option can match Valheim's empty-player policy, but is not necessary to the approved minimum verified manual self-update and must not silently bypass existing confirmation. The user requested Valheim parity; call out this additional policy scope explicitly before enabling automatic manager mutation.
+
+Acceptance: a release can be discovered from an installed prior stable candidate and staged/confirmed using the authentic release artifacts, with actual native activation/rollback evidence from C. Installing empty production trust or selecting a guessed version is not delivery completion.
+
+### P1 — E. Operator recovery and public handoff
+
+Own normal operations documentation and a narrowly scoped admin CLI with integrator-owned command/API wiring. Provide account lockout recovery under the service account, no passwords in args/logs, session/token revocation and audit. Document consistent stopped-manager SQLite/WAL-state backup, schema-changing manual maintenance, explicit failure recovery and restoring manager state without implicit world rewind. Keep unchanged-schema self-update policy until a separate reviewed compatibility protocol exists.
+
+Write beginner install/upgrade/uninstall instructions for verified downloadable artifacts, storage/prerequisites, service status/logs, address/base URL, Caddy/nginx or Windows proxy examples including streams, firewall guidance, Temurin/game installation, EULA step, backup consistency/exclusions/retention, restore, OIDC recovery, disabled provider keys, and actionable failure troubleshooting. Document normal and failed update recovery with exact commands; do not tell administrators to overwrite a live Windows image. Refresh `deploy/windows/QUALIFICATION.md:3` and its obsolete provider/autostart composition paragraph: native Server 2022 package CI and integrated providers now exist, while installed service/other-family evidence is still pending. Keep design documents historical; current status belongs in the ledger and runbook.
+
+Acceptance: an independent reader follows shipping docs on a fresh supported host without building source or inventing prerequisite database state; recovery/uninstall procedures are exercised. Add only truthful qualified support claims and screenshots supplied by the separate UI audit. Add repeatable vulnerability and browser gates with reviewed tools; no dependency installation was done by this audit.
+
+### P2 — F. Production signing/trust and publication
+
+After A–E and required review/qualification, configure release-owner controlled Ed25519 signing and protected build/publish permissions. Establish how public keys are authenticated at first install, how rotation/revocation and expiring signed metadata work, and how old installers/updaters continue safely. Choose a protected stable release trigger (explicit dispatch or reviewed version bump); Valheim's automatic VERSION-on-main behavior is an example, not a requirement to publish prematurely.
+
+Run `release/check_qualification.py` against the exact candidate; retain independent human review of report assertions (the checker validates paths/result/version, not the substance of experiments). Publish immutable archives/installers/bundle/notices and signed metadata only after all gates and explicit release-owner authorization. Verify released downloads, first installation and an installed prior release's upgrade. No draft/prerelease substitute satisfies the stable-only design.
+
+## Actual external decisions or inputs
+
+Routine packaging, installer, CI and documentation implementation can proceed within the approved scope. Inputs needed before the dependent live actions are:
+
+- Release owner/key custodian and approved production signing-key storage/bootstrap public-key identity. Do not invent a production private key or convert test keys into production trust. The existing public `jonasthim/minecraft-server-ui` is the natural repository and needs no routine re-confirmation.
+- Disposable native qualification hosts for the claimed Debian/Ubuntu and Windows families, a licensed real Minecraft client/player for connection tests, and explicit operator EULA consent before launching real games. If already authorized/available in the integrator's session, use that authorization; this audit creates no new permission gate.
+- Whether optional *automatic manager upgrades* are part of the requested Valheim parity. Implement discovery/manual verified upgrades first; that policy choice does not block A–C or E.
+- Final stable publication authorization after the concrete qualified artifacts/evidence are reviewable, as required by the existing runbook and release gate.
+
+No further product-scope decision is needed to implement release packaging, ordinary installers, check/uninstall, service qualification harnesses, recovery tooling or truthful operator documentation.

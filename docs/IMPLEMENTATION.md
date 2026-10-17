@@ -41,6 +41,26 @@ Package acceptance and release qualification are tracked separately. Scaffolding
 - World uploads, remote backups, and existing-server imports are excluded even if a reference project implements them.
 - Each package must name actual commands and results in its completion report. A green mock or build does not replace real workflow evidence required by the design.
 
+## Active parity completion — 2026-10-17
+
+The user's correction after the repository/CI milestone is accepted: the product is not finished or at parity with the public Valheim reference. The prior milestone did not close the implementation objective. Source audits identify missing operating and delivery capabilities in addition to unperformed qualification; those are now tracked in [the completion plan](superpowers/plans/2026-10-17-valheim-parity-completion.md), [product audit](reports/valheim-product-parity.md) and [delivery audit](reports/valheim-delivery-parity.md).
+
+| Task | Remaining deliverable | Status |
+|---|---|---|
+| 26 | Persistent instance shell, live operating overview and trends | Assigned; existing typed observations only |
+| 27 | Console filter/follow/highlighting/history/download | Assigned; preserve redacted bounded history |
+| 28 | Actual installed-manager native smoke and startup/helper fixes | Assigned; disposable GitHub hosts only, no game launch |
+| 29 | Reproducible candidate packaging and authenticated bootstrap contract | Pending |
+| 30 | Install/upgrade/check/uninstall and operator recovery | Pending28/29 |
+| 31 | Content paging/dependency workflow and remaining daily-use conveniences | Pending scoped ownership |
+| 32 | Stable release discovery and installed update delivery | Pending29 contract |
+| 33 | Real first-server/client/restore and compatibility matrix | Pending working installed path and explicit EULA/client/host inputs |
+| 34 | Final parity acceptance, production trust and stable publication | Pending capabilities, qualification and final owner authorization |
+
+- Ruling: treat the parity findings as unfinished work under the original approved implementation and the user's explicit correction, continuing cheaper parallel execution without asking again whether to proceed. Do not claim all capability work is complete merely because reviews/package CI passed. Cost if wrong: additional implementation effort; the existing Minecraft scope exclusions and safety requirements remain binding.
+- Ruling: use the existing lifecycle/player/JVM metric contracts for the operating dashboard, with bounded requests and visible unknown/stale/partial states. No host metric endpoint is implied by a Valheim screenshot. Cost if wrong: a later aggregate contract may be needed for scale; never mislabel instance counters as host health.
+- Ruling: begin installed-service qualification on disposable GitHub Ubuntu22.04/24.04 and WindowsServer2022 runners using actual manager services, empty state and native helper/SCM checks. Existing authorization to test in Actions covers these reversible runner-local tests. No user-host service mutation, EULA acceptance or real Minecraft launch is included. Cost if wrong: runner setup fails and requires correction; it cannot qualify game lifetime or other OS families by implication.
+
 ## Integrator review and evidence — 2026-10-16
 
 - Root reviewed foundation/identity commit `9a4ff7e`; Tasks 01 and 02 require review fixes before acceptance. Task 01 fixes add missing shared contracts and align Vite/backend development origins; identity fixes remain with Task 02's owner. Applying a fix does not itself close review.
