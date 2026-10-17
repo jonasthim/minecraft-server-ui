@@ -51,6 +51,16 @@ type snapshotSubstitutionSource struct {
 	replacement os.FileInfo
 }
 
+func assertFileClosed(t *testing.T, file *os.File) {
+	t.Helper()
+	if fd := file.Fd(); fd != ^uintptr(0) {
+		t.Fatalf("file descriptor remained valid after close: %d", fd)
+	}
+	if _, err := file.Stat(); err == nil {
+		t.Fatal("file Stat succeeded after close")
+	}
+}
+
 func (s *snapshotSubstitutionSource) BootstrapArchive(_ context.Context, _, platform string) (io.ReadCloser, error) {
 	return snapshotCloseReader{Reader: bytes.NewReader(s.archives[platform]), close: func() error {
 		path := filepath.Join(s.o.Output, ".bundle")
@@ -226,9 +236,7 @@ func TestDestinationPinPreservesCreatedIdentityAgainstReplacement(t *testing.T) 
 	if err := d.cleanup(); err == nil {
 		t.Fatal("replacement cleanup should report retained foreign state")
 	}
-	if _, err := owned.pin.Stat(); !errors.Is(err, os.ErrClosed) {
-		t.Fatalf("cleanup did not close the creation pin: %v", err)
-	}
+	assertFileClosed(t, owned.pin)
 	info, err := d.root.Lstat(".bundle")
 	if err != nil || !os.SameFile(info, replacementInfo) {
 		t.Fatal("replacement identity was removed or changed", err)
@@ -285,9 +293,7 @@ func TestDestinationPinsCloseAfterSuccessAndCancellationCleanup(t *testing.T) {
 			} else {
 				d.close()
 			}
-			if _, err := pin.Stat(); !errors.Is(err, os.ErrClosed) {
-				t.Fatalf("destination pin remained open: %v", err)
-			}
+			assertFileClosed(t, pin)
 			if cancel {
 				assertAbsent(t, f.o.Output)
 			} else if _, err := os.Stat(filepath.Join(f.o.Output, "bootstrap.json")); err != nil {
@@ -753,12 +759,32 @@ func TestOutputNoClobberAndPathBinding(t *testing.T) {
 	t.Run("destination replacement not removed", func(t *testing.T) {
 		f := newFixture(t)
 		moved := f.o.Output + "-moved"
+		attempted, denied := false, false
+		var original os.FileInfo
 		f.hook = func(call string) {
 			if !strings.HasPrefix(call, "archive:") {
 				return
 			}
+			attempted = true
+			var err error
+			original, err = os.Lstat(f.o.Output)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if e := os.Rename(f.o.Output, moved); e != nil {
-				t.Fatal(e)
+				if runtime.GOOS != "windows" || !os.IsPermission(e) {
+					t.Fatal(e)
+				}
+				// Retained file handles can deny removal of their parent on Windows.
+				// Treat only that exact platform outcome as a failed substitution,
+				// then prove the same rename succeeds after Prepare releases handles.
+				denied = true
+				assertAbsent(t, moved)
+				now, statErr := os.Lstat(f.o.Output)
+				if statErr != nil || !os.SameFile(now, original) {
+					t.Fatalf("denied destination rename changed identity: %v", statErr)
+				}
+				return
 			}
 			if e := os.Mkdir(f.o.Output, 0700); e != nil {
 				t.Fatal(e)
@@ -767,7 +793,29 @@ func TestOutputNoClobberAndPathBinding(t *testing.T) {
 				t.Fatal(e)
 			}
 		}
-		if _, e := Prepare(context.Background(), f.o, f); e == nil {
+		_, prepareErr := Prepare(context.Background(), f.o, f)
+		if !attempted {
+			t.Fatal("destination rename was not attempted")
+		}
+		if denied {
+			if prepareErr != nil {
+				t.Fatal("denied substitution prevented safe preparation", prepareErr)
+			}
+			now, err := os.Lstat(f.o.Output)
+			if err != nil || !os.SameFile(now, original) {
+				t.Fatal("original destination identity changed", err)
+			}
+			if err = os.Rename(f.o.Output, moved); err != nil {
+				t.Fatal("destination rename remained denied after preparation released handles", err)
+			}
+			assertAbsent(t, f.o.Output)
+			now, err = os.Lstat(moved)
+			if err != nil || !os.SameFile(now, original) {
+				t.Fatal("post-release destination rename changed identity", err)
+			}
+			return
+		}
+		if prepareErr == nil {
 			t.Fatal("accepted replacement")
 		}
 		b, e := os.ReadFile(filepath.Join(f.o.Output, "retain"))
