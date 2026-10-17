@@ -45,20 +45,21 @@ type Config struct {
 	Worlds    Worlds
 }
 type Service struct {
-	db        *sql.DB
-	paths     instance.Paths
-	instances *instance.Service
-	queue     *jobs.Service
-	console   *console.Service
-	native    Native
-	worlds    Worlds
-	mu        sync.Mutex
-	refs      map[string]int
-	fault     func(string) error
+	db         *sql.DB
+	paths      instance.Paths
+	instances  *instance.Service
+	queue      *jobs.Service
+	console    *console.Service
+	native     Native
+	worlds     Worlds
+	mu         sync.Mutex
+	refs       map[string]int
+	policyGate chan struct{}
+	fault      func(string) error
 }
 
 func New(c Config) *Service {
-	return &Service{db: c.DB, paths: c.Paths, instances: c.Instances, queue: c.Jobs, console: c.Console, native: c.Native, worlds: c.Worlds, refs: map[string]int{}}
+	return &Service{db: c.DB, paths: c.Paths, instances: c.Instances, queue: c.Jobs, console: c.Console, native: c.Native, worlds: c.Worlds, refs: map[string]int{}, policyGate: make(chan struct{}, 1)}
 }
 func (s *Service) Register() error {
 	if s.queue == nil {
@@ -396,6 +397,7 @@ func (s *Service) capture(ctx context.Context, id, job string, actor domain.User
 	if _, err = s.db.ExecContext(ctx, `INSERT INTO backups(id,instance_id,job_id,state,metadata_json,created_at)VALUES(?,?,?,'staging',?,?)`, backupID, id, job, string(meta), result.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
+	validated := false
 	defer func() {
 		panicValue := recover()
 		if panicValue != nil {
@@ -409,7 +411,9 @@ func (s *Service) capture(ctx context.Context, id, job string, actor domain.User
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		outcome := "validated"
-		if err != nil {
+		if err != nil && validated {
+			outcome = "validated_retention_failed"
+		} else if err != nil {
 			outcome = "failed_or_partial"
 			result.State = domain.BackupFailed
 			meta, _ := json.Marshal(result)
@@ -568,7 +572,13 @@ func (s *Service) capture(ctx context.Context, id, job string, actor domain.User
 	if err != nil {
 		return err
 	}
-	return s.applyRetention(ctx, id, DefaultRetention, time.Now().UTC())
+	validated = true
+	if trigger == domain.BackupAutomatic {
+		if err := s.applyCurrentRetention(ctx, id, time.Now().UTC()); err != nil {
+			return domain.Wrap(domain.CodeUnavailable, "Backup validated and ready; automatic retention failed. Inspect the retention policy and backup recovery status before retrying.", err)
+		}
+	}
+	return nil
 }
 func rootsFromFiles(files []File) []string {
 	roots := []string{}

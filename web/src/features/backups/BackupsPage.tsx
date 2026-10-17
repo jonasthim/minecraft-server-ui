@@ -1,3 +1,4 @@
+import { RetentionPolicyPanel } from './RetentionPolicyPanel';
 import { jobHref } from '../jobs';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Anchor, Badge, Button, Checkbox, Group, Loader, Modal, Paper, Select, Stack, Text, Title } from '@mantine/core';
@@ -84,7 +85,7 @@ export function BackupsPanel({ instanceId }: { instanceId: string }) {
     {notice && <Alert color={activeJob ? 'blue' : 'green'} role="status">{notice}</Alert>}
     {job && <Text size="sm">Operation: {job.state} · {job.phase.replaceAll('_', ' ')} · <Anchor component={Link} to={jobHref(job.id)}>View jobs and output</Anchor></Text>}
     <Alert color="yellow" title="Consistency and scope">Online backups flush native world saves without stopping the server. Player and mod/plugin data may still change. External databases are excluded. Full backups include local addon data and configuration; downloaded archives can contain addon credentials and must be kept private.</Alert>
-    <Text size="sm" c="dimmed">Automatic backups retain at most 10 archives for 30 days. Manual and safety backups are protected from automatic retention.</Text>
+    <RetentionPolicyPanel instanceId={instanceId} />
     {canOperate && <Paper withBorder p="md"><Stack><Select label="Backup scope" value={kind} onChange={value => { if (value === 'world' || value === 'full') setKind(value); }} data={[{ value: 'world', label: 'World and associated dimensions' }, { value: 'full', label: 'Full local server data and addons' }]} /><Button loading={busy} disabled={activeJob} onClick={() => { void create(); }}>Create protected manual backup</Button></Stack></Paper>}
     {loading && <Loader aria-label="Loading backups" />}
     {!loading && backups.length === 0 && <Paper withBorder p="md"><Text>No backups yet. An operator can create a backup after the server has saved a world, or create a full backup of local server data.</Text></Paper>}

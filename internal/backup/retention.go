@@ -24,14 +24,14 @@ func retentionCandidates(backups []domain.Backup, policy Retention, now time.Tim
 			continue
 		}
 		rank++
-		if rank > policy.Count || now.Sub(b.CreatedAt) > policy.MaxAge {
+		if (policy.Count > 0 && rank > policy.Count) || (policy.MaxAge > 0 && now.Sub(b.CreatedAt) > policy.MaxAge) {
 			out = append(out, b.ID)
 		}
 	}
 	return out
 }
 func (s *Service) applyRetention(ctx context.Context, id string, policy Retention, now time.Time) error {
-	if policy.Count < 1 || policy.MaxAge <= 0 {
+	if policy.Count < 0 || policy.Count > 10000 || policy.MaxAge < 0 || policy.MaxAge > 36500*24*time.Hour {
 		return errCorrupt
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT metadata_json FROM backups WHERE instance_id=? AND state='ready' ORDER BY created_at DESC,id DESC`, id)

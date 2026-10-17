@@ -9021,6 +9021,214 @@
           }
         }
       }
+    },
+    "/api/v1/instances/{instanceId}/backups/retention": {
+      "get": {
+        "operationId": "backupRetentionGet",
+        "summary": "Viewer: effective per-instance automatic-backup retention policy.",
+        "tags": [
+          "backups"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instanceId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRetentionPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or token scope denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Policy changed since expected_revision; reload before saving.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "State or saving recovery unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "backupRetentionSet",
+        "summary": "Admin: save retention policy for the next successful automatic backup; no immediate pruning.",
+        "tags": [
+          "backups"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instanceId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRetentionPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or token scope denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Policy changed since expected_revision; reload before saving.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "State or saving recovery unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupRetentionPolicyInput"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -15305,6 +15513,62 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "BackupRetentionPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "keep_last",
+          "keep_days",
+          "revision"
+        ],
+        "properties": {
+          "keep_last": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000,
+            "description": "Zero disables the count limit. Default 10."
+          },
+          "keep_days": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 36500,
+            "description": "Zero disables the age limit. Default 30."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "BackupRetentionPolicyInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "keep_last",
+          "keep_days",
+          "expected_revision"
+        ],
+        "properties": {
+          "keep_last": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000,
+            "description": "Zero disables the count limit. Default 10."
+          },
+          "keep_days": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 36500,
+            "description": "Zero disables the age limit. Default 30."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       }

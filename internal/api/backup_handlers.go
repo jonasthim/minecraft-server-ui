@@ -14,6 +14,39 @@ import (
 // Metadata is viewer-visible; private archive exports and mutations require an
 // operator. No uploaded archive or arbitrary host path endpoint exists.
 func MountBackups(r chi.Router, s *backup.Service) {
+	r.With(auth.RequireRole(domain.RoleViewer)).Get("/instances/{instanceId}/backups/retention", func(w http.ResponseWriter, r *http.Request) {
+		policy, err := s.GetRetentionPolicy(r.Context(), chi.URLParam(r, "instanceId"))
+		if err != nil {
+			WriteError(w, err)
+			return
+		}
+		WriteJSON(w, http.StatusOK, policy)
+	})
+	r.With(auth.RequireRole(domain.RoleAdmin)).Put("/instances/{instanceId}/backups/retention", func(w http.ResponseWriter, r *http.Request) {
+		// Every value is required: omitted or null input must never silently
+		// disable a limit by becoming the Go integer zero value.
+		var input struct {
+			KeepLast         *int   `json:"keep_last"`
+			KeepDays         *int   `json:"keep_days"`
+			ExpectedRevision *int64 `json:"expected_revision"`
+		}
+		if err := DecodeJSON(r, &input); err != nil {
+			WriteError(w, err)
+			return
+		}
+		if input.KeepLast == nil || input.KeepDays == nil || input.ExpectedRevision == nil {
+			WriteError(w, domain.E(domain.CodeValidationFailed, "keep_last, keep_days and expected_revision are required"))
+			return
+		}
+		policy, err := s.SetRetentionPolicy(r.Context(), chi.URLParam(r, "instanceId"), backup.RetentionPolicyInput{
+			KeepLast: *input.KeepLast, KeepDays: *input.KeepDays, ExpectedRevision: *input.ExpectedRevision,
+		}, *auth.UserFrom(r.Context()))
+		if err != nil {
+			WriteError(w, err)
+			return
+		}
+		WriteJSON(w, http.StatusOK, policy)
+	})
 	r.With(auth.RequireRole(domain.RoleViewer)).Get("/instances/{instanceId}/backups", func(w http.ResponseWriter, r *http.Request) {
 		records, err := s.List(r.Context(), chi.URLParam(r, "instanceId"))
 		if err != nil {

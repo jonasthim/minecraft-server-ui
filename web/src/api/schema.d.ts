@@ -1490,6 +1490,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{instanceId}/backups/retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: effective per-instance automatic-backup retention policy. */
+        get: operations["backupRetentionGet"];
+        /** Admin: save retention policy for the next successful automatic backup; no immediate pruning. */
+        put: operations["backupRetentionSet"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3068,6 +3086,22 @@ export interface components {
             /** @enum {string} */
             comparison: "newer" | "same" | "older" | "unknown" | "no_release";
             release: components["schemas"]["SelfUpdateReleaseSummary"] | null;
+        };
+        BackupRetentionPolicy: {
+            /** @description Zero disables the count limit. Default 10. */
+            keep_last: number;
+            /** @description Zero disables the age limit. Default 30. */
+            keep_days: number;
+            /** Format: int64 */
+            revision: number;
+        };
+        BackupRetentionPolicyInput: {
+            /** @description Zero disables the count limit. Default 10. */
+            keep_last: number;
+            /** @description Zero disables the age limit. Default 30. */
+            keep_days: number;
+            /** Format: int64 */
+            expected_revision: number;
         };
     };
     responses: never;
@@ -10134,6 +10168,162 @@ export interface operations {
                 };
             };
             /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    backupRetentionGet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRetentionPolicy"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role or token scope denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Policy changed since expected_revision; reload before saving. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid input */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description State or saving recovery unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    backupRetentionSet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupRetentionPolicyInput"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRetentionPolicy"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role or token scope denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Policy changed since expected_revision; reload before saving. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid input */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description State or saving recovery unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;
