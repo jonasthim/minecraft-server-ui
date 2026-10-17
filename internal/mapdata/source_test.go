@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -210,10 +211,18 @@ func TestSourceRetainsAndRechecksAncestorAfterOpen(t *testing.T) {
 	}
 	defer s.Close()
 	ancestor := filepath.Dir(server)
-	if e = os.Rename(ancestor, ancestor+".held"); e != nil {
-		t.Fatal(e)
-	}
-	if e = os.Symlink(outside, ancestor); e != nil {
+	renameErr := os.Rename(ancestor, ancestor+".held")
+	if renameErr != nil {
+		if runtime.GOOS != "windows" || !os.IsPermission(renameErr) {
+			t.Fatal(renameErr)
+		}
+		// Windows can deny moving a directory with retained open descendants.
+		// Prove that the attack was prevented rather than skipping the check.
+		if _, e = os.Lstat(ancestor + ".held"); !os.IsNotExist(e) {
+			t.Fatalf("denied rename created a destination: %v", e)
+		}
+		t.Logf("native filesystem prevented pinned ancestor rename: %v", renameErr)
+	} else if e = os.Symlink(outside, ancestor); e != nil {
 		t.Skip(e)
 	}
 	f, e := s.open("data", 100)
@@ -225,7 +234,11 @@ func TestSourceRetainsAndRechecksAncestorAfterOpen(t *testing.T) {
 	if e != nil || string(b) != "inside" {
 		t.Fatalf("source escaped pinned ancestor: %q %v", b, e)
 	}
-	if e = s.verify(); !errors.Is(e, errStale) {
+	if e = s.verify(); renameErr != nil {
+		if e != nil {
+			t.Fatalf("denied rename changed pinned tree: %v", e)
+		}
+	} else if !errors.Is(e, errStale) {
 		t.Fatalf("ancestor change was not stale: %v", e)
 	}
 }

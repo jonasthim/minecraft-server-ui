@@ -2,8 +2,10 @@ package players
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -102,17 +104,27 @@ func TestPlayerServerRootPinsAndRechecksEveryAncestor(t *testing.T) {
 	}
 	defer pinned.Close()
 	ancestor := filepath.Dir(server)
-	if err = os.Rename(ancestor, ancestor+".held"); err != nil {
-		t.Fatal(err)
-	}
-	if err = os.Symlink(outside, ancestor); err != nil {
+	renameErr := os.Rename(ancestor, ancestor+".held")
+	if renameErr != nil {
+		if runtime.GOOS != "windows" || !os.IsPermission(renameErr) {
+			t.Fatal(renameErr)
+		}
+		if _, err = os.Lstat(ancestor + ".held"); !os.IsNotExist(err) {
+			t.Fatalf("denied rename created a destination: %v", err)
+		}
+		t.Logf("native filesystem prevented pinned ancestor rename: %v", renameErr)
+	} else if err = os.Symlink(outside, ancestor); err != nil {
 		t.Skip(err)
 	}
 	list, err := savedList(t.Context(), pinned.root, "whitelist")
 	if err != nil || len(list.Entries) != 1 || list.Entries[0].Player.Name != "Inside" {
 		t.Fatalf("pinned read escaped original tree: %+v %v", list, err)
 	}
-	if err = pinned.verify(); err == nil {
+	if err = pinned.verify(); renameErr != nil {
+		if err != nil {
+			t.Fatalf("denied rename changed pinned tree: %v", err)
+		}
+	} else if err == nil {
 		t.Fatal("changed ancestor accepted by final verification")
 	}
 }
@@ -141,6 +153,7 @@ func TestOfflineActivationRechecksAncestorAfterStaging(t *testing.T) {
 	}
 	defer pinned.Close()
 	swapped := false
+	var renameDenied error
 	verify := func() error {
 		directory, e := pinned.root.Open(".")
 		if e != nil {
@@ -155,6 +168,9 @@ func TestOfflineActivationRechecksAncestorAfterStaging(t *testing.T) {
 			if strings.HasPrefix(entry.Name(), ".manager-players-") && !swapped {
 				ancestor := filepath.Dir(server)
 				if e = os.Rename(ancestor, ancestor+".held"); e != nil {
+					if runtime.GOOS == "windows" && os.IsPermission(e) {
+						renameDenied = e
+					}
 					return e
 				}
 				if e = os.Symlink(outside, ancestor); e != nil {
@@ -166,22 +182,36 @@ func TestOfflineActivationRechecksAncestorAfterStaging(t *testing.T) {
 		return pinned.verify()
 	}
 	err = mutateSavedGuarded(t.Context(), pinned.root, console.PlayerMutation{Action: "whitelist_add", UUID: "00000000-0000-0000-0000-000000000002", Name: "Steve"}, time.Now(), verify)
-	if !swapped || err == nil {
+	if (!swapped && renameDenied == nil) || err == nil {
 		t.Fatalf("ancestor substitution before activation escaped verification: swapped=%v err=%v", swapped, err)
 	}
-	for _, path := range []string{filepath.Join(data, "instance.held", "server", "whitelist.json"), filepath.Join(outsideServer, "whitelist.json")} {
+	heldServer := filepath.Join(data, "instance.held", "server")
+	if renameDenied != nil {
+		if !errors.Is(err, renameDenied) {
+			t.Fatalf("activation lost the native rename denial: %v", err)
+		}
+		if _, e := os.Lstat(filepath.Join(data, "instance.held")); !os.IsNotExist(e) {
+			t.Fatalf("denied rename created a destination: %v", e)
+		}
+		if e := pinned.verify(); e != nil {
+			t.Fatalf("denied rename changed pinned tree: %v", e)
+		}
+		t.Logf("native filesystem prevented pinned ancestor rename: %v", renameDenied)
+		heldServer = server
+	}
+	for _, path := range []string{filepath.Join(heldServer, "whitelist.json"), filepath.Join(outsideServer, "whitelist.json")} {
 		b, e := os.ReadFile(path)
 		if e != nil || string(b) != original {
 			t.Fatalf("failed activation changed list %s: %s %v", path, b, e)
 		}
 	}
-	held, e := os.ReadDir(filepath.Join(data, "instance.held", "server"))
+	held, e := os.ReadDir(heldServer)
 	if e != nil {
 		t.Fatal(e)
 	}
 	for _, entry := range held {
 		if strings.HasPrefix(entry.Name(), ".manager-players-") {
-			t.Fatal("staging leaked after rejected activation")
+			t.Fatalf("staging leaked after rejected activation: operation error=%v", err)
 		}
 	}
 }

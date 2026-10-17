@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -405,16 +406,106 @@ func TestCredentialCandidatesAndPortableCollisionsRefused(t *testing.T) {
 	for _, name := range []string{"private.key", "private.pem", "CON.txt", "trailing.", "control\x7f", "Case.dat"} {
 		t.Run(name, func(t *testing.T) {
 			s, base := exportFixture(t)
-			put(t, base, "My world/"+name, "value")
+			world := filepath.Join(base, "My world")
+			before, e := os.ReadDir(world)
+			if e != nil {
+				t.Fatal(e)
+			}
+			writeErr := os.WriteFile(filepath.Join(world, name), []byte("value"), 0600)
+			if writeErr != nil && (runtime.GOOS != "windows" || name != "CON.txt") {
+				t.Fatal(writeErr)
+			}
 			if name == "Case.dat" {
 				put(t, base, "My world/case.dat", "collision")
 			}
+			entries, e := os.ReadDir(world)
+			if e != nil {
+				t.Fatal(e)
+			}
+			present, aliases := false, 0
+			for _, entry := range entries {
+				present = present || entry.Name() == name
+				if strings.EqualFold(entry.Name(), "Case.dat") {
+					aliases++
+				}
+			}
+			reject := true
+			archiveName, archiveBody := "", ""
+			switch {
+			case name == "CON.txt" && !present && runtime.GOOS == "windows":
+				// Win32 may address the console device, or reject it, without
+				// adding a file. Prove that no unsafe entry was represented.
+				if len(entries) != len(before) {
+					t.Fatalf("device-name write changed directory: before=%v after=%v", before, entries)
+				}
+				for i := range before {
+					if before[i].Name() != entries[i].Name() {
+						t.Fatal("device-name write replaced a directory entry")
+					}
+				}
+				reject = false
+				t.Logf("native device-name request created no file; write error: %v", writeErr)
+			case name == "trailing." && !present && runtime.GOOS == "windows":
+				b, err := os.ReadFile(filepath.Join(world, "trailing"))
+				if err != nil || string(b) != "value" || len(entries) != len(before)+1 {
+					t.Fatalf("unexpected trailing-dot fixture state: %q %v entries=%v", b, err, entries)
+				}
+				reject = false
+				archiveName, archiveBody = "My world/trailing", "value"
+				t.Log("native creation normalized trailing. to trailing")
+			case name == "Case.dat" && aliases == 1:
+				first, err := os.Stat(filepath.Join(world, "Case.dat"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				second, err := os.Stat(filepath.Join(world, "case.dat"))
+				if err != nil || !os.SameFile(first, second) {
+					t.Fatalf("single entry did not alias both requested names: %v", err)
+				}
+				reject = false
+				archiveName, archiveBody = "My world/Case.dat", "collision"
+				t.Log("native creation resolved both case variants to one file")
+			case !present || name == "Case.dat" && aliases != 2:
+				t.Fatalf("unsafe fixture was not represented: name=%q entries=%v", name, entries)
+			}
 			a, e := s.Capture(context.Background(), operator, "alpha")
 			if a != nil {
-				a.Close()
+				defer a.Close()
 			}
-			if e == nil {
-				t.Fatal("unsafe world capture accepted")
+			if reject {
+				if e == nil {
+					t.Fatal("represented unsafe world capture accepted")
+				}
+				return
+			}
+			if e != nil || a == nil {
+				t.Fatalf("safe native fixture was rejected: %v", e)
+			}
+			zr, e := zip.NewReader(a, a.Size)
+			if e != nil {
+				t.Fatal(e)
+			}
+			found := 0
+			for _, file := range zr.File {
+				if strings.EqualFold(file.Name, "My world/CON.txt") || file.Name == "My world/trailing." {
+					t.Fatalf("archive invented an unsafe entry: %q", file.Name)
+				}
+				if archiveName == "" || !strings.EqualFold(file.Name, archiveName) {
+					continue
+				}
+				found++
+				r, err := file.Open()
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, err := io.ReadAll(r)
+				r.Close()
+				if err != nil || string(b) != archiveBody {
+					t.Fatalf("normalized file bytes lost: %q %v", b, err)
+				}
+			}
+			if archiveName != "" && found != 1 {
+				t.Fatalf("normalized file count: %d", found)
 			}
 		})
 	}

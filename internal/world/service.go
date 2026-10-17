@@ -91,6 +91,20 @@ func safePart(name string) error {
 	}
 	return nil
 }
+
+// portablePaths rejects paths that would alias on a case-insensitive target.
+// Keep this separate from native directory creation, which may already alias
+// two requested names before an inventory can observe them.
+type portablePaths map[string]bool
+
+func (seen portablePaths) add(name string) error {
+	key := strings.ToLower(name)
+	if seen[key] {
+		return unsafe()
+	}
+	seen[key] = true
+	return nil
+}
 func unsafe() error {
 	return domain.E(domain.CodeValidationFailed, "world contains an unsafe path, link, or special file")
 }
@@ -257,7 +271,7 @@ func exclusion(name string) string {
 }
 func (s *Service) inventory(ctx context.Context, r *os.Root) ([]snapshotEntry, error) {
 	out := []snapshotEntry{}
-	seen := map[string]bool{}
+	seen := portablePaths{}
 	var bytes int64
 	visited := 0
 	var pathBytes int64
@@ -327,11 +341,9 @@ func (s *Service) inventory(ctx context.Context, r *os.Root) ([]snapshotEntry, e
 			if !info.IsDir() && (strings.HasSuffix(strings.ToLower(name), ".pem") || strings.HasSuffix(strings.ToLower(name), ".key")) {
 				return domain.E(domain.CodeValidationFailed, "possible credential file in world; export refused")
 			}
-			key := strings.ToLower(name)
-			if seen[key] {
-				return unsafe()
+			if e := seen.add(name); e != nil {
+				return e
 			}
-			seen[key] = true
 			out = append(out, snapshotEntry{name, info, false})
 			if len(out) > s.limits.entries {
 				return bound()

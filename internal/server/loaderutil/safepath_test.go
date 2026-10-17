@@ -89,6 +89,9 @@ func TestPublishRejectsAncestorSubstitution(t *testing.T) {
 }
 func TestPublishRetainsRelativeDataDirectoryNormalization(t *testing.T) {
 	dir := t.TempDir()
+	// The checkout and the OS temporary directory may be on different drives.
+	// A relative configuration must start on the same volume as its target.
+	t.Chdir(filepath.Dir(dir))
 	if err := os.MkdirAll(filepath.Join(dir, "instances", "test", "server"), 0700); err != nil {
 		t.Fatal(err)
 	}

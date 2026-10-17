@@ -6,8 +6,38 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"strings"
 	"testing"
 )
+
+// These strings must be validated even on filesystems that cannot represent
+// them as distinct directory entries. The capture inventory uses this registry.
+func TestPortableWorldPathValidation(t *testing.T) {
+	for _, name := range []string{"CON.txt", "trailing.", "trailing ", "control\x7f", "../outside", "dir\\file", "file:stream"} {
+		t.Run(name, func(t *testing.T) {
+			if err := safePart(name); err == nil {
+				t.Fatalf("unsafe portable component accepted: %q", name)
+			}
+		})
+	}
+	for _, second := range []string{"Case.dat", "case.dat", "CASE.DAT"} {
+		t.Run("collision-"+second, func(t *testing.T) {
+			seen := portablePaths{}
+			if err := seen.add("region/Case.dat"); err != nil {
+				t.Fatal(err)
+			}
+			if err := seen.add("region/" + second); err == nil {
+				t.Fatalf("portable path collision accepted: %q", second)
+			}
+			if err := seen.add("other/" + second); err != nil {
+				t.Fatalf("distinct parent rejected: %v", err)
+			}
+		})
+	}
+	if err := safePart(strings.Repeat("a", 256)); err == nil {
+		t.Fatal("oversized component accepted")
+	}
+}
 
 // Ignoring directory entries allowed an added traversal, duplicate, or missing
 // directory to pass validation despite the reviewed source inventory.

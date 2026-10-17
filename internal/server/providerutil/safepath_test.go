@@ -77,6 +77,8 @@ func TestPublishRejectsAncestorSubstitution(t *testing.T) {
 }
 func TestPublishRetainsRelativeDataDirectoryNormalization(t *testing.T) {
 	i, plan, r := setup(t, jar(t, false))
+	// Windows CI keeps the checkout on D: and temporary fixtures on C:.
+	t.Chdir(filepath.Dir(i.dataDir))
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
