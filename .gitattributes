@@ -1,0 +1,10 @@
+# Generated/legal artifacts are byte-checked; preserve upstream line endings.
+/THIRD_PARTY_NOTICES.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/release/dependency-inventory.json -text
+/release/licenses/react-remove-scroll-bar/LICENSE -text
+# Raw inputs hashed or copied into those artifacts must also retain their bytes.
+/go.mod -text
+/go.sum -text
+/web/package-lock.json -text
+/deploy/linux/NOTICE -text
+/internal/mapdata/testdata/LZ4-LICENSE.txt -text

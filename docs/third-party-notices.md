@@ -43,7 +43,14 @@ UNLICENSE and PATENTS files, with suffixes, and legal files inherited through
 linked Go package directories. This preserves, among others, modernc libc's
 `LICENSE-3RD-PARTY.md`, memory's multiple licenses, SQLite/SQLite Vec notices, and
 Go's root and linked vendor licenses/patent grants. It copies the legal text bytes
-intact, with labeled separators. It rejects absent, empty, binary or very short
+intact, with labeled separators. Some upstream text intentionally retains CRLF
+line endings. Scoped `.gitattributes` rules disable text normalization for the
+notice artifact, deterministic inventory, hash-pinned fallback license, and the
+raw inputs hashed/copied into the artifacts (`go.mod`, `go.sum`, the npm lockfile,
+Linux deployment notice and map fixture license), so
+`core.autocrlf=true` cannot change their bytes. The notice file permits CR at line
+end in Git whitespace checks while retaining the ordinary trailing-space,
+end-of-file blank-line and space-before-tab checks. It rejects absent, empty, binary or very short
 license files; those structural checks do not replace review of copyright and
 license obligations when dependencies change.
 
