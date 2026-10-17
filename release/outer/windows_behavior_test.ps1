@@ -10,6 +10,47 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+function Assert-NativeArgvJson([string]$Json, [string[]]$Expected, [switch]$LegacySemanticsFixture) {
+    if ($LegacySemanticsFixture) {
+        try { $argv = ConvertFrom-Json51Fixture $Json } catch { throw 'native argv JSON refused' }
+    } else {
+        try { $argv = ConvertFrom-Json -InputObject $Json } catch { throw 'native argv JSON refused' }
+    }
+    if ($argv -isnot [System.Array]) { throw 'native argv was not an array' }
+    if ($argv.Count -ne $Expected.Count) { throw 'native argv count mismatch' }
+    for ([int]$index = 0; $index -lt $Expected.Count; $index++) {
+        if ($argv[$index] -isnot [string] -or $argv[$index] -cne $Expected[$index]) { throw 'native argv member mismatch' }
+    }
+}
+
+# Reproduce Windows PowerShell 5.1's historical single-object array emission
+# under either engine, then prove why the old @(...)[6] capture was invalid.
+function ConvertFrom-Json51Fixture([string]$Json) {
+    $value = ConvertFrom-Json -InputObject $Json
+    Write-Output -NoEnumerate $value
+}
+$argvFixtureJson = '["prepare","--repository","fixture/repo","--trust-file","C:\\fixture\\trust.json","--version","v1.2.3","--output","C:\\fixture\\output"]'
+$argvFixtureExpected = @('prepare','--repository','fixture/repo','--trust-file','C:\fixture\trust.json','--version','v1.2.3','--output','C:\fixture\output')
+$legacyArgv = @(ConvertFrom-Json51Fixture $argvFixtureJson)
+if ($legacyArgv.Count -ne 1 -or $legacyArgv[0] -isnot [System.Array] -or $legacyArgv[0].Count -ne $argvFixtureExpected.Count) { throw 'PowerShell 5.1 argv behavior fixture drift' }
+$baselineAssertionFailed = $false
+try { $baselineAssertionFailed = $legacyArgv[6] -cne 'v1.2.3' -or $legacyArgv[8] -cne 'C:\fixture\output' }
+catch [System.IndexOutOfRangeException] { $baselineAssertionFailed = $true }
+if (-not $baselineAssertionFailed) { throw 'PowerShell 5.1 argv baseline no longer reproduces its invalid indexed assertions' }
+Assert-NativeArgvJson $argvFixtureJson $argvFixtureExpected
+Assert-NativeArgvJson $argvFixtureJson $argvFixtureExpected -LegacySemanticsFixture
+foreach ($legacySemantics in @($false,$true)) {
+    foreach ($invalidArgvJson in @('{', '["prepare","--repository"]', $argvFixtureJson.Replace('v1.2.3','v1.2.4'))) {
+        $refused = $false
+        try {
+            if ($legacySemantics) { Assert-NativeArgvJson $invalidArgvJson $argvFixtureExpected -LegacySemanticsFixture }
+            else { Assert-NativeArgvJson $invalidArgvJson $argvFixtureExpected }
+        } catch { $refused = $true }
+        if (-not $refused) { throw 'malformed, truncated or changed native argv accepted' }
+    }
+}
+
 $source = [System.IO.File]::ReadAllText($EntryScript)
 $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$parseErrors)
@@ -108,8 +149,9 @@ try {
     $env:OUTER_TEST_ORIGINAL_TEMP = [Environment]::GetEnvironmentVariable('TEMP',[EnvironmentVariableTarget]::Process)
     $env:OUTER_TEST_ORIGINAL_TMP = [Environment]::GetEnvironmentVariable('TMP',[EnvironmentVariableTarget]::Process)
     # Extract only the generated fixed URL, never supply a production URL override.
-    $match = [regex]::Match($source,"Receive-Preparer '(https://github.com/[^']+)' ")
+    $match = [regex]::Match($source,"Receive-Preparer '(https://github.com/([^/]+/[^/]+)/releases/[^']+)' ")
     if (-not $match.Success) { throw 'URL seam drift' }
+    $expectedRepository = $match.Groups[2].Value
     $env:OUTER_EXPECTED_URL = $match.Groups[1].Value
     $cases = @('good','tamper','oversize','truncate','error','malicious-version','foreign-child')
     $who = [System.Security.Principal.WindowsIdentity]::GetCurrent()
@@ -142,8 +184,10 @@ try {
         if (-not $success -and $captured.Contains('"prepared":true')) { throw 'success JSON emitted on failure' }
         if ((Test-Path -LiteralPath $env:OUTER_TEST_ARGS) -ne $runnerReached) { throw ('unexpected native runner reachability for '+$mode) }
         if ($runnerReached) {
-            $argv = @(ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($env:OUTER_TEST_ARGS)))
-            if ($argv[6] -cne $version -or $argv[8] -cne $output) { throw 'native argv changed' }
+            $actualScratch = [System.IO.File]::ReadAllText($env:OUTER_TEST_SCRATCH)
+            $expectedArgv = @('prepare','--repository',$expectedRepository,'--trust-file',[System.IO.Path]::Combine($actualScratch,'trust.json'),'--version',$version,'--output',$output)
+            if (($call -contains '-AllowDevelopment')) { $expectedArgv += '--allow-development' }
+            Assert-NativeArgvJson ([System.IO.File]::ReadAllText($env:OUTER_TEST_ARGS)) $expectedArgv
             $facts = @([System.IO.File]::ReadAllLines($env:OUTER_TEST_ACLS))
             $names = @($facts | ForEach-Object { $_.Split('|')[0] } | Sort-Object)
             if (($names -join ',') -cne 'error.txt,minecraft-ui-bootstrap.exe,result.json,trust.json') { throw 'not every actual scratch child had owner/DACL checked' }

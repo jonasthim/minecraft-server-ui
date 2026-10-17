@@ -25,8 +25,6 @@ git diff --check -- release/bootstrap/prepare.go release/bootstrap/prepare_test.
                                                                             PASS
 ```
 
-## Boundaries
-
 ## Integrator workflow composition
 
 Root updated `.github/scripts/candidate-bootstrap-check.py` to require the exact
