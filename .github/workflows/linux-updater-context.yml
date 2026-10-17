@@ -1,0 +1,55 @@
+name: Linux updater capability investigation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capability-context:
+    name: Compare fixed updater sandbox capability contexts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache-dependency-path: go.sum
+      - name: Build native updater for file metadata inspection
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          test "$RUNNER_ARCH" = X64
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(go env GOHOSTOS)" = linux
+          test "$(go env GOOS)" = linux
+          test "$(go env GOARCH)" = amd64
+          mkdir -p capability-input capability-results
+          go build -trimpath -ldflags '-s -w -X main.version=0.0.0-dev' -o capability-input/selfupdate ./cmd/minecraft-ui-update
+      - name: Exercise harmless probes in disposable native units
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_WORKSPACE bash deploy/qualification/linux-updater-context.sh "$GITHUB_WORKSPACE/capability-input/selfupdate" "$GITHUB_WORKSPACE/capability-results"
+      - name: Record source and native host
+        if: always()
+        run: |
+          mkdir -p capability-results
+          git rev-parse HEAD > capability-results/commit.txt
+          go version > capability-results/go-version.txt
+          systemctl --version > capability-results/systemd-version.txt
+          printf '%s\n' "$RUNNER_OS $RUNNER_ARCH $ImageOS $ImageVersion" > capability-results/runner.txt
+      - name: Retain bounded capability context evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-updater-context-${{ github.sha }}
+          path: |
+            capability-results/commit.txt
+            capability-results/go-version.txt
+            capability-results/systemd-version.txt
+            capability-results/runner.txt
+            capability-results/result.json
+            capability-results/updater-capability-probe-summary.json
+          if-no-files-found: error
+          retention-days: 14

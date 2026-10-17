@@ -14,6 +14,10 @@ PROPERTIES = {
 def unit_kind(value):
     if value == "minecraft-ui-update-recovery.service":
         return "recovery"
+    if value == "minecraft-ui-qualification-capability-baseline.service":
+        return "capability_probe_baseline"
+    if value == "minecraft-ui-qualification-capability-control.service":
+        return "capability_probe_control"
     prefix, suffix = "minecraft-ui-update@", ".service"
     if value.startswith(prefix) and value.endswith(suffix):
         instance = value[len(prefix):-len(suffix)]
@@ -39,24 +43,43 @@ def summarize_unit(properties, duplicates):
         cap_state, cap_setuid = "unknown", "unknown"
     elif not cap_set.strip():
         cap_state, cap_setuid = "empty", "no"
+    elif cap_set.strip() == "~":
+        cap_state, cap_setuid = "configured", "yes"
     else:
         cap_state = "configured"
         tokens = cap_set.split()
-        if all(re.fullmatch(r"~?CAP_[A-Z0-9_]+", token) for token in tokens):
-            cap_setuid = "yes" if any(token.lstrip("~") == "CAP_SETUID" for token in tokens) else "no"
+        if all(re.fullmatch(r"~?cap_[a-z0-9_]+", token, re.IGNORECASE) for token in tokens):
+            inverted = tokens[0].startswith("~")
+            valid_polarity = all(not token.startswith("~") for token in tokens[1:])
+            if valid_polarity:
+                named = any(token.lstrip("~").lower() == "cap_setuid" for token in tokens)
+                cap_setuid = ("no" if named else "yes") if inverted else ("yes" if named else "no")
+            else:
+                cap_setuid = "unknown"
         else:
             cap_setuid = "unknown"
     if syscall_filter is None:
-        syscall_state = setuid_filter = "unknown"
+        syscall_state = syscall_mode = setuid_filter = "unknown"
     elif not syscall_filter.strip():
-        syscall_state, setuid_filter = "empty", "no"
+        syscall_state, syscall_mode, setuid_filter = "empty", "none", "no"
+    elif syscall_filter.strip() == "~":
+        syscall_state, syscall_mode, setuid_filter = "configured", "denylist", "no"
     else:
         syscall_state = "configured"
         tokens = syscall_filter.split()
-        if all(re.fullmatch(r"~?(?:@[A-Za-z0-9_]+|[a-z0-9_]+)", token) for token in tokens):
-            setuid_filter = "yes" if any(token.lstrip("~") in {"setuid", "@setuid"} for token in tokens) else "no"
+        if all(re.fullmatch(r"~?(?:@[A-Za-z0-9_-]+|[a-z0-9_]+)", token) for token in tokens):
+            inverted = tokens[0].startswith("~")
+            syscall_mode = "denylist" if inverted else "allowlist"
+            valid_polarity = all(not token.startswith("~") for token in tokens[1:])
+            if valid_polarity:
+                # Literal token presence only. Groups such as @system-service
+                # may include syscalls without naming them here.
+                named = any(token.lstrip("~").lower() in {"setuid", "@setuid"} for token in tokens)
+                setuid_filter = "yes" if named else "no"
+            else:
+                syscall_mode = setuid_filter = "unknown"
         else:
-            setuid_filter = "unknown"
+            syscall_mode = setuid_filter = "unknown"
     user = unique(properties, duplicates, "User")
     user_state = "root" if user == "root" else "other" if user else "unknown"
     return {
@@ -66,6 +89,7 @@ def summarize_unit(properties, duplicates):
         "cap_setuid_named": cap_setuid,
         "private_users": yes_no(unique(properties, duplicates, "PrivateUsers")),
         "system_call_filter": syscall_state,
+        "system_call_filter_mode": syscall_mode,
         "setuid_filter_named": setuid_filter,
         "restrict_suid_sgid": yes_no(unique(properties, duplicates, "RestrictSUIDSGID")),
         "no_new_privileges": yes_no(unique(properties, duplicates, "NoNewPrivileges")),
