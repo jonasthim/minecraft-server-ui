@@ -86,6 +86,45 @@ func TestExactPrivateDACLUsesBinaryAllowlist(t *testing.T) {
 	}
 }
 
+func TestGenericRootMkdirChildDoesNotMeetPrivateDirectoryContract(t *testing.T) {
+	parentPath := t.TempDir()
+	prepareManagerStateTestDirectory(t, parentPath)
+	parent, err := os.OpenRoot(filepath.Clean(parentPath))
+	if err != nil {
+		t.Fatal("test parent directory could not be opened")
+	}
+	defer parent.Close()
+	managerSID := testManagerStateSID(t)
+	operation, _, err := createPrivateDirectory(parent, "operation", managerSID)
+	if err != nil {
+		t.Fatal("private operation directory could not be created")
+	}
+	defer operation.Close()
+
+	if err := operation.Mkdir("inherited", 0700); err != nil {
+		t.Fatal("generic child directory could not be created")
+	}
+	inheritedSD, err := windows.GetNamedSecurityInfo(filepath.Join(operation.Name(), "inherited"), windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal("generic child DACL could not be read")
+	}
+	if err := checkExactPrivateDACL(inheritedSD, managerSID); err == nil {
+		t.Fatal("generic inherited child unexpectedly has the protected private DACL")
+	}
+	if _, err := openCheckedDirectory(operation, "inherited", managerSID); err == nil {
+		t.Fatal("generic inherited child unexpectedly met the protected private DACL contract")
+	}
+	if err := operation.Remove("inherited"); err != nil {
+		t.Fatal("generic child fixture could not be removed")
+	}
+
+	private, _, err := createPrivateDirectory(operation, "explicit", managerSID)
+	if err != nil {
+		t.Fatal("explicit private child did not meet the protected private DACL contract")
+	}
+	defer private.Close()
+}
+
 func TestPlatformManagerSIDUsesBinaryWritableACEs(t *testing.T) {
 	managerSID := testManagerStateSID(t)
 	inheritedOnlySID := "S-1-5-21-998-997-996-1000"

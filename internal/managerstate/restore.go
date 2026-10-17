@@ -182,20 +182,14 @@ func restoreLocked(ctx context.Context, session *lockedMaintenance, binaryVersio
 		return MaintenanceSummary{}, maintenanceFailure("restore operation directory could not be created", err)
 	}
 	defer operation.Close()
-	if err := operation.Mkdir("stage", 0700); err != nil {
+	stage, _, err := createPrivateDirectory(operation, "stage", session.managerSID)
+	if err != nil {
 		return MaintenanceSummary{}, maintenanceFailure("restore staging directory could not be created", err)
 	}
-	if err := operation.Mkdir("preimage", 0700); err != nil {
-		return MaintenanceSummary{}, maintenanceFailure("restore preimage directory could not be created", err)
-	}
-	stage, err := openCheckedDirectory(operation, "stage", session.managerSID)
-	if err != nil {
-		return MaintenanceSummary{}, maintenanceFailure("restore staging directory could not be opened", err)
-	}
 	defer stage.Close()
-	preimage, err := openCheckedDirectory(operation, "preimage", session.managerSID)
+	preimage, _, err := createPrivateDirectory(operation, "preimage", session.managerSID)
 	if err != nil {
-		return MaintenanceSummary{}, maintenanceFailure("restore preimage directory could not be opened", err)
+		return MaintenanceSummary{}, maintenanceFailure("restore preimage directory could not be created", err)
 	}
 	defer preimage.Close()
 	if err := verifyRestoreRoots(session, operationID, operation, stage, preimage); err != nil {

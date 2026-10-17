@@ -263,11 +263,48 @@ func TestRestoreContinuationRejectsSameBytesAtReplacementIdentity(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(stagePath); err != nil {
+	original, err := os.Open(stagePath)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(stagePath, bytesBefore, 0600); err != nil {
+	originalIdentity, err := restoreNativeIdentity(original)
+	closeErr := original.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("record original stage identity: identity_error=%v close_error=%v", err, closeErr)
+	}
+	replacementPath := stagePath + ".replacement"
+	replacement, err := os.OpenFile(replacementPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
 		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(replacementPath) })
+	if _, err := replacement.Write(bytesBefore); err != nil {
+		_ = replacement.Close()
+		t.Fatal(err)
+	}
+	if err := replacement.Sync(); err != nil {
+		_ = replacement.Close()
+		t.Fatal(err)
+	}
+	replacementIdentity, err := restoreNativeIdentity(replacement)
+	closeErr = replacement.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("record replacement stage identity: identity_error=%v close_error=%v", err, closeErr)
+	}
+	if replacementIdentity == originalIdentity {
+		t.Fatal("replacement was not independently created while the original stage inode remained allocated")
+	}
+	if err := os.Rename(replacementPath, stagePath); err != nil {
+		t.Fatalf("atomically replace staged file: %v", err)
+	}
+	installed, err := os.Open(stagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedIdentity, identityErr := restoreNativeIdentity(installed)
+	closeErr = installed.Close()
+	if identityErr != nil || closeErr != nil || installedIdentity != replacementIdentity {
+		t.Fatalf("atomic replacement identity changed: got=%q want=%q identity_error=%v close_error=%v", installedIdentity, replacementIdentity, identityErr, closeErr)
 	}
 	if _, err := restoreWithDeps(t.Context(), dir, "current-version", RestoreOptions{SnapshotID: selected.ID, Confirmed: true}, restoreDeps{maintenanceDeps: testMaintenanceDeps()}); err == nil {
 		t.Fatal("continuation accepted same bytes at an unrecorded native identity")

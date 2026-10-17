@@ -67,6 +67,26 @@ Checks run:
 - Isolated Go overlay bypassing the native identity equality made `TestRestoreContinuationRejectsSameBytesAtReplacementIdentity` fail because continuation accepted the replacement.
 - Isolated Go overlay bypassing complete live SQLite file-set verification made `TestRestoreResumeRefusesExtraSQLiteSidecarAndPreservesIt` fail because Resume accepted the unmanifested sidecar.
 
+## Replacement-identity CI fixture correction
+
+CI run `39050922266` at `388c89d` failed only
+`TestRestoreContinuationRejectsSameBytesAtReplacementIdentity`: continuation
+accepted the staged file after the test removed it and recreated the same path
+with identical bytes. The old fixture did not record the two native identities.
+Because it freed the original inode before `WriteFile`, inode reuse could make
+the replacement match the recorded device/inode; the hosted log does not retain
+those identities, so this is the likely fixture cause rather than a proven
+measurement of that runner's inode allocation.
+
+The fixture now creates an exclusive replacement file while the original stage
+file still exists, compares their native identities, then atomically renames the
+replacement over the original and verifies the installed identity before
+continuation. This proves the test presents same bytes at a distinct native
+identity on the current host, without weakening the production guard. The
+focused test passed 20 consecutive runs. A Go overlay that removes the native
+identity equality failed the corrected test with the expected “continuation
+accepted same bytes” assertion.
+
 Native Linux durability and native elevated Windows C: NTFS execution remain
 qualification gates. No local service/account/game actions or native mutation
 were performed for this packet. The integration owner must review the evidence
