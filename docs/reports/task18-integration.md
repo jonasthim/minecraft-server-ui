@@ -73,6 +73,14 @@ Linux and Windows updater. These are build checks, not execution qualification.
 The final UI build used `npm --prefix web run build`; browser evidence is tied
 to the exact embedded binary hashes in the Task25 report.
 
+After normal-update fix5c5a4e7 and UI fix25598bd, the same combined checks passed
+again. `make gen` produced no generated-type diff, production web build passed,
+and all four binaries rebuilt successfully. The affected full race runs were
+update27.027s, lifecycle10.558s, modpack13.230s; unchanged packages reused the
+Go test cache. Normal/shared fix review closed all three Important findings and
+the separate rollback review has no findings. Final UI review still has its
+separately reported stale-response edit-loss correction pending.
+
 ## Remaining gates
 
 Independent review covers these root-owned changes together with Task18's
