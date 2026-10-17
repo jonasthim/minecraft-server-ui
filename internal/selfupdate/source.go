@@ -130,6 +130,12 @@ func (s *Source) open(ctx context.Context, tag, name string) (io.ReadCloser, err
 	if name != "release.json" && name != "release.sig" && name != archiveName("linux") && name != archiveName("windows") {
 		return nil, errors.New("release asset name is not permitted")
 	}
+	return s.openAsset(ctx, tag, name)
+}
+
+// openAsset is shared transport plumbing. Callers enforce their separate exact
+// asset allowlists before reaching it; it is deliberately not exported.
+func (s *Source) openAsset(ctx context.Context, tag, name string) (io.ReadCloser, error) {
 	initial := "https://github.com/" + s.trust.Repository + "/releases/download/" + tag + "/" + name
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, initial, nil)
 	if err != nil {
