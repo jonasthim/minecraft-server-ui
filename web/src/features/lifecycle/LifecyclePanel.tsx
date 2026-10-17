@@ -28,8 +28,21 @@ export function LifecyclePanel({ detail, onChanged }: { detail: Detail; onChange
   useEffect(() => {
     if (!job || !active(job)) return;
     const controller = new AbortController(); const jobID = job.id;
-    const timer = window.setInterval(() => { void api<{ job: Job }>('/jobs/' + encodeURIComponent(jobID), { signal: controller.signal }).then(async value => { if (controller.signal.aborted) return; setJob(value.job); if (!active(value.job)) { await refresh(controller.signal); await onChanged(); } }).catch(error => { if (!controller.signal.aborted) setError(message(error)); }); }, 2000);
+    const timer = window.setInterval(() => { void api<{ job: Job }>('/jobs/' + encodeURIComponent(jobID), { signal: controller.signal }).then(value => { if (!controller.signal.aborted) setJob(value.job); }).catch(error => { if (!controller.signal.aborted) setError(message(error)); }); }, 2000);
     return () => { controller.abort(); window.clearInterval(timer); };
+  }, [job?.id, job?.state]);
+  useEffect(() => {
+    if (!job || active(job)) return;
+    const controller = new AbortController();
+    // Terminal feedback is already visible. These ancillary reads have their own
+    // lifetime and both run even if one fails, so the parent's persisted pin is
+    // refreshed independently of status polling.
+    void Promise.allSettled([refresh(controller.signal), onChanged()]).then(results => {
+      if (controller.signal.aborted) return;
+      const failures = results.flatMap((result, index) => result.status === 'rejected' ? [(index === 0 ? 'Server status refresh failed: ' : 'Server details refresh failed: ') + message(result.reason)] : []);
+      if (failures.length) setError(failures.join(' '));
+    });
+    return () => controller.abort();
   }, [job?.id, job?.state, refresh, onChanged]);
   function open(operation: Request['operation']) { setDialog(operation); setError(''); setPreview(null); setConfirmation(''); setCountdown(300); setEmergency(false); }
   async function loadCatalog() {

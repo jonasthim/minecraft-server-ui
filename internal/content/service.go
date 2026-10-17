@@ -166,6 +166,9 @@ func (s *Service) List(ctx context.Context, id string) ([]Installed, error) {
 }
 func cutoff() string { return time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339Nano) }
 func (s *Service) expire(ctx context.Context, id string) error {
+	if held, err := s.stagesHeld(ctx, id, s.db); err != nil || held {
+		return err
+	}
 	var n int
 	if e := s.db.QueryRowContext(ctx, "SELECT count(*) FROM content_journals WHERE instance_id=?", id).Scan(&n); e != nil {
 		return e
@@ -179,7 +182,25 @@ func (s *Service) expire(ctx context.Context, id string) error {
 	return s.cleanupStages(ctx, id, 0, true)
 }
 func (s *Service) cleanupStages(ctx context.Context, id string, actor int64, expired bool) error {
-	query := "SELECT id FROM content_stages WHERE instance_id=? AND NOT EXISTS(SELECT 1 FROM content_previews WHERE instance_id=? AND instr(private_json,content_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM update_previews WHERE instance_id=content_stages.instance_id AND instr(private_json,content_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM update_transactions WHERE instance_id=content_stages.instance_id AND instr(journal_json,content_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM jobs WHERE instance_id=content_stages.instance_id AND state IN ('queued','running') AND kind IN ('instance_update_prepare','instance_update','instance_rollback') AND instr(payload,content_stages.id)>0)"
+	// Keep queue/reference publication serialized through unlink + receipt deletion.
+	// Production SQLite uses one connection; taking a write reservation also
+	// preserves the boundary if a caller supplies a larger connection pool.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, "UPDATE content_stages SET id=id WHERE instance_id=? AND 0", id); err != nil {
+		return err
+	}
+	if held, err := s.stagesHeld(ctx, id, tx); err != nil || held {
+		return err
+	}
+	query := `SELECT id FROM content_stages WHERE instance_id=?
+ AND NOT EXISTS(SELECT 1 FROM content_previews WHERE instance_id=? AND instr(private_json,content_stages.id)>0)
+ AND NOT EXISTS(SELECT 1 FROM update_previews WHERE instance_id=content_stages.instance_id AND instr(private_json,content_stages.id)>0 AND (julianday(expires_at) IS NULL OR julianday(expires_at)>julianday('now') OR EXISTS(SELECT 1 FROM jobs WHERE jobs.instance_id=update_previews.instance_id AND jobs.state IN ('queued','running') AND jobs.kind IN ('instance_update_prepare','instance_update','instance_rollback') AND instr(jobs.payload,update_previews.id)>0)))
+ AND NOT EXISTS(SELECT 1 FROM update_transactions WHERE instance_id=content_stages.instance_id AND instr(journal_json,content_stages.id)>0 AND (state NOT IN ('complete','rolled_back','superseded') OR EXISTS(SELECT 1 FROM jobs WHERE jobs.id=update_transactions.job_id AND jobs.state IN ('queued','running'))))
+ AND NOT EXISTS(SELECT 1 FROM jobs WHERE instance_id=content_stages.instance_id AND state IN ('queued','running') AND kind IN ('instance_update_prepare','instance_update','instance_rollback') AND instr(payload,content_stages.id)>0)`
 	args := []any{id, id}
 	if actor > 0 {
 		query += " AND actor_id=?"
@@ -189,7 +210,7 @@ func (s *Service) cleanupStages(ctx context.Context, id string, actor int64, exp
 		query += " AND created_at<?"
 		args = append(args, cutoff())
 	}
-	rows, e := s.db.QueryContext(ctx, query, args...)
+	rows, e := tx.QueryContext(ctx, query, args...)
 	if e != nil {
 		return e
 	}
@@ -205,12 +226,20 @@ func (s *Service) cleanupStages(ctx context.Context, id string, actor int64, exp
 	if e != nil {
 		return e
 	}
+	if s.fault != nil {
+		if err := s.fault("stage_cleanup"); err != nil {
+			return err
+		}
+	}
 	for _, stage := range ids {
-		if e = s.removeStage(ctx, id, stage); e != nil {
+		if e = s.removeStageFile(ctx, id, stage); e != nil {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, "DELETE FROM content_stages WHERE id=? AND instance_id=?", stage, id); e != nil {
 			return e
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 func (s *Service) Discard(ctx context.Context, id, preview string, actor domain.User) error {
 	s.mu.Lock()

@@ -59,7 +59,19 @@ func (s *Service) stageChecked(ctx context.Context, id string, actor int64, r io
 	if e := s.db.QueryRowContext(ctx, "SELECT coalesce(sum(size),0) FROM modpack_stages").Scan(&global); e != nil {
 		return out, e
 	}
-	if count >= 20000 || total+size > 8<<30 || global+size > 16<<30 {
+	overQuota := func() bool { return count >= 20000 || total+size > 8<<30 || global+size > 16<<30 }
+	if overQuota() {
+		if err := s.expireStageQuota(ctx); err != nil {
+			return out, err
+		}
+		if err := s.db.QueryRowContext(ctx, "SELECT count(*),coalesce(sum(size),0) FROM modpack_stages WHERE instance_id=?", id).Scan(&count, &total); err != nil {
+			return out, err
+		}
+		if err := s.db.QueryRowContext(ctx, "SELECT coalesce(sum(size),0) FROM modpack_stages").Scan(&global); err != nil {
+			return out, err
+		}
+	}
+	if overQuota() {
 		return out, conflict("pack staging quota reached")
 	}
 	out = stage{ID: newID(), Size: size}

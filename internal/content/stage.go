@@ -61,7 +61,19 @@ func (s *Service) stage(ctx context.Context, id string, actor int64, name string
 	if e := s.db.QueryRowContext(ctx, "SELECT coalesce(sum(size),0) FROM content_stages").Scan(&global); e != nil {
 		return Upload{}, e
 	}
-	if count >= 256 || total+size > 8<<30 || global+size > 16<<30 {
+	overQuota := func() bool { return count >= 256 || total+size > 8<<30 || global+size > 16<<30 }
+	if overQuota() {
+		if err := s.expireStageQuota(ctx); err != nil {
+			return Upload{}, err
+		}
+		if err := s.db.QueryRowContext(ctx, "SELECT count(*),coalesce(sum(size),0) FROM content_stages WHERE instance_id=?", id).Scan(&count, &total); err != nil {
+			return Upload{}, err
+		}
+		if err := s.db.QueryRowContext(ctx, "SELECT coalesce(sum(size),0) FROM content_stages").Scan(&global); err != nil {
+			return Upload{}, err
+		}
+	}
+	if overQuota() {
 		return Upload{}, conflict("private artifact staging quota reached; discard unused previews/uploads")
 	}
 	root, e := s.stageRoot(ctx, id)
@@ -220,6 +232,13 @@ func (s *Service) StageUpload(ctx context.Context, id, name string, r io.Reader,
 	return u, nil
 }
 func (s *Service) removeStage(ctx context.Context, id, stage string) error {
+	if err := s.removeStageFile(ctx, id, stage); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, "DELETE FROM content_stages WHERE id=? AND instance_id=?", stage, id)
+	return err
+}
+func (s *Service) removeStageFile(ctx context.Context, id, stage string) error {
 	r, e := s.stageRoot(ctx, id)
 	if e != nil {
 		return e
@@ -246,8 +265,7 @@ func (s *Service) removeStage(ctx context.Context, id, stage string) error {
 	if e = syncDir(r); e != nil {
 		return e
 	}
-	_, e = s.db.ExecContext(ctx, "DELETE FROM content_stages WHERE id=? AND instance_id=?", stage, id)
-	return e
+	return nil
 }
 func (s *Service) catalogStage(ctx context.Context, id string, actor int64, selection catalog.Selection) (catalog.Version, catalog.File, Upload, error) {
 	var file catalog.File
