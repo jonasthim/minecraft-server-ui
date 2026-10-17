@@ -1350,6 +1350,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{instanceId}/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Private paths and launch/control credentials are excluded. Role: viewer. Personal access token scope: read. */
+        get: operations["getInstanceUpdates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/updates/previews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Actor-bound unexpired typed previews. Role operator; PAT operate. */
+        get: operations["listInstanceUpdatePreviews"];
+        put?: never;
+        /** @description Role: operator; PAT operate. Manual pack files require administrator and PAT admin. Stages artifacts only; no stop/start, selection, launch-pointer or world change. */
+        post: operations["previewInstanceUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/updates/previews/{previewId}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Confirm only this unexpired actor-bound unchanged plan. Automatic recovery never restores world data. Role: operator. Personal access token scope: operate. */
+        post: operations["applyInstanceUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/updates/rollbacks/previews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Preview separately confirmed instance rollback, including world rewind and a new current full safety backup. Role: admin. Personal access token scope: admin. */
+        post: operations["previewInstanceRollback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/updates/rollbacks/{previewId}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Requires exact instance ID confirmation plus explicit world rewind acknowledgement. Stopped restore uses only retained verified history and a new full safety backup. No automatic restart. Role: admin. Personal access token scope: admin. */
+        post: operations["applyInstanceRollback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instanceId}/updates/previews/{previewId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Actor-bound unexpired typed previews. Role operator; PAT operate. */
+        get: operations["getInstanceUpdatePreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2773,10 +2876,126 @@ export interface components {
             truncated: boolean;
             notices: string[];
         };
+        UpdateRequest: {
+            /** @enum {string} */
+            mode: "manual" | "automatic";
+            selection?: components["schemas"]["VersionSelection"];
+            content_selections?: {
+                [key: string]: components["schemas"]["ContentSelection"];
+            };
+            /** @description Defaults to 300 seconds; explicit zero is preserved. */
+            countdown_seconds?: number;
+            pack?: components["schemas"]["ModpackRequest"];
+        };
+        UpdateSnapshot: {
+            instance_revision: string;
+            generation: string;
+            content_revision: string;
+            pack_revision: string;
+        };
+        UpdateBlocker: {
+            code: string;
+            message: string;
+        };
+        UpdateChange: {
+            component: string;
+            before: string;
+            after: string;
+        };
+        UpdateArtifact: {
+            filename: string;
+            size: number;
+            /** @description Locally known SHA256; empty when only published SHA1 is available at planning. */
+            sha256: string;
+            checksum: components["schemas"]["Checksum"];
+        };
+        UpdateRuntime: {
+            id: string;
+            major: number;
+            version: string;
+            os: string;
+            /** @enum {string} */
+            architecture: "x64";
+            sha256: string;
+        };
+        UpdateRequirements: {
+            java_major: number;
+            min_java_major: number;
+            max_java_major?: number;
+            requires_installer: boolean;
+        };
+        UpdatePlan: {
+            id: string;
+            instance_id: string;
+            /** @enum {string} */
+            mode: "manual" | "automatic";
+            snapshot: components["schemas"]["UpdateSnapshot"];
+            from: components["schemas"]["VersionSelection"];
+            target: components["schemas"]["VersionSelection"];
+            requirements: components["schemas"]["UpdateRequirements"];
+            runtime: components["schemas"]["UpdateRuntime"];
+            artifacts: components["schemas"]["UpdateArtifact"][];
+            changes: components["schemas"]["UpdateChange"][];
+            blockers: components["schemas"]["UpdateBlocker"][];
+            countdown_seconds: number;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        UpdateApplyRequest: {
+            /** @constant */
+            confirmed: true;
+        };
+        UpdateRollbackPreviewRequest: {
+            transaction_id: string;
+        };
+        UpdateRollbackApplyRequest: {
+            confirmation: string;
+            /** @constant */
+            acknowledge_world_rewind: true;
+        };
+        UpdateRollbackPreview: {
+            id: string;
+            instance_id: string;
+            parent_transaction_id: string;
+            snapshot: components["schemas"]["UpdateSnapshot"];
+            backup_id: string;
+            backup_sha256: string;
+            target_generation: string;
+            target: components["schemas"]["VersionSelection"];
+            /** Format: date-time */
+            expires_at: string;
+            actor_id: number;
+        };
+        UpdateHistory: {
+            id: string;
+            /** @enum {string} */
+            kind: "update" | "instance_rollback";
+            /** @enum {string} */
+            state: "prepared" | "publishing" | "committed" | "boot_attempted" | "complete" | "rolled_back" | "blocked" | "superseded";
+            from: components["schemas"]["VersionSelection"];
+            target: components["schemas"]["VersionSelection"];
+            backup_id: string;
+            superseded_by?: string;
+            /** Format: date-time */
+            updated_at: string;
+            job_id: string;
+            boot_attempted: boolean;
+            parent_transaction_id?: string;
+        };
+        UpdateStatus: {
+            history: components["schemas"]["UpdateHistory"][];
+            blockers: string[];
+            qualification: string;
+        };
+        UpdateJobResponse: {
+            job: components["schemas"]["Job"];
+        };
     };
     responses: never;
     parameters: {
         ModpackInstanceId: string;
+        UpdateInstanceId: string;
+        UpdatePreviewId: string;
     };
     requestBodies: never;
     headers: never;
@@ -9102,6 +9321,557 @@ export interface operations {
             };
             /** @description Structured operation error */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getInstanceUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["UpdateInstanceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Update information */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateStatus"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listInstanceUpdatePreviews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["UpdateInstanceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Update information */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatePlan"][];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    previewInstanceUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["UpdateInstanceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Queued staging-only preview; inspect the durable typed preview after the job succeeds. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateJobResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    applyInstanceUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["UpdateInstanceId"];
+                previewId: components["parameters"]["UpdatePreviewId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted durable job */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateJobResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    previewInstanceRollback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["UpdateInstanceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRollbackPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Update information */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateRollbackPreview"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    applyInstanceRollback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["UpdateInstanceId"];
+                previewId: components["parameters"]["UpdatePreviewId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRollbackApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted durable job */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateJobResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getInstanceUpdatePreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["UpdateInstanceId"];
+                previewId: components["parameters"]["UpdatePreviewId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Update information */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatePlan"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

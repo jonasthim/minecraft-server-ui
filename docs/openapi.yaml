@@ -8124,6 +8124,693 @@
           }
         }
       }
+    },
+    "/api/v1/instances/{instanceId}/updates": {
+      "get": {
+        "operationId": "getInstanceUpdates",
+        "description": "Private paths and launch/control credentials are excluded. Role: viewer. Personal access token scope: read.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UpdateInstanceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Update information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/updates/previews": {
+      "post": {
+        "operationId": "previewInstanceUpdate",
+        "description": "Role: operator; PAT operate. Manual pack files require administrator and PAT admin. Stages artifacts only; no stop/start, selection, launch-pointer or world change.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UpdateInstanceId"
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Queued staging-only preview; inspect the durable typed preview after the job succeeds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateJobResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRequest"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listInstanceUpdatePreviews",
+        "description": "Actor-bound unexpired typed previews. Role operator; PAT operate.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UpdateInstanceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Update information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpdatePlan"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/updates/previews/{previewId}/apply": {
+      "post": {
+        "operationId": "applyInstanceUpdate",
+        "description": "Confirm only this unexpired actor-bound unchanged plan. Automatic recovery never restores world data. Role: operator. Personal access token scope: operate.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UpdateInstanceId"
+          },
+          {
+            "$ref": "#/components/parameters/UpdatePreviewId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted durable job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateApplyRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/updates/rollbacks/previews": {
+      "post": {
+        "operationId": "previewInstanceRollback",
+        "description": "Preview separately confirmed instance rollback, including world rewind and a new current full safety backup. Role: admin. Personal access token scope: admin.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UpdateInstanceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Update information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateRollbackPreview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRollbackPreviewRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/updates/rollbacks/{previewId}/apply": {
+      "post": {
+        "operationId": "applyInstanceRollback",
+        "description": "Requires exact instance ID confirmation plus explicit world rewind acknowledgement. Stopped restore uses only retained verified history and a new full safety backup. No automatic restart. Role: admin. Personal access token scope: admin.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UpdateInstanceId"
+          },
+          {
+            "$ref": "#/components/parameters/UpdatePreviewId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted durable job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRollbackApplyRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instanceId}/updates/previews/{previewId}": {
+      "get": {
+        "operationId": "getInstanceUpdatePreview",
+        "description": "Actor-bound unexpired typed previews. Role operator; PAT operate.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UpdateInstanceId"
+          },
+          {
+            "$ref": "#/components/parameters/UpdatePreviewId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Update information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatePlan"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -13800,6 +14487,457 @@
             }
           }
         }
+      },
+      "UpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "automatic"
+            ]
+          },
+          "selection": {
+            "$ref": "#/components/schemas/VersionSelection"
+          },
+          "content_selections": {
+            "type": "object",
+            "maxProperties": 2048,
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ContentSelection"
+            }
+          },
+          "countdown_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600,
+            "description": "Defaults to 300 seconds; explicit zero is preserved."
+          },
+          "pack": {
+            "$ref": "#/components/schemas/ModpackRequest"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "UpdateSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "instance_revision": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "string"
+          },
+          "content_revision": {
+            "type": "string"
+          },
+          "pack_revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_revision",
+          "generation",
+          "content_revision",
+          "pack_revision"
+        ]
+      },
+      "UpdateBlocker": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "UpdateChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "before": {
+            "type": "string"
+          },
+          "after": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "component",
+          "before",
+          "after"
+        ]
+      },
+      "UpdateArtifact": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "filename": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Locally known SHA256; empty when only published SHA1 is available at planning."
+          },
+          "checksum": {
+            "$ref": "#/components/schemas/Checksum"
+          }
+        },
+        "required": [
+          "filename",
+          "size",
+          "sha256",
+          "checksum"
+        ]
+      },
+      "UpdateRuntime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "major": {
+            "type": "integer"
+          },
+          "version": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "architecture": {
+            "type": "string",
+            "enum": [
+              "x64"
+            ]
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "id",
+          "major",
+          "version",
+          "os",
+          "architecture",
+          "sha256"
+        ]
+      },
+      "UpdateRequirements": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "java_major": {
+            "type": "integer"
+          },
+          "min_java_major": {
+            "type": "integer"
+          },
+          "max_java_major": {
+            "type": "integer"
+          },
+          "requires_installer": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "java_major",
+          "min_java_major",
+          "requires_installer"
+        ]
+      },
+      "UpdatePlan": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "automatic"
+            ]
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/UpdateSnapshot"
+          },
+          "from": {
+            "$ref": "#/components/schemas/VersionSelection"
+          },
+          "target": {
+            "$ref": "#/components/schemas/VersionSelection"
+          },
+          "requirements": {
+            "$ref": "#/components/schemas/UpdateRequirements"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/UpdateRuntime"
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpdateArtifact"
+            }
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpdateChange"
+            }
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpdateBlocker"
+            }
+          },
+          "countdown_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "instance_id",
+          "mode",
+          "snapshot",
+          "from",
+          "target",
+          "requirements",
+          "runtime",
+          "artifacts",
+          "changes",
+          "blockers",
+          "countdown_seconds",
+          "expires_at"
+        ]
+      },
+      "UpdateApplyRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "confirmed": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "confirmed"
+        ]
+      },
+      "UpdateRollbackPreviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          }
+        },
+        "required": [
+          "transaction_id"
+        ]
+      },
+      "UpdateRollbackApplyRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "type": "string"
+          },
+          "acknowledge_world_rewind": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "confirmation",
+          "acknowledge_world_rewind"
+        ]
+      },
+      "UpdateRollbackPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "parent_transaction_id": {
+            "type": "string"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/UpdateSnapshot"
+          },
+          "backup_id": {
+            "type": "string"
+          },
+          "backup_sha256": {
+            "type": "string"
+          },
+          "target_generation": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/VersionSelection"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "instance_id",
+          "parent_transaction_id",
+          "snapshot",
+          "backup_id",
+          "backup_sha256",
+          "target_generation",
+          "target",
+          "expires_at",
+          "actor_id"
+        ]
+      },
+      "UpdateHistory": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "update",
+              "instance_rollback"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "prepared",
+              "publishing",
+              "committed",
+              "boot_attempted",
+              "complete",
+              "rolled_back",
+              "blocked",
+              "superseded"
+            ]
+          },
+          "from": {
+            "$ref": "#/components/schemas/VersionSelection"
+          },
+          "target": {
+            "$ref": "#/components/schemas/VersionSelection"
+          },
+          "backup_id": {
+            "type": "string"
+          },
+          "superseded_by": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "boot_attempted": {
+            "type": "boolean"
+          },
+          "parent_transaction_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "state",
+          "from",
+          "target",
+          "backup_id",
+          "updated_at",
+          "job_id",
+          "boot_attempted"
+        ]
+      },
+      "UpdateStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpdateHistory"
+            }
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "qualification": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "history",
+          "blockers",
+          "qualification"
+        ]
+      },
+      "UpdateJobResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          }
+        },
+        "required": [
+          "job"
+        ]
       }
     },
     "parameters": {
@@ -13811,6 +14949,23 @@
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
           "maxLength": 32
+        }
+      },
+      "UpdateInstanceId": {
+        "name": "instanceId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "UpdatePreviewId": {
+        "name": "previewId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{32}$"
         }
       }
     }
