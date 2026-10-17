@@ -20,6 +20,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"github.com/jonasthim/minecraft-server-ui/internal/launcher"
 	"github.com/jonasthim/minecraft-server-ui/internal/lifecycle"
+	"github.com/jonasthim/minecraft-server-ui/internal/managerstate"
 	"github.com/jonasthim/minecraft-server-ui/internal/mapdata"
 	"github.com/jonasthim/minecraft-server-ui/internal/mapview"
 	"github.com/jonasthim/minecraft-server-ui/internal/metrics"
@@ -106,6 +107,9 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 		return err
 	}
 	defer release()
+	if err := managerstate.CheckStartup(ctx, cfg.DataDir); err != nil {
+		return err
+	}
 	log := slog.Default()
 	native, err := supervisor.New(supervisor.Config{DataDir: cfg.DataDir})
 	if err != nil {

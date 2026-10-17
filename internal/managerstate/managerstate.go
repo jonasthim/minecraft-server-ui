@@ -830,6 +830,19 @@ func validateSQLiteBound(ctx context.Context, path string, validateBinding func(
 	if pingErr != nil {
 		return 0, pingErr
 	}
+	return validateSQLiteHandle(ctx, database)
+}
+
+// validateSQLiteHandle validates an already-open single-connection database.
+// The caller owns its connection lifetime and may use this under an existing
+// manager lock without opening a second database or reacquiring that lock.
+func validateSQLiteHandle(ctx context.Context, database *sql.DB) (version int64, retErr error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if database == nil {
+		return 0, errors.New("validation database is unavailable")
+	}
 	var integrity string
 	rows, err := database.QueryContext(ctx, "PRAGMA integrity_check")
 	if err != nil {

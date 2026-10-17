@@ -30,8 +30,45 @@ They do not start the service or migrate the database.
 Treat these snapshots as sensitive: they contain manager users, credentials
 and configuration. They exclude worlds and other game files. Keep the complete
 directory intact. Snapshot and verification source tests pass on Linux; native
-Windows execution and installed recovery qualification remain pending. Database
-migration and restoration commands are not yet available.
+Windows execution and installed recovery qualification remain pending. A
+dedicated manager-state restore command is not available yet.
+
+## Stopped-manager schema migration
+
+Run migration only while the manager service is stopped and after verifying a
+matching snapshot. On Linux, run both commands as the manager account. On
+Windows, run them as LocalSystem or an elevated member of Administrators; the
+data directory must be on the fixed local C: NTFS volume. The Windows command
+refuses custom volumes and other filesystems.
+
+Use the source schema reported by `verify` for `N`, and the embedded schema of
+the manager build you are running for `M`:
+
+```text
+minecraft-ui manager-state migrate --snapshot HEX_ID --from-schema N --to-schema M
+```
+
+The grammar is fixed: snapshot ID first, then `--from-schema`, then
+`--to-schema`; schema numbers are canonical positive decimal integers. The
+command prints one JSON summary when migration reaches the migrated state.
+That success still leaves a startup hold in place. Review the manager records
+and separately assess the running world state, then explicitly resume with the
+same snapshot and build:
+
+```text
+minecraft-ui manager-state resume --snapshot HEX_ID --confirm-manager-state-review
+```
+
+Resume removes the matching hold after rechecking the current manager database,
+snapshot, build version and executable. It does not start the manager or game
+servers, change world data, or rewind a world. Start the manager through its
+normal service controls only after resume succeeds.
+
+A failed or interrupted migration keeps startup blocked for review or recovery.
+Do not delete `hold.json` or `hold.pending` manually and do not use resume to
+clear a `migrating` hold. The explicit restore/recovery operation is a separate
+future procedure; do not edit the database or restore a snapshot as an
+automatic failure response. Preserve the original verified snapshot unchanged.
 
 ## Manager update trust
 
