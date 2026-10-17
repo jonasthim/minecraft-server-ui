@@ -1,6 +1,6 @@
 # Task 25 — theme, accessibility and integration evidence
 
-Status: I1 independently closed; continuation fixes U1/U2 and separate INT1 integration correction ready for review. Owned files are frozen; full Task25 acceptance remains pending independent review, Tasks18/24 composition and native/release evidence. No ledger completion is claimed.
+Status: I1, U1/U2 and INT1 independently closed; continuation fix round 2 for U3 is ready for review. Owned files are frozen; full Task25 acceptance remains pending independent review, Tasks18/24 composition and native/release evidence. No ledger completion is claimed.
 
 ## Design plan, recorded before implementation
 
@@ -224,3 +224,30 @@ Evidence directory `/home/thim/.cache/dilla-tmp/task25-fix2/`:
 - `scheme-after.mjs` / `scheme-after.json`: actual computed scheme, colors, effective backgrounds, ratios, 390 px width and live auto-preference switching; `evidence/after-{light,dark}390.png`.
 
 The isolated manager is stopped and owned files are frozen for independent review. Full Task25/native/release acceptance remains with the integrator and required real-host evidence. No fixture Apply reached the backend; no game, EULA, host, deployment, staging, commit, vault or external-message action was performed.
+
+## Continuation review fix round 2 — U3 deferred results preserve user intent
+
+The independent continuation review at `25598bd` accepted U1, U2 and INT1; I1 also remains closed. The new Important U3 concerns a successful prepare job whose final metadata arrives after the terminal state has enabled editing. This round changes only `web/src/features/updates/UpdatesPage.tsx` and this report. Backend, schema, shared CSS and routes remain outside this submission.
+
+Reproduced both overwrite paths against the prior `7a317d58…5581d47` binary using actual enabled browser controls while final metadata was explicitly deferred. The request had an archive receipt and a member receipt acquired through the intercepted upload controls. Changing Exact pack file ID from `old-file` to `new-file` cleared receipts initially, but releasing the old result restored `old-file`, both old receipts and the old selected preview, then cleared dirty state. Selecting a different stored preview during the same delay was also overwritten by the old result.
+
+The page now records a revision for user draft/preview intent and binds each admitted job and pending request to its originating revision. A completed request is retained for explicit preview selection, but late automatic restoration occurs only while that submitted intent remains current. Draft edits, preview selection, file choices and review actions advance the revision. Delayed non-prepare completion and saved-log notices also respect newer intent. Terminal job state/error and final-detail retries remain independent of secondary-read availability. A changed draft with no selected preview explicitly asks for a new preparation.
+
+| Enabled-control case during deferred metadata | Final result on corrected binary |
+|---|---|
+| Change exact file ID, Minecraft version and countdown | Retains `new-file`, `1.21.10` and `41`; no preview is selected; dirty guidance is visible; no Apply control is available |
+| Prepare the changed draft after the old response arrives | Request uses the new file/target/countdown; archive receipt is absent and member receipt map is empty; successful preparation displays the new preview |
+| Explicitly select the alternate prepared preview | Retains `alternate-file`, target `1.21.11` and the alternate preview; its valid Apply control remains available, without submitting Apply |
+| U1 regression: final metadata 503 or final logs 503 | Failed terminal state and authoritative incompatibility error remain visible; Prepare is enabled; final-detail retry recovers without another POST |
+| U1 regression: both secondary reads succeed | Failed terminal state and own error remain visible; no unnecessary detail-retry control |
+
+Exact final binary: `/home/thim/.cache/dilla-tmp/minecraft-ui-task25-u3`, SHA-256 `318fd19ba129af1bb944f887c1cd5df6265119720359bf9afee104ecb266d90a` (locally checked). Root reported production frontend and embedded CGO-disabled manager builds PASS. `npm --prefix web run typecheck`, `npm --prefix web run lint` and scoped `git diff --check` PASS. No broad Go suite or unrelated browser matrix was repeated.
+
+Evidence under `/home/thim/.cache/dilla-tmp/task25-fix3/`:
+
+- `deferred-intent.mjs --before` / `intent-before.json`: reproduced both old-response overwrite paths on the prior binary.
+- `deferred-intent.mjs` / `intent-after.json`: actual enabled control edits and preview selection, source receipt invalidation, dirty/Apply state and the subsequent exact request on the final binary.
+- `evidence/deferred-edited-draft390.png`: edited draft after releasing the old result, before preparing again; `deferred-source-and-target390.png`: subsequent newly prepared target; `deferred-preview-selection390.png`: preserved explicit alternate selection. Screenshots were visually inspected at 390 px.
+- `u1-regression.json`: final-binary rerun of `/home/thim/.cache/dilla-tmp/task25-fix2/terminal-results.mjs`, covering metadata failure, log failure and successful reads plus retry recovery.
+
+All feature responses/actions in these supplemental cases are intercepted; authentication uses the earlier UI-created isolated account/state. No Apply reaches the backend, and the fixtures provide no publisher verification, backend transaction or native qualification evidence. The loopback fixture manager is stopped; owned code/report is frozen for independent U3 review. Full Task25/native/release acceptance remains with the integrator. No staging, commit, game launch, EULA acceptance, host modification, deployment or vault write was performed.
