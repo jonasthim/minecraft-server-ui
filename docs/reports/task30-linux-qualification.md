@@ -1,5 +1,7 @@
 # Task 30 Linux installer qualification harness
 
+Current status: the [six Ubuntu installer scenarios are accepted](#accepted-ubuntu-installer-milestone) at `3f22bb4`. Earlier sections retain the investigation history; broader Task30 and stable release qualification remain open.
+
 ## Deliverable
 
 Added a workflow-dispatch-only native qualification pipeline. Linux and Windows x64 build jobs stamp manager, updater, and bootstrap binaries for `v0.0.1` through `v0.0.3`, execute each binary on its native hosted runner, and retain byte-bound execution receipts. The Linux `v0.0.3` manager is built with an overlay that changes only the `serve` command to wait for cancellation before readiness. Version and capability probes remain the shipping implementation. Workflow metadata explicitly labels this as a modified unhealthy fixture that must not be released.
@@ -165,3 +167,33 @@ The driver dispatch is restricted to the validated immutable uninstalled prior i
 The same hosted run again passes retained retry on both hosts and full Ubuntu22.04 coexistence. Ubuntu24.04 now reports successful recovery-unit execution, then hits the manager's separate start limit at the later checkpoint after the deliberately repeated fault/restart cases. The qualification harness isolates that checkpoint by clearing only the manager's start counter after an exact clean-stop property tuple and MainPID recheck. It refuses active, abnormal or uncertain states, then requires successful restart, health and coherent v2 image checks before recording evidence. Production manager restart protection remains unchanged. All24 harness and16 diagnostics tests pass. Ubuntu CI `39068650475` at `0d516e5` passes its Linux job.
 
 Final integrator install/selfupdate race checks pass (8.327s/20.024s), along with vet and diff checks after the cleanup correction. No local host service/account operations were performed.
+
+## Accepted Ubuntu installer milestone
+
+[Run 39069774439](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39069774439) passes all nine jobs at `3f22bb431d3b5bc95f92cc8e23319d28a1931b12`: native Linux/Windows input execution, signed fixture production and the six Ubuntu scenarios below. The integrator reviewed every scenario's source commit, runner record, acceptance summary and cleanup report. Independent artifact review also confirms both retained-retry and updater-coexistence pairs.
+
+| Scenario | Ubuntu 22.04 x64 | Ubuntu 24.04 x64 |
+| --- | --- | --- |
+| Lifecycle | Pass | Pass |
+| Retained failed-first-install retry | Pass | Pass |
+| Ordinary updater coexistence | Pass | Pass |
+
+Runner images are `ubuntu22 20261012.322.1` and `ubuntu24 20261012.334.1`. All six cleanup reports return exit0 with fixed paths checked.
+
+Both lifecycle reports pass seven checks:
+
+1. Absent read-only inspection and authentication refusal create no state.
+2. Fresh v0.0.1 installation and unchanged rerun preserve manager PID and SQLite identity.
+3. Upgrade to v0.0.2 preserves the independent fixture process.
+4. Deliberately unhealthy v0.0.3 rolls back to v0.0.2 while preserving data.
+5. Killing the installer worker blocks ordinary startup until independent recovery restores v0.0.2.
+6. Failed reinstall from retained uninstalled state restores coherent uninstalled state, receipt content, manager database and world/data/config/trust markers.
+7. Active-game uninstall refusal, retaining uninstall, repeated uninstall and healthy v0.0.2 reinstall succeed.
+
+Both final lifecycle checks report installed, coherent and not pending at schema20, v0.0.2, manager hash `861410338f414ca03a6ec31d9ffed01814a63235b6d5ce70a58f2fc213711e19`. Both retained-retry reports preserve data and finish coherent at v0.0.1 after a failed first installation.
+
+Both coexistence reports confirm ordinary updater success, unhealthy-candidate rollback and interrupted-candidate recovery. Retained process hashes match the expected image, administrator session data survives, and the independent fixture PID stays unchanged. Installer checks then recognize the terminal v0.0.2 receipt; installer reapplication, checked restart and retaining uninstall preserve the database, data and operator trust. The restart checkpoint resets only the manager counter after a proven clean stop, as described above. An intentionally killed updater unit can retain a systemd failed status with no live process; these assertions do not require every historical failed flag to be cleared.
+
+[CI 39069766696](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39069766696) at the same source passes its complete native Ubuntu24.04 job. Its Windows job fails, so the overall CI run is not green.
+
+This acceptance covers the listed shipping installer commands on disposable Ubuntu runners using signed development fixtures. The independent service runs `/usr/bin/sleep`; world markers test preservation only. Actual Minecraft compatibility, Debian, the full Windows installer, reboot/power-loss cases and stable publication remain outside this evidence. Task30 as a whole remains open. No development-host service, account, firewall or game process was changed.

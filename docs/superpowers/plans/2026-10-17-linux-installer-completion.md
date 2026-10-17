@@ -1,6 +1,6 @@
 # Linux installer completion
 
-Status: active implementation focus following the user's Linux priority. The approved design and Task30 preservation/recovery rules remain binding. Windows qualification and the wider Minecraft matrix are deferred while this work proceeds.
+Status: the six-scenario Ubuntu installer milestone is accepted following integrator evidence review. The approved design and Task30 preservation/recovery rules remain binding. Broader Task30 and release qualification remain open; Windows and the wider Minecraft matrix are outside this Linux milestone.
 
 ## Deliverable
 
@@ -38,3 +38,5 @@ Each packet requires independent source review and integrator verification befor
 ## Current acceptance
 
 The common coordinator, manager-side drain/readiness hooks, authenticated input importer, receipt CAS and offline manager-state commands already have reviewed evidence in `docs/IMPLEMENTATION.md`. This plan adds Linux integration; it does not reset or reimplement accepted packages.
+
+[Run 39069774439](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39069774439) at `3f22bb431d3b5bc95f92cc8e23319d28a1931b12` passes lifecycle, retained failure/retry and ordinary updater coexistence on both Ubuntu 22.04 and 24.04. The integrator reviewed source/runner bindings, acceptance reports and successful cleanup for all six scenarios; an independent reviewer also inspected retained-retry and coexistence artifacts. The [qualification report](../../reports/task30-linux-qualification.md#accepted-ubuntu-installer-milestone) records the cases and limits. This accepts those native scenarios, without closing Debian, Windows, actual Minecraft compatibility, reboot/power-loss coverage or stable publication gates.

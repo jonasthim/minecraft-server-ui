@@ -4,7 +4,7 @@ The current build is `0.0.0-dev`. No stable release or supported Minecraft/loade
 
 ## Installation and recovery boundary
 
-The [Linux installer guide](linux-installer.md) describes the authenticated `--install` entry point and native check, recovery, upgrade and uninstall commands. Its Ubuntu lifecycle qualification is in progress. `deploy/linux/install.sh` now forwards lifecycle commands to the installed helper; it does not copy a bare executable onto an existing installation.
+The [Linux installer guide](linux-installer.md) describes the authenticated `--install` entry point and native check, recovery, upgrade and uninstall commands. Its six native scenarios pass on Ubuntu 22.04/24.04; the [qualification report](reports/task30-linux-qualification.md#accepted-ubuntu-installer-milestone) records the tested cases and remaining scope. `deploy/linux/install.sh` now forwards lifecycle commands to the installed helper; it does not copy a bare executable onto an existing installation.
 
 Use the reviewed native installers only after designating a test host and reviewing its service configuration. Linux runs the manager as `minecraft-ui`, with a root-owned `/usr/local/bin/minecraft-ui`; the manager must never be granted arbitrary privileged copy or shell access. The existing `unitctl` accepts lifecycle operations on validated instance identifiers only. Windows Server2022 installed-service, ACL and updater checks have hosted evidence; other Windows targets and the full installer lifecycle still need qualification.
 
