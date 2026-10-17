@@ -275,10 +275,13 @@ func TestShutdownRejectsEnqueueWaitsAndClosesSubscribers(t *testing.T) {
 	s.Start(context.Background())
 	j := enqueue(t, s, "")
 	receive(t, started)
-	sub := s.Subscribe(j.ID)
+	sub, err := s.Subscribe(j.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	err := s.Stop(ctx)
+	err = s.Stop(ctx)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("shutdown did not wait for worker: %v", err)
 	}

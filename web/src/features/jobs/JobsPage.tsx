@@ -48,36 +48,78 @@ function JobDetails({ jobID, onUpdate }: { jobID: string; onUpdate: (job: Job) =
   const [connection, setConnection] = useState('Connecting');
   const [cancelling, setCancelling] = useState(false);
   const [notice, setNotice] = useState('');
-  const lastID = useRef(0);
+  const [attempt, setAttempt] = useState(0);
   const onUpdateRef = useRef(onUpdate); onUpdateRef.current = onUpdate;
   const update = useCallback((next: Job) => { setJob(next); onUpdateRef.current(next); }, []);
   useEffect(() => {
     const controller = new AbortController();
+    let stream: EventSource | null = null;
     let refreshing = false;
-    const ingest = (incoming: JobLog[]) => { if (incoming.length) setLogs(current => mergeLogs(current, incoming)); };
+    let pendingRefresh = false;
+    let terminal = false;
+    let cursor = 0;
+    setConnection('Loading saved progress'); setError('');
+    const ingest = (incoming: JobLog[]) => { if (!controller.signal.aborted && incoming.length) setLogs(current => mergeLogs(current, incoming)); };
+    const finish = () => {
+      terminal = true;
+      stream?.close(); stream = null;
+      setConnection('Job finished; loading final output');
+    };
+    // Only durable log pages advance the cursor. Live events can arrive after a
+    // gap, so advancing from their IDs could skip saved output during recovery.
     const refresh = async () => {
-      if (refreshing) return; refreshing = true;
-      try {
-        const value = await api<{ job: Job }>('/jobs/' + jobID, { signal: controller.signal }); update(value.job);
-        // A job has at most 10,000 durable lines. Page to catch up after a gap,
-        // keeping only the newest 500 lines in browser memory.
-        let cursor = lastID.current;
-        for (let page = 0; page < 20; page++) {
-          const value = await api<{ logs: JobLog[] }>('/jobs/' + jobID + '/logs?after=' + cursor + '&limit=500', { signal: controller.signal });
-          ingest(value.logs); if (value.logs.length) { cursor = value.logs[value.logs.length - 1].id; lastID.current = cursor; } if (value.logs.length < 500) break;
+      if (refreshing) { pendingRefresh = true; return; }
+      refreshing = true;
+      do {
+        pendingRefresh = false;
+        try {
+          const value = await api<{ job: Job }>('/jobs/' + jobID, { signal: controller.signal });
+          if (controller.signal.aborted) return;
+          if (!active(value.job)) finish();
+          if (!terminal || !active(value.job)) update(value.job);
+          for (let page = 0; page < 20; page++) {
+            const value = await api<{ logs: JobLog[] }>('/jobs/' + jobID + '/logs?after=' + cursor + '&limit=500', { signal: controller.signal });
+            ingest(value.logs);
+            if (value.logs.length) cursor = value.logs[value.logs.length - 1].id;
+            if (value.logs.length < 500) break;
+          }
+          if (controller.signal.aborted) return;
+          setError('');
+          if (terminal && !pendingRefresh) setConnection('Job finished; saved output loaded');
+          if (!terminal && !stream) connect();
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            setError(message(error));
+            setConnection(terminal ? 'Job finished; final output could not be loaded' : 'Saved progress unavailable; retry to reconnect');
+          }
         }
-        setError('');
-      } catch (error) { if (!controller.signal.aborted) setError(message(error)); }
-      finally { refreshing = false; }
+      } while (pendingRefresh && !controller.signal.aborted);
+      refreshing = false;
+    };
+    const connect = () => {
+      stream = new EventSource('/api/v1/jobs/' + encodeURIComponent(jobID) + '/events');
+      setConnection('Connecting; saved progress shown');
+      stream.onopen = () => { if (!terminal) { setConnection('Live'); void refresh(); } };
+      stream.onerror = () => {
+        if (!terminal) { setConnection('Reconnecting; progress may be delayed. Recovering saved output.'); void refresh(); }
+      };
+      stream.addEventListener('progress', event => {
+        try {
+          const value = JSON.parse((event as MessageEvent<string>).data) as JobEvent;
+          if (value.job) {
+            update(value.job);
+            if (!active(value.job)) { finish(); void refresh(); }
+          }
+        } catch { setError('Could not read job progress. Retry to reload saved progress.'); }
+      });
+      stream.addEventListener('log', event => {
+        try { const value = JSON.parse((event as MessageEvent<string>).data) as JobEvent; if (value.log) ingest([value.log]); }
+        catch { setError('Could not read live output. Retry to recover saved output or download the log.'); }
+      });
     };
     void refresh();
-    const stream = new EventSource('/api/v1/jobs/' + encodeURIComponent(jobID) + '/events');
-    stream.onopen = () => { setConnection('Live'); void refresh(); };
-    stream.onerror = () => { setConnection('Reconnecting; progress may be delayed'); };
-    stream.addEventListener('progress', event => { try { const value = JSON.parse((event as MessageEvent<string>).data) as JobEvent; if (value.job) update(value.job); } catch { setError('Could not read job progress. Refresh to reconnect.'); } });
-    stream.addEventListener('log', event => { try { const value = JSON.parse((event as MessageEvent<string>).data) as JobEvent; if (value.log) ingest([value.log]); } catch { setError('Could not read job output. Download the log to inspect it.'); } });
-    return () => { controller.abort(); stream.close(); };
-  }, [jobID, update]);
+    return () => { controller.abort(); stream?.close(); };
+  }, [jobID, update, attempt]);
   const canCancel = !!job && active(job) && job.cancellable && !job.cancel_requested && (user?.role === 'admin' || user?.role === 'operator' && user.id === job.requested_by);
   async function cancel() {
     setCancelling(true); setError(''); setNotice('');
@@ -93,8 +135,8 @@ function JobDetails({ jobID, onUpdate }: { jobID: string; onUpdate: (job: Job) =
     {notice && <Alert color="green" role="status">{notice}</Alert>}
     {job?.error && <Alert color={job.state === 'failed' ? 'red' : 'gray'}>{job.error}</Alert>}
     {job && <Text size="sm">{job.phase || 'Queued'} · {job.progress}%{job.cancel_requested && active(job) ? ' · Waiting for cancellation cleanup' : ''}</Text>}
-    <Group wrap="wrap"><Button component="a" variant="light" href={'/api/v1/jobs/' + jobID + '/logs/download'}>Download log</Button>{canCancel && <Button color="red" variant="light" loading={cancelling} onClick={() => void cancel()}>Cancel job</Button>}</Group>
+    <Group wrap="wrap"><Button variant="light" onClick={() => setAttempt(value => value + 1)}>Reload saved progress</Button><Button component="a" variant="light" href={'/api/v1/jobs/' + jobID + '/logs/download'}>Download log</Button>{canCancel && <Button color="red" variant="light" loading={cancelling} onClick={() => void cancel()}>Cancel job</Button>}</Group>
     <Text size="xs" c="dimmed">Showing the newest 500 lines. The download and paginated API include earlier output.</Text>
-    <Code block aria-label="Job output" style={{ maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{logs.length ? logs.map(line => new Date(line.created_at).toLocaleTimeString() + ' ' + line.message).join('\n') : 'No output yet.'}</Code>
+    <Code block tabIndex={0} role="region" aria-label="Job output" style={{ maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{logs.length ? logs.map(line => new Date(line.created_at).toLocaleTimeString() + ' ' + line.message).join('\n') : 'No output yet.'}</Code>
   </Stack>;
 }

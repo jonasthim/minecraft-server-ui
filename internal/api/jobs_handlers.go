@@ -101,7 +101,11 @@ func streamJobWithTiming(w http.ResponseWriter, r *http.Request, s *jobs.Service
 	lifetime := time.NewTimer(expires.Sub(timing.now()))
 	defer lifetime.Stop()
 	id := chi.URLParam(r, "jobId")
-	sub := s.Subscribe(id)
+	sub, err := s.Subscribe(id)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
 	defer sub.Close()
 	j, err := s.Get(r.Context(), id)
 	if err != nil {

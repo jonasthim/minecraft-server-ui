@@ -7,6 +7,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/auth"
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
+	"github.com/jonasthim/minecraft-server-ui/internal/events"
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"net/http"
 	"net/http/httptest"
@@ -218,5 +219,79 @@ func TestJobStreamAbsoluteExpiryBoundsSlowAndNearExpiryOutput(t *testing.T) {
 				t.Fatalf("initial snapshot missing: %d %s", writer.Code, writer.Body.String())
 			}
 		})
+	}
+}
+
+func TestJobStreamRejectsQuotaBeforeSSEHeadersAndReleasesFailedLookup(t *testing.T) {
+	s, h, id := jobAPI(t)
+	user := &domain.User{ID: 1, Role: domain.RoleViewer}
+	// Missing snapshots may never retain admission, including repeated requests.
+	for i := 0; i < events.MaxSubscribers+1; i++ {
+		r := httptest.NewRecorder()
+		h.ServeHTTP(r, userRequest("GET", "/jobs/missing-job/events", user))
+		if r.Code != http.StatusNotFound {
+			t.Fatalf("lookup %d: %d %s", i, r.Code, r.Body.String())
+		}
+	}
+	subs := make([]*events.Subscription, 0, events.MaxSubscribers)
+	defer func() {
+		for _, sub := range subs {
+			sub.Close()
+		}
+	}()
+	for i := 0; i < events.MaxSubscribers; i++ {
+		sub, err := s.Subscribe(id)
+		if err != nil {
+			t.Fatalf("admission %d: %v", i, err)
+		}
+		subs = append(subs, sub)
+	}
+	r := httptest.NewRecorder()
+	h.ServeHTTP(r, userRequest("GET", "/jobs/"+id+"/events", user))
+	if r.Code != http.StatusServiceUnavailable || strings.Contains(r.Header().Get("Content-Type"), "text/event-stream") || !strings.Contains(r.Body.String(), `"code":"unavailable"`) {
+		t.Fatalf("saturation committed stream headers or lost typed error: %d %v %s", r.Code, r.Header(), r.Body.String())
+	}
+	subs[0].Close()
+	// An already cancelled request still performs admission/cleanup without
+	// needing real connection timers or waiting for the 30-second lifetime.
+	for i := 0; i < 2; i++ {
+		req := userRequest("GET", "/jobs/"+id+"/events", user)
+		ctx, cancel := context.WithCancel(req.Context())
+		cancel()
+		r = httptest.NewRecorder()
+		h.ServeHTTP(r, req.WithContext(ctx))
+		if r.Code == http.StatusServiceUnavailable {
+			t.Fatalf("client close leaked admission: %s", r.Body.String())
+		}
+	}
+}
+
+func TestJobStreamClientCloseAfterSnapshotReleasesQuota(t *testing.T) {
+	s, _, id := jobAPI(t)
+	start := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	req := userRequest("GET", "/jobs/"+id+"/events", &domain.User{ID: 1, Role: domain.RoleViewer})
+	ctx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	writer := &timedJobStreamWriter{ResponseRecorder: httptest.NewRecorder(), now: &start, cancel: cancel, afterSnapshot: cancel}
+	router := chi.NewRouter()
+	router.Get("/jobs/{jobId}/events", func(w http.ResponseWriter, r *http.Request) {
+		streamJobWithTiming(w, r, s, jobStreamTiming{now: func() time.Time { return start }, lifetime: 30 * time.Second, heartbeat: time.Hour})
+	})
+	router.ServeHTTP(writer, req.WithContext(ctx))
+	if !strings.Contains(writer.Body.String(), "event: progress") {
+		t.Fatalf("no initial snapshot: %s", writer.Body.String())
+	}
+	var subs []*events.Subscription
+	defer func() {
+		for _, sub := range subs {
+			sub.Close()
+		}
+	}()
+	for i := 0; i < events.MaxSubscribers; i++ {
+		sub, err := s.Subscribe(id)
+		if err != nil {
+			t.Fatalf("client close leaked quota at slot %d: %v", i, err)
+		}
+		subs = append(subs, sub)
 	}
 }

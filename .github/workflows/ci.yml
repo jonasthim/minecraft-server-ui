@@ -20,4 +20,4 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
         working-directory: web
-      - run: make check build-linux build-windows
+      - run: make check build-linux build-windows build-updater-linux build-updater-windows

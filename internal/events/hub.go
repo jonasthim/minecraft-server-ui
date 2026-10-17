@@ -3,8 +3,9 @@
 package events
 
 import (
-	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"sync"
+
+	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 )
 
 // Event and Log share the official domain contract used by feature providers.
@@ -19,30 +20,43 @@ type Subscription struct {
 
 func (s *Subscription) Close() { s.hub.remove(s) }
 
+// MaxSubscribers bounds total live buffers across all jobs. Each subscriber
+// additionally has a bounded buffer and slow readers are disconnected.
+const MaxSubscribers = 128
+
 type Hub struct {
 	mu     sync.Mutex
 	size   int
+	limit  int
 	closed bool
 	subs   map[*Subscription]struct{}
 }
 
-func NewHub(size int) *Hub {
+func NewHub(size int) *Hub { return NewHubWithLimit(size, MaxSubscribers) }
+
+// NewHubWithLimit permits smaller bounded hubs for tests and embedded uses.
+func NewHubWithLimit(size, limit int) *Hub {
 	if size < 1 {
 		size = 32
 	}
-	return &Hub{size: size, subs: make(map[*Subscription]struct{})}
+	if limit < 1 {
+		limit = MaxSubscribers
+	}
+	return &Hub{size: size, limit: limit, subs: make(map[*Subscription]struct{})}
 }
-func (h *Hub) Subscribe(jobID string) *Subscription {
+func (h *Hub) Subscribe(jobID string) (*Subscription, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return nil, domain.E(domain.CodeUnavailable, "Live job connections are unavailable. Try again shortly.")
+	}
+	if len(h.subs) >= h.limit {
+		return nil, domain.E(domain.CodeUnavailable, "Live job connection limit reached. Close another job view and try again.")
+	}
 	ch := make(chan Event, h.size)
 	s := &Subscription{Events: ch, hub: h, ch: ch, jobID: jobID}
-	if h.closed {
-		close(ch)
-	} else {
-		h.subs[s] = struct{}{}
-	}
-	return s
+	h.subs[s] = struct{}{}
+	return s, nil
 }
 func (h *Hub) remove(s *Subscription) {
 	h.mu.Lock()

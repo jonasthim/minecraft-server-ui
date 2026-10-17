@@ -41,8 +41,11 @@ export function GameEventsPanel({ instanceId }: { instanceId: string }) {
     <Group justify="space-between" wrap="wrap"><div><Title order={1}>Deaths &amp; advancements</Title><Text c="dimmed">Observed native log history</Text></div><Button variant="light" disabled={busy} onClick={refresh}>Refresh history</Button></Group>
     {error && <Alert color="red" role="alert">{error} Displayed records may be out of date.<Button variant="subtle" onClick={refresh} disabled={busy}>Retry history</Button></Alert>}
     <Paper withBorder p="lg"><Stack gap="sm"><Group wrap="wrap"><Title order={2}>Coverage</Title><Badge color="yellow">Partial observations</Badge><Badge color={history?.coverage.available ? 'blue' : 'gray'}>{history?.coverage.available ? 'Reviewed log patterns available' : 'Observation unavailable'}</Badge></Group>
-      <Text size="sm">{history?.coverage.reason || 'Checking native event capability. Events may be missing; empty history does not establish that no events occurred.'}</Text>
-      {history && <><Text size="sm">Configured version: {history.coverage.configured_version || 'Unknown'} · Historical emitting version: unknown</Text><Text size="sm" c="dimmed">Event ingestion: {when(history.coverage.observed_at)} · Console ingestion: {when(history.coverage.logs_observed_at)}</Text><Text size="sm" c="dimmed">Parser capability: {history.coverage.parser_capability.replaceAll('_', ' ')}. Static grammar review does not qualify a server or loader combination.</Text></>}
+      <Text size="sm">Events come from available server logs. Missing or disabled output can hide deaths and advancements.</Text>
+      <details><summary>Coverage and source details</summary><Stack gap="xs" mt="sm">
+      <Text size="sm">{history?.coverage.reason || 'Checking log coverage. Empty history does not establish that no events occurred.'}</Text>
+      {history && <><Text size="sm">Configured version: {history.coverage.configured_version || 'Unknown'} · Historical emitting version: unknown</Text><Text size="sm" c="dimmed">Events last checked: {when(history.coverage.observed_at)} · Logs last checked: {when(history.coverage.logs_observed_at)}</Text><Text size="sm" c="dimmed">{history.coverage.parser_capability === 'static_reviewed_patterns' ? 'Log patterns have been reviewed.' : 'Log patterns are unverified for this version.'} Pattern review does not qualify a server or loader combination.</Text></>}
+      </Stack></details>
     </Stack></Paper>
     <Paper withBorder p="lg"><Stack>
       <Title order={2}>Retained observations</Title>
@@ -62,7 +65,7 @@ function EventRow({ event }: { event: Event }) {
     <Group wrap="wrap"><Badge color={event.kind === 'source_gap' ? 'yellow' : event.kind === 'death' ? 'red' : 'green'}>{event.kind.replaceAll('_', ' ')}</Badge><Text size="sm">Observed {when(event.observed_at)}</Text></Group>
     <Text style={{ overflowWrap: 'anywhere' }}>{event.message}</Text>
     {event.kind !== 'source_gap' && <Text size="sm">{event.player.name || 'Unknown name'} · {event.player.authority.replaceAll('_', ' ')} · UUID unknown</Text>}
-    <Text size="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>Source: {event.source} · console line {event.source_cursor} · emitting version {event.source_version} · {event.confidence.replaceAll('_', ' ')} · parser {event.parser_version}</Text>
+    <details><summary>Event source</summary><Text size="sm" mt="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>Source: {event.source === 'redacted_native_console' ? 'Server console (redacted)' : event.source} · console line {event.source_cursor} · emitting version {event.source_version} · {event.confidence.replaceAll('_', ' ')} · parser {event.parser_version}</Text></details>
     {event.gap && <Text size="sm" c="yellow">Source coverage has gaps.</Text>}
   </Stack></Paper>;
 }

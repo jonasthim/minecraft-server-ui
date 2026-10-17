@@ -350,8 +350,8 @@ func (s *Service) publish(j Job) {
 	}
 }
 
-// Subscribe is called only after authorization and loading the selected job.
-func (s *Service) Subscribe(jobID string) *events.Subscription { return s.hub.Subscribe(jobID) }
+// Subscribe is called after authorization and before loading the stream snapshot.
+func (s *Service) Subscribe(jobID string) (*events.Subscription, error) { return s.hub.Subscribe(jobID) }
 
 // Cancel is idempotent. An operator can cancel only their own safe job; admins
 // may cancel any safe job. System jobs (requester 0) require an administrator.
