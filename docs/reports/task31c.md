@@ -41,3 +41,21 @@ Review screenshots (intercepted client fixtures) are available at:
 ## Boundaries
 
 No API/backend/schema, dependencies, shell/router or ledger edits. No services, games, EULA acceptance, vault writes, staging or commits. Direct map navigation consumes only the existing bounded saved-view and independently aged native-position contract. Custom schedule preview is descriptive rather than a client cron validator; the scheduler remains authoritative. Task31 and real game/version/platform acceptance remain the integrator's responsibility.
+
+## Independent review fixes — round 1
+
+Reviewed against freeze `06561bc` on 2026-10-17; C1 and C2 addressed, awaiting integrator acceptance.
+
+- C1: descriptor expansion now checks `Object.hasOwn` before reading the alias object. Inherited names cannot become non-string values passed to `.split`. Custom text remains editable and only the server validates whether it is a legal schedule.
+- C2: only weekday `0` receives the Sunday preview. Weekday `7` remains custom text because the shipping robfig cron parser accepts weekdays0–6.
+- Added browser regressions entering the exact values `constructor`, `toString`, `__proto__`, and `0 3 * * 7`. Each must render a custom preview without a page error and leave the input usable. An intercepted server validation rejection preserves the editor and creates no successful definition; changing back to valid timing then saves the existing exact disabled restart payload. Existing preset, timezone, ownership and viewer checks run in the same focused path.
+
+Regression was observed failing on `constructor` before the source fix. Verification after the fix passed:
+
+```text
+TASK31C_SCHEDULES_ONLY=1 node web/tests/map-history-schedules.mjs
+npm --prefix web run typecheck
+npm --prefix web run lint
+```
+
+Schedule-only mode avoids rerunning unrelated map/history browser work for this helper correction. These remain intercepted client checks, with a separate fixture Vite process on15531; the live user preview on12826 was untouched. No backend, shared file, dependency, staging or commit changes.

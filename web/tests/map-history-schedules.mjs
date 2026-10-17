@@ -43,11 +43,12 @@ try {
     }
     if (path.endsWith('/recovery')) return json({ enabled: false, attempts: [] });
     if (path.endsWith('/schedules')) {
-      if (route.request().method() === 'POST') { const input = route.request().postDataJSON(); mutations.push(input); return json({ ...input, id: 'new' }); }
+      if (route.request().method() === 'POST') { const input = route.request().postDataJSON(); if (['constructor', 'toString', '__proto__', '0 3 * * 7'].includes(input.expression)) return route.fulfill({ status: 400, json: { error: { code: 'validation_failed', message: 'Fixture schedule expression rejected' } } }); mutations.push(input); return json({ ...input, id: 'new' }); }
       return json({ schedules: scheduleRecords, available_actions: ['backup', 'restart', 'command'], default_timezone: 'Europe/Stockholm', time_policy: 'Cron DST fixture policy' });
     }
     return route.fulfill({ status: 500, json: { error: { message: 'Unexpected fixture ' + path } } });
   });
+  if (process.env.TASK31C_SCHEDULES_ONLY !== '1') {
   await page.goto(base + '/instances/alpha/map');
   await page.getByRole('checkbox', { name: 'Enable touch map dragging' }).waitFor();
   const map = page.getByRole('img', { name: /^Saved terrain map/ });
@@ -143,6 +144,7 @@ try {
   assert.equal(await page.getByText('History source: Fixture source gap for alpha', { exact: true }).count(), 0);
   assert.equal(await page.getByRole('textbox', { name: 'Player name contains' }).inputValue(), '');
   results.push('event instance switch aborts old history and resets local filters');
+  }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(base + '/instances/alpha/schedules');
   await page.getByRole('button', { name: 'New schedule' }).click();
@@ -152,6 +154,17 @@ try {
   await page.getByRole('combobox', { name: 'Timing preset' }).click(); await page.getByRole('option', { name: 'Custom cron or interval', exact: true }).click();
   assert.equal(await page.getByRole('combobox', { name: 'Timing preset' }).inputValue(), 'Custom cron or interval');
   await page.getByText(/Every 6 hours of elapsed time/).waitFor();
+  for (const expression of ['constructor', 'toString', '__proto__', '0 3 * * 7']) {
+    await page.getByRole('textbox', { name: 'Cron or interval', exact: true }).fill(expression);
+    await page.getByText(`Timing preview: Custom expression “${expression}” in Europe/Stockholm. The server validates this expression and reports the next run after saving.`, { exact: true }).waitFor();
+    assert.equal(await page.getByRole('textbox', { name: 'Cron or interval', exact: true }).inputValue(), expression);
+    assert.deepEqual(errors, [], `custom expression ${expression} must not crash the editor`);
+  }
+  await page.getByRole('button', { name: 'Save disabled schedule', exact: true }).click();
+  await page.getByRole('alert').filter({ hasText: 'Fixture schedule expression rejected' }).waitFor();
+  assert.equal(await page.getByRole('dialog').isVisible(), true);
+  assert.deepEqual(mutations, [], 'server rejects invalid custom text without a successful save');
+  results.push('prototype-key expressions remain editable custom text; weekday 7 is custom; server rejection leaves editor usable');
   await page.getByRole('textbox', { name: 'Cron or interval', exact: true }).fill('30 4 * * *');
   await page.getByRole('textbox', { name: 'IANA timezone', exact: true }).fill('UTC');
   await page.getByText(/Daily at 04:30 in UTC/).waitFor();

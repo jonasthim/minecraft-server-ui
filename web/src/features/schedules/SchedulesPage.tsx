@@ -30,7 +30,7 @@ function timingPreview(expression: string, zone: string) {
   const aliases: Record<string, string> = { '@daily': '0 0 * * *', '@midnight': '0 0 * * *', '@hourly': '0 * * * *', '@weekly': '0 0 * * 0', '@monthly': '0 0 1 * *', '@yearly': '0 0 1 1 *', '@annually': '0 0 1 1 *' };
   const interval = /^@every ([1-9]\d*)(m|h)$/.exec(value);
   if (interval) return `Every ${interval[1]} ${interval[2] === 'h' ? 'hours' : 'minutes'} of elapsed time. Stored timezone: ${zone || 'choose a timezone'}.`;
-  const fields = (aliases[value] || value).split(' ');
+  const fields = (Object.hasOwn(aliases, value) ? aliases[value] : value).split(' ');
   const [minute, hour, day, month, weekday] = fields;
   const suffix = ` in ${zone || 'choose a timezone'}.`;
   if (fields.length === 5 && /^\d+$/.test(minute) && Number(minute) < 60) {
@@ -39,7 +39,7 @@ function timingPreview(expression: string, zone: string) {
       const time = `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`;
       if (day === '*' && month === '*') {
         if (weekday === '*') return `Daily at ${time}${suffix}`;
-        if (weekday === '0' || weekday === '7') return `Sundays at ${time}${suffix}`;
+        if (weekday === '0') return `Sundays at ${time}${suffix}`;
         if (weekday === '1-5') return `Weekdays at ${time}${suffix}`;
       }
       if (day === '1' && month === '*' && weekday === '*') return `First day of each month at ${time}${suffix}`;
