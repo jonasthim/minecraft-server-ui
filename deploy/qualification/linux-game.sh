@@ -15,7 +15,7 @@ while IFS= read -r -d '' entry; do
 done < <(find "$output" -mindepth 1 -maxdepth 1 -print0)
 # Output must not alias private runtime state or disappear during cleanup.
 case "$output/" in /var/lib/minecraft-ui/*|/etc/minecraft-ui/*|/usr/local/lib/minecraft-ui/*) exit 2 ;; esac
-for item in /var/lib/minecraft-ui /etc/minecraft-ui /usr/local/bin/minecraft-ui /usr/local/lib/minecraft-ui /etc/systemd/system/minecraft-ui.service /etc/systemd/system/minecraft-ui.service.d /etc/systemd/system/minecraft@.service /etc/sudoers.d/minecraft-ui; do
+for item in /var/lib/minecraft-ui /etc/minecraft-ui /usr/local/bin/minecraft-ui /usr/local/bin/minecraft-ui.new /usr/local/lib/minecraft-ui /etc/systemd/system/minecraft-ui.service /etc/systemd/system/minecraft-ui.service.d /etc/systemd/system/minecraft@.service /etc/sudoers.d/minecraft-ui; do
     [[ ! -e $item && ! -L $item ]] || { echo 'FAIL existing_installation' >&2; exit 2; }
 done
 ! id minecraft-ui &>/dev/null || { echo 'FAIL existing_service_account' >&2; exit 2; }
@@ -53,7 +53,7 @@ cleanup() {
             echo 'FAIL process_cleanup_incomplete' >&2
             status=1
         else
-            rm -f /etc/systemd/system/minecraft-ui.service /etc/systemd/system/minecraft@.service /etc/sudoers.d/minecraft-ui /usr/local/bin/minecraft-ui
+            rm -f /etc/systemd/system/minecraft-ui.service /etc/systemd/system/minecraft@.service /etc/sudoers.d/minecraft-ui /usr/local/bin/minecraft-ui /usr/local/bin/minecraft-ui.new
             rm -rf /etc/systemd/system/minecraft-ui.service.d /etc/minecraft-ui /usr/local/lib/minecraft-ui /var/lib/minecraft-ui
             userdel minecraft-ui >"$scratch/userdel" 2>&1
             [[ $? == 0 ]] || status=1
@@ -62,6 +62,7 @@ cleanup() {
         systemctl daemon-reload >"$scratch/reload" 2>&1
         [[ $? == 0 ]] || status=1
         systemctl reset-failed minecraft-ui.service minecraft@game-acceptance.service >/dev/null 2>&1
+        for item in /var/lib/minecraft-ui /etc/minecraft-ui /usr/local/bin/minecraft-ui /usr/local/bin/minecraft-ui.new /usr/local/lib/minecraft-ui /etc/systemd/system/minecraft-ui.service /etc/systemd/system/minecraft-ui.service.d /etc/systemd/system/minecraft@.service /etc/sudoers.d/minecraft-ui; do [[ ! -e $item && ! -L $item ]] || status=1; done
     fi
     if [[ $firewall4 == 1 ]]; then
         iptables -D INPUT ! -i lo -p tcp -m multiport --dports 8080,25565 -m comment --comment minecraft-game-acceptance -j DROP

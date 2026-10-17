@@ -24,7 +24,7 @@ The report directory must exist. Only the workflow's `commit.txt`, `go-version.t
 
 1. Start the installed unprivileged native manager against empty canonical state. Create the actual first admin via HTTP setup, retain the cookie jar in memory, fetch the session CSRF token from `/auth/me`, and attach it and the exact origin to mutations. Reject redirects and proxies.
 2. Create `game-acceptance` with explicit EULA acceptance via the instance API. Resolve the exact Vanilla selection and install it through lifecycle preview/install, preserving all production guards. Read only the official managed Temurin21 runtime manifest and report its verified publisher hash/provenance/version.
-3. Start via lifecycle API and require actual native JVM image, creation identity and working-directory evidence alongside acknowledged control/game/settings readiness. Linux evidence independently binds `/proc` image/cwd/boot/start ticks; Windows CIM binds actual image and process creation FILETIME. Windows working directory is corroborated by the private launch identity, as Windows has no supported remote-cwd API.
+3. Start via lifecycle API and require actual native JVM image, creation identity and working-directory evidence alongside acknowledged control/game/settings readiness. Linux evidence independently binds `/proc` image/cwd/boot/start ticks; Windows queries actual image, PID, liveness and the original100ns creation FILETIME from one native process handle. Windows working directory is corroborated by the private launch identity, as Windows has no supported remote-cwd API.
 4. Connect `minecraft-protocol@1.68.0` as a real headless gameplay client to fixed `127.0.0.1:25565`. Require PLAY, a server teleport, nonempty world chunk data, completed chunk batch, and a keepalive. The library owns login/configuration/keepalive replies; the harness sends teleport acknowledgements, player-loaded, chunk batch acknowledgements and tick-end packets. It is neither a status ping nor HTTP fixture.
 5. Send gameplay rotation yaw31.25 (marker A); disconnect/reconnect and require the server's initial teleport to read back that persisted yaw. Keep the observed client connected during the online full backup. Require the native game PID/start/runtime identity to remain unchanged.
 6. Require post-cursor save-off/save-on console acknowledgements, a released lease journal before its deadline, a successful shipping job, and an actual archive manifest with `acknowledged_native_save_lease`. The1.21.9 flush uses shipping authenticated MSMP; evidence is the successful guarded backup path plus that manifest, rather than invented legacy `save-all` text. The narrow read-only SQLite query reads only the lease's state/expiry/release timestamp for that exact instance/job. No management credentials or raw RPC messages are read or reported.
@@ -81,3 +81,33 @@ All synthetic ZIP/NBT and simulated protocol events above are deterministic sour
 Independent source review, exact-source GitHub Ubuntu24.04/WindowsServer2022 dispatch, actual failure triage and final evidence/ledger integration remain with the integrator. A failed shipping guard or operation must remain a failed phase until root applies a reviewed production fix. This harness does not authorize broadening console grammar or fabricating state.
 
 The full required version/layout matrix, other host families, Paper/Fabric/Forge/NeoForge, real addons/maps, update compatibility, crash/lease failure injection, and Microsoft-authenticated graphical clients remain explicitly unqualified. Passing the initial tuple cannot close all Task33 or support stable publication by itself.
+
+## Fix round1/5 — review of7b10b8a
+
+The independent review in `docs/reports/review-task33a.md` requested changes for two Important findings. Both are corrected in this working-tree packet; independent re-review and hosted dispatch remain pending. No production files changed.
+
+- **G1/R1, Linux installer scratch ownership:** `/usr/local/bin/minecraft-ui.new` now appears in the actual pre-ownership refusal loop, fixed owned cleanup operands and final absence loop. Existing regular files and dangling symlinks are refused without modification. Owned partial installer output is removed, and a leftover path makes cleanup fail. Three deterministic source regressions extract only those static fragments, validate/map every absolute operand under `TemporaryDirectory`, and execute no installer/service/account/firewall commands.
+- **G2/R2, Windows timestamp precision:** removed `Win32_Process.CreationDate` conversion. A small C# helper opens the target with `PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE`, binds `GetProcessId` and liveness to that handle, obtains original high/low FILETIME words through `GetProcessTimes`, queries the image through `QueryFullProcessImageName`, rechecks liveness, and closes the handle in `finally`. Concatenated eight-digit unsigned high/low hexadecimal words are compared exactly to the shipping launch identity; there is no rounding/tolerance. Python independently requires returned PID equality and exact image file binding. Existing wrapper SCM service-account SID/ACL checks are retained. The source abstraction regression uses FILETIME134100000000000007, accepts the exact value and rejects the value truncated to microseconds; additional cases reject wrong PID, wrong image and a failed native query.
+- **Packet hygiene:** include the previously untracked `deploy/qualification/game-client/.gitignore` containing only `node_modules/`. Dependency installation output remains outside the source packet.
+
+Red/green evidence:
+
+```text
+python3 -m unittest discover -s deploy/qualification -p game_api_test.py -v
+Before implementation: Ran13 tests; FAILED (failures=4, errors=4).
+  The actual original Linux guard accepted both .new fixtures (0 instead of2),
+  the actual cleanup left owned .new bytes, and final absence coverage was missing.
+  Windows regression errors identified the not-yet-extracted native helper.
+After implementation and final source checks: Ran13 tests; OK.
+
+python3 -m py_compile deploy/qualification/game_api.py deploy/qualification/game_api_test.py
+PASS (exit0)
+bash -n deploy/qualification/linux-game.sh
+PASS (exit0)
+git diff --check -- deploy/qualification/linux-game.sh deploy/qualification/game_api.py deploy/qualification/game_api_test.py docs/reports/task33a.md
+PASS (exit0)
+```
+
+The installed .NET SDK10.0.112 also compiled the **actual** C# text extracted from `WINDOWS_SNAPSHOT_SCRIPT` in a temporary net10.0 library project. Command: `dotnet build <temporary>/Snapshot.csproj --nologo --verbosity quiet --ignore-failed-sources`; output: `Build succeeded. 0 Warning(s), 0 Error(s)` (exit0,2.98s). The SDK additionally printed a workload-verification notice; no workload changes were performed. This checks C# compilation only and does not execute Windows APIs. The temporary project and outputs were removed. `pwsh` remains unavailable locally, so hosted PowerShell parsing, actual Windows native-handle behavior and real game evidence are still required.
+
+No local privileged operations, Windows calls, services or games were executed. Nothing was staged or committed by this worker.

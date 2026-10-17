@@ -364,6 +364,61 @@ def download_archive(api, record, destination):
     require(digest(destination) == expected == record["checksum"]["value"], "archive_download_hash")
 
 
+WINDOWS_SNAPSHOT_SCRIPT = r'''$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using FILETIME = System.Runtime.InteropServices.ComTypes.FILETIME;
+using System.Text;
+public sealed class GameAcceptanceProcessSnapshot {
+ public uint pid;
+ public string image;
+ public string created;
+}
+public static class GameAcceptanceNativeIdentity {
+ [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(IntPtr process, out FILETIME created, out FILETIME exited, out FILETIME kernel, out FILETIME user);
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder image, ref uint length);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern uint GetProcessId(IntPtr process);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+ public static GameAcceptanceProcessSnapshot Snapshot(uint pid) {
+  IntPtr handle = OpenProcess(0x00101000, false, pid);
+  if (handle == IntPtr.Zero) throw new InvalidOperationException("native_open");
+  try {
+   if (WaitForSingleObject(handle, 0) != 258 || GetProcessId(handle) != pid) throw new InvalidOperationException("native_binding");
+   FILETIME created, exited, kernel, user;
+   if (!GetProcessTimes(handle, out created, out exited, out kernel, out user)) throw new InvalidOperationException("native_times");
+   var image = new StringBuilder(32768); uint length = 32768;
+   if (!QueryFullProcessImageName(handle, 0, image, ref length)) throw new InvalidOperationException("native_image");
+   if (WaitForSingleObject(handle, 0) != 258) throw new InvalidOperationException("native_exited");
+   return new GameAcceptanceProcessSnapshot {
+    pid = pid, image = image.ToString(),
+    created = ((uint)created.dwHighDateTime).ToString("x8") + ((uint)created.dwLowDateTime).ToString("x8")
+   };
+  } finally { CloseHandle(handle); }
+ }
+}
+'@
+'''
+
+
+def windows_native_identity(value, executable):
+    # Query the original FILETIME from one pinned process handle. CIM datetime
+    # has microsecond precision and cannot represent every native 100 ns tick.
+    require(type(value["pid"]) is int and 1 < value["pid"] <= 0xffffffff, "native_identity_invalid")
+    script = WINDOWS_SNAPSHOT_SCRIPT + "\n[GameAcceptanceNativeIdentity]::Snapshot(" + str(value["pid"]) + ") | ConvertTo-Json -Compress"
+    result = subprocess.run(["pwsh", "-NoProfile", "-Command", script], capture_output=True, timeout=20)
+    require(result.returncode == 0, "native_process_absent")
+    process = json.loads(result.stdout)
+    require(type(process.get("pid")) is int and process["pid"] == value["pid"], "native_pid_mismatch")
+    require(os.path.samefile(process["image"], executable), "native_image_mismatch")
+    native_start = process.get("created")
+    require(isinstance(native_start, str) and re.fullmatch(r"[a-f0-9]{16}", native_start), "native_creation_invalid")
+    require(value["start_identity"].endswith(":" + native_start), "native_start_mismatch")
+    return native_start
+
+
 def native_identity():
     path = DATA / "instances" / INSTANCE / "state/identity.json"
     value = bounded_json(path, 32768)
@@ -374,14 +429,7 @@ def native_identity():
     require(executable.is_relative_to(DATA / "runtimes"), "native_runtime_path")
     require(Path(value["working_dir"]) == DATA / "instances" / INSTANCE / "server", "native_working_directory")
     if os.name == "nt":
-        # Fixed script, numeric PID only. CIM validates actual image, not API state.
-        script = "$ErrorActionPreference='Stop'; $p=Get-CimInstance Win32_Process -Filter 'ProcessId=" + str(value["pid"]) + "'; if(-not $p){exit 1}; @{image=$p.ExecutablePath;created=$p.CreationDate.ToFileTimeUtc().ToString('x16')}|ConvertTo-Json -Compress"
-        result = subprocess.run(["pwsh", "-NoProfile", "-Command", script], capture_output=True, timeout=20)
-        require(result.returncode == 0, "native_process_absent")
-        process = json.loads(result.stdout)
-        require(os.path.samefile(process["image"], executable), "native_image_mismatch")
-        native_start = process["created"]
-        require(value["start_identity"].endswith(":" + native_start), "native_start_mismatch")
+        native_start = windows_native_identity(value, executable)
     else:
         proc = Path("/proc") / str(value["pid"])
         require(os.path.samefile(proc / "exe", executable) and
