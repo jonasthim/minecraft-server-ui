@@ -3,12 +3,14 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -20,6 +22,8 @@ import (
 )
 
 const ReceiptName = "completion.json"
+const MetadataName = "bootstrap.json"
+const SignatureName = "bootstrap.sig"
 const MaxDuration = 10 * time.Minute
 
 // Acquisition is injectable for deterministic tests. The shipping command uses
@@ -153,6 +157,8 @@ func Prepare(ctx context.Context, o Options, source Acquisition) (receipt Receip
 	if e != nil {
 		return receipt, failure("metadata acquisition")
 	}
+	body = bytes.Clone(body)
+	sig = bytes.Clone(sig)
 	now := time.Now().UTC()
 	if o.Now != nil {
 		now = o.Now().UTC()
@@ -184,9 +190,19 @@ func Prepare(ctx context.Context, o Options, source Acquisition) (receipt Receip
 			}
 		}
 	}()
+	if e = writePrivate(d, MetadataName, body); e != nil {
+		return receipt, failure("private metadata retention")
+	}
+	if e = writePrivate(d, SignatureName, sig); e != nil {
+		return receipt, failure("private signature retention")
+	}
 	r, e := source.BootstrapArchive(ctx, version, o.OS)
 	if e != nil {
 		return receipt, failure("archive acquisition")
+	}
+	if ctx.Err() != nil || verifyOwnedBytes(d, MetadataName, body) != nil || verifyOwnedBytes(d, SignatureName, sig) != nil {
+		r.Close()
+		return receipt, failure("authenticated input binding changed")
 	}
 	f, e := d.create(".bundle", 0600)
 	if e != nil {
@@ -228,6 +244,9 @@ func Prepare(ctx context.Context, o Options, source Acquisition) (receipt Receip
 	if trustDir.check() != nil || d.check() != nil || (local != nil && local.check() != nil) {
 		return receipt, failure("path binding changed")
 	}
+	if ctx.Err() != nil || verifyOwnedBytes(d, MetadataName, body) != nil || verifyOwnedBytes(d, SignatureName, sig) != nil {
+		return receipt, failure("authenticated input binding changed")
+	}
 	h := sha256.Sum256(body)
 	receipt = Receipt{Format: 1, Repository: manifest.Repository, Version: manifest.Version, Schema: manifest.Schema, OS: a.OS, Arch: a.Arch, Trust: manifest.Trust, ManifestSHA256: hex.EncodeToString(h[:]), Members: append([]candidate.Member(nil), a.Members...)}
 	encoded, e := json.Marshal(receipt)
@@ -246,6 +265,41 @@ func Prepare(ctx context.Context, o Options, source Acquisition) (receipt Receip
 	}
 	success = true
 	return receipt, nil
+}
+
+func writePrivate(d *destination, name string, content []byte) error {
+	f, err := d.create(name, 0600)
+	if err != nil {
+		return err
+	}
+	n, writeErr := f.Write(content)
+	if n != len(content) && writeErr == nil {
+		writeErr = io.ErrShortWrite
+	}
+	writeErr = errors.Join(writeErr, f.Sync(), f.Close())
+	if writeErr != nil {
+		return writeErr
+	}
+	return verifyOwnedBytes(d, name, content)
+}
+
+func verifyOwnedBytes(d *destination, name string, expected []byte) error {
+	f, err := d.openOwnedRegular(name, int64(len(expected)))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	before, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	actual, err := io.ReadAll(io.LimitReader(f, int64(len(expected))+1))
+	after, statErr := f.Stat()
+	owned, ownedErr := d.owned(name)
+	if err != nil || statErr != nil || ownedErr != nil || !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) || owned.check(d.root) != nil || !bytes.Equal(actual, expected) {
+		return errors.New("retained authenticated input changed")
+	}
+	return d.check()
 }
 
 type contextReader struct {

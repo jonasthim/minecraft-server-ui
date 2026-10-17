@@ -120,7 +120,23 @@ def main():
             result["stage"] = "extracted_members"
             members = artifact["members"]
             require(len(members) == (14 if args.target == "linux" else 5))
-            require({path.name for path in output.iterdir()} == {member["name"] for member in members} | {"completion.json"})
+            retained_metadata = {"bootstrap.json", "bootstrap.sig"}
+            require({path.name for path in output.iterdir()} == {member["name"] for member in members} | retained_metadata | {"completion.json"})
+            for name in sorted(retained_metadata):
+                original = artifacts / name
+                retained = output / name
+                # Compare original bytes, including canonical trailing newlines;
+                # the unsigned completion receipt is not a trust authority.
+                read_json(original, 32768)
+                read_json(retained, 32768)
+                require(retained.read_bytes() == original.read_bytes())
+                require(digest(retained) == digest(original))
+                if args.target == "linux":
+                    require(retained.stat().st_mode & 0o777 == 0o600)
+            if args.target == "linux":
+                require(output.stat().st_mode & 0o777 == 0o700)
+                require((output / "completion.json").stat().st_mode & 0o777 == 0o600)
+            result["authenticated_inputs_retained"] = True
             for member in members:
                 require(member["name"] == Path(member["name"]).name)
                 path = output / member["name"]

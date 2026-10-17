@@ -349,7 +349,7 @@ func TestPrepareExactAndLatestBothPlatforms(t *testing.T) {
 					t.Fatal("completion receipt", e)
 				}
 				entries, e := os.ReadDir(f.o.Output)
-				if e != nil || len(entries) != len(r.Members)+1 {
+				if e != nil || len(entries) != len(r.Members)+3 {
 					t.Fatalf("temporary state remains: %v %v", entries, e)
 				}
 				if runtime.GOOS != "windows" {
@@ -360,6 +360,113 @@ func TestPrepareExactAndLatestBothPlatforms(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestPrepareRetainsExactAuthenticatedMetadata(t *testing.T) {
+	f := newFixture(t)
+	// The canonical authenticated inputs both include their required trailing
+	// newline; preparation must preserve those exact bytes.
+	metadataPath := filepath.Join(f.o.Output, "bootstrap.json")
+	signaturePath := filepath.Join(f.o.Output, "bootstrap.sig")
+	assertAbsent(t, metadataPath)
+	assertAbsent(t, signaturePath)
+
+	receipt, err := Prepare(context.Background(), f.o, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := os.ReadFile(metadataPath)
+	if err != nil || !bytes.Equal(metadata, f.body) {
+		t.Fatalf("retained metadata differs from authenticated input: %v", err)
+	}
+	signature, err := os.ReadFile(signaturePath)
+	if err != nil || !bytes.Equal(signature, f.sig) {
+		t.Fatalf("retained signature differs from authenticated input: %v", err)
+	}
+	publicTrust, err := os.ReadFile(f.o.TrustFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, err := candidate.ParsePublicTrust(publicTrust, f.o.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := candidate.VerifyBootstrap(trust, metadata, signature, f.o.Version, f.o.Now())
+	if err != nil || verified.Version != receipt.Version {
+		t.Fatalf("retained inputs failed independent trust verification: %v", err)
+	}
+	if receipt.ManifestSHA256 != hash(metadata) {
+		t.Fatal("receipt digest does not cover retained metadata")
+	}
+	if runtime.GOOS != "windows" {
+		for _, path := range []string{metadataPath, signaturePath} {
+			info, err := os.Stat(path)
+			if err != nil || info.Mode().Perm() != 0600 {
+				t.Fatalf("private metadata mode for %s: %v", filepath.Base(path), err)
+			}
+		}
+	}
+	entries, err := os.ReadDir(f.o.Output)
+	if err != nil || len(entries) != len(receipt.Members)+3 {
+		t.Fatalf("unexpected prepared outputs: %v (%v)", entries, err)
+	}
+	wantNames := map[string]bool{MetadataName: true, SignatureName: true, ReceiptName: true}
+	for _, member := range receipt.Members {
+		wantNames[member.Name] = true
+	}
+	for _, entry := range entries {
+		if !wantNames[entry.Name()] {
+			t.Fatalf("unexpected prepared output %q", entry.Name())
+		}
+		delete(wantNames, entry.Name())
+	}
+	if len(wantNames) != 0 {
+		t.Fatalf("missing prepared outputs: %v", wantNames)
+	}
+	completion, err := os.ReadFile(filepath.Join(f.o.Output, ReceiptName))
+	if err != nil || !bytes.Equal(completion, wire(receipt)) {
+		t.Fatal("completion receipt mismatch", err)
+	}
+}
+
+func TestPreparePreservesSubstitutedAuthenticatedInput(t *testing.T) {
+	f := newFixture(t)
+	var replacement os.FileInfo
+	f.hook = func(call string) {
+		if !strings.HasPrefix(call, "archive:") {
+			return
+		}
+		path := filepath.Join(f.o.Output, MetadataName)
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("foreign replacement"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		replacement, err = os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Prepare(context.Background(), f.o, f); err == nil {
+		t.Fatal("accepted substituted authenticated metadata")
+	}
+	path := filepath.Join(f.o.Output, MetadataName)
+	info, err := os.Lstat(path)
+	if err != nil || !os.SameFile(info, replacement) {
+		t.Fatal("replacement identity was removed or changed", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != "foreign replacement" {
+		t.Fatal("replacement bytes changed", err)
+	}
+	assertAbsent(t, filepath.Join(f.o.Output, SignatureName))
+	assertAbsent(t, filepath.Join(f.o.Output, ReceiptName))
+	entries, err := os.ReadDir(f.o.Output)
+	if err != nil || len(entries) != 1 || entries[0].Name() != MetadataName {
+		t.Fatal("unexpected retained state", entries, err)
 	}
 }
 
@@ -653,7 +760,7 @@ func TestOutputNoClobberAndPathBinding(t *testing.T) {
 					t.Fatal("completion receipt mismatch", err)
 				}
 				entries, err := os.ReadDir(f.o.Output)
-				if err != nil || len(entries) != len(receipt.Members)+1 {
+				if err != nil || len(entries) != len(receipt.Members)+3 {
 					t.Fatal("unexpected completed output state", entries, err)
 				}
 				for _, member := range receipt.Members {
@@ -713,6 +820,12 @@ func TestCancellationAndLatestFailures(t *testing.T) {
 		defer cancel()
 		f.hook = func(s string) {
 			if strings.HasPrefix(s, "archive:") {
+				for name, want := range map[string][]byte{MetadataName: f.body, SignatureName: f.sig} {
+					got, readErr := os.ReadFile(filepath.Join(f.o.Output, name))
+					if readErr != nil || !bytes.Equal(got, want) {
+						t.Fatalf("authenticated input %s was not retained before archive acquisition: %v", name, readErr)
+					}
+				}
 				cancel()
 			}
 		}
