@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Anchor, Badge, Button, Checkbox, Group, Loader, Modal, NumberInput, Paper, Progress, Select, Stack, Text, TextInput, Title } from '@mantine/core';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/client';
 import type { components } from '../../api/schema';
 import { useAuth } from '../auth/AuthProvider';
+import { startMetricsPoll } from '../metrics/poll';
 
 type Detail = components['schemas']['InstanceDetail'];
 type State = components['schemas']['LifecycleState'];
@@ -16,6 +17,9 @@ const active = (job: Job) => job.state === 'queued' || job.state === 'running';
 
 export function LifecyclePanel({ detail, onChanged }: { detail: Detail; onChanged: () => Promise<void> }) {
   const { user } = useAuth();
+  const lifetime = useRef(new AbortController());
+  useEffect(() => { const controller = new AbortController(); lifetime.current = controller; return () => controller.abort(); }, []);
+  const requestSignal = () => lifetime.current.signal;
   const id = detail.instance.id; const path = '/instances/' + encodeURIComponent(id) + '/lifecycle';
   const operator = user?.role === 'operator' || user?.role === 'admin'; const admin = user?.role === 'admin';
   const [state, setState] = useState<State | null>(null); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
@@ -23,13 +27,15 @@ export function LifecyclePanel({ detail, onChanged }: { detail: Detail; onChange
   const [preview, setPreview] = useState<Preview | null>(null); const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [loader, setLoader] = useState(detail.instance.loader_version ?? ''); const [countdown, setCountdown] = useState(300);
   const [confirmation, setConfirmation] = useState(''); const [emergency, setEmergency] = useState(false);
-  const refresh = useCallback(async (signal?: AbortSignal) => { const value = await api<State>(path, { signal }); setState(value); }, [path]);
-  useEffect(() => { const controller = new AbortController(); const run = () => void refresh(controller.signal).catch(error => { if (!controller.signal.aborted) setError(message(error)); }); run(); const timer = window.setInterval(run, 5000); return () => { controller.abort(); window.clearInterval(timer); }; }, [refresh]);
+  const refresh = useCallback(async (signal?: AbortSignal) => { const bounded = AbortSignal.any([lifetime.current.signal, ...(signal ? [signal] : []), AbortSignal.timeout(10000)]); const value = await api<State>(path, { signal: bounded }); if (!bounded.aborted) setState(value); }, [path]);
+  useEffect(() => startMetricsPoll(signal => refresh(signal), () => {}, error => setError(message(error)), 5000), [refresh]);
   useEffect(() => {
     if (!job || !active(job)) return;
-    const controller = new AbortController(); const jobID = job.id;
-    const timer = window.setInterval(() => { void api<{ job: Job }>('/jobs/' + encodeURIComponent(jobID), { signal: controller.signal }).then(value => { if (!controller.signal.aborted) setJob(value.job); }).catch(error => { if (!controller.signal.aborted) setError(message(error)); }); }, 2000);
-    return () => { controller.abort(); window.clearInterval(timer); };
+    let stop: (() => void) | undefined;
+    const jobID = job.id;
+    // Retain the first two-second job delay while serializing subsequent polls.
+    const timer = window.setTimeout(() => { stop = startMetricsPoll(signal => api<{ job: Job }>('/jobs/' + encodeURIComponent(jobID), { signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) }), value => setJob(value.job), error => setError(message(error)), 2000); }, 2000);
+    return () => { window.clearTimeout(timer); stop?.(); };
   }, [job?.id, job?.state]);
   useEffect(() => {
     if (!job || active(job)) return;
@@ -47,18 +53,18 @@ export function LifecyclePanel({ detail, onChanged }: { detail: Detail; onChange
   function open(operation: Request['operation']) { setDialog(operation); setError(''); setPreview(null); setConfirmation(''); setCountdown(300); setEmergency(false); }
   async function loadCatalog() {
     setBusy(true); setError('');
-    try { const query = new URLSearchParams({ flavor: detail.instance.flavor, minecraft_version: detail.instance.minecraft_version }); setCatalog(await api<Catalog>('/lifecycle/catalog?' + query)); }
-    catch (error) { setError(message(error)); } finally { setBusy(false); }
+    try { const query = new URLSearchParams({ flavor: detail.instance.flavor, minecraft_version: detail.instance.minecraft_version }); const signal = AbortSignal.any([requestSignal(), AbortSignal.timeout(10000)]); const value = await api<Catalog>('/lifecycle/catalog?' + query, { signal }); if (!signal.aborted) setCatalog(value); }
+    catch (error) { if (!lifetime.current.signal.aborted) setError(message(error)); } finally { if (!lifetime.current.signal.aborted) setBusy(false); }
   }
   async function resolve() {
     setBusy(true); setError('');
-    try { const selection: components['schemas']['LifecycleSelection'] = { flavor: detail.instance.flavor, minecraft_version: detail.instance.minecraft_version, ...(loader ? { loader_version: loader } : {}) }; setPreview(await api<Preview>(path + '/preview', { method: 'POST', body: JSON.stringify(selection) })); }
-    catch (error) { setError(message(error)); } finally { setBusy(false); }
+    try { const selection: components['schemas']['LifecycleSelection'] = { flavor: detail.instance.flavor, minecraft_version: detail.instance.minecraft_version, ...(loader ? { loader_version: loader } : {}) }; const signal = requestSignal(); const value = await api<Preview>(path + '/preview', { method: 'POST', body: JSON.stringify(selection), signal }); if (!signal.aborted) setPreview(value); }
+    catch (error) { if (!lifetime.current.signal.aborted) setError(message(error)); } finally { if (!lifetime.current.signal.aborted) setBusy(false); }
   }
   async function operate(request: Omit<Request, 'countdown_seconds' | 'emergency'> & Partial<Pick<Request, 'countdown_seconds' | 'emergency'>>) {
     setBusy(true); setError('');
-    try { const result = await api<components['schemas']['LifecycleJobResponse']>(path, { method: 'POST', body: JSON.stringify({ countdown_seconds: 300, emergency: false, ...request } satisfies Request) }); setJob(result.job); setDialog(null); await refresh(); }
-    catch (error) { setError(message(error)); } finally { setBusy(false); }
+    try { const signal = requestSignal(); const result = await api<components['schemas']['LifecycleJobResponse']>(path, { signal, method: 'POST', body: JSON.stringify({ countdown_seconds: 300, emergency: false, ...request } satisfies Request) }); if (signal.aborted) return; setJob(result.job); setDialog(null); await refresh(); }
+    catch (error) { if (!lifetime.current.signal.aborted) setError(message(error)); } finally { if (!lifetime.current.signal.aborted) setBusy(false); }
   }
   const working = busy || !!job && active(job); const stopped = state?.process === 'stopped' || state?.process === 'crashed';
   return <Paper withBorder p="lg"><Stack>

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Alert, Anchor, Badge, Button, Checkbox, Divider, Group, Loader, Modal, NumberInput, Paper, Select, SimpleGrid, Stack, Text, Textarea, TextInput, Title } from '@mantine/core';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api, APIError } from '../../api/client';
 import type { components, operations } from '../../api/schema';
 import { useAuth } from '../auth/AuthProvider';
-import { LifecyclePanel } from '../lifecycle/LifecyclePanel';
+import { useInstanceContext } from './InstanceLayout';
+import { LiveFacts, exactPlayers, useLiveInstances } from './live';
+import { MetricsPanel } from '../metrics/MetricsPanel';
 
 type Detail = components['schemas']['InstanceDetail'];
 type Draft = components['schemas']['InstanceDraft'];
@@ -19,34 +21,40 @@ const labelFlavor = (flavor: string) => ({ vanilla: 'Vanilla', paper: 'Paper', f
 
 export function InstancesPage() {
   const { user } = useAuth();
+  return <InstancesScope key={String(user?.id) + ':' + user?.role} />;
+}
+function InstancesScope() {
+  const { user } = useAuth();
   const [instances, setInstances] = useState<Detail[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [creating, setCreating] = useState(false);
-  const load = useCallback(async (signal?: AbortSignal) => { const result = await api<ListResponse>('/instances', { signal }); setInstances(result.instances); setLoading(false); setError(''); }, []);
+  const load = useCallback(async (signal?: AbortSignal) => { const result = await api<ListResponse>('/instances', { signal }); if (signal?.aborted) return; setInstances(result.instances); setLoading(false); setError(''); }, []);
   useEffect(() => { const controller = new AbortController(); void load(controller.signal).catch(error => { if (!controller.signal.aborted) { setError(errorText(error)); setLoading(false); } }); return () => controller.abort(); }, [load]);
+  const live = useLiveInstances(instances.map(item => item.instance.id));
+  const observations = instances.map(item => live[item.instance.id]);
+  const complete = observations.length > 0 && observations.every(value => exactPlayers(value) != null);
+  const running = observations.filter(value => value?.state?.process_running && !value.errors.length).length;
   return <Stack gap="xl">
     <Group justify="space-between" align="start"><div><Title order={2}>Servers</Title><Text c="dimmed" mt={4}>A separate home for every Minecraft world.</Text></div><Group wrap="wrap"><Button variant="light" onClick={() => void load().catch(error => setError(errorText(error)))}>Refresh servers</Button>{user?.role === 'admin' && <Button onClick={() => setCreating(true)}>Create server</Button>}</Group></Group>
     {error && <Alert color="red" role="alert">{error}</Alert>}{notice && <Alert color="green" role="status">{notice}</Alert>}
     {loading && <Loader aria-label="Loading servers" />}
     {!loading && !instances.length && <Paper withBorder p="xl"><Stack gap="sm"><Title order={3}>No servers configured</Title><Text c="dimmed" maw={560}>{user?.role === 'admin' ? 'Create your first server to choose its Minecraft version, port, and world settings.' : 'An administrator can create the first server.'}</Text>{user?.role === 'admin' && <Button w="fit-content" onClick={() => setCreating(true)}>Create your first server</Button>}</Stack></Paper>}
-    <Stack gap="md">{instances.map(detail => <Paper key={detail.instance.id} withBorder p="lg"><Group className="app-server-summary" justify="space-between" align="start" wrap="wrap"><Stack gap="xs" style={{ minWidth: 0, flex: 1 }}><Anchor component={Link} to={'/instances/' + detail.instance.id} fw={650} fz="lg" style={{ overflowWrap: 'anywhere' }}>{detail.instance.name}</Anchor><Text size="sm" c="dimmed" style={{ overflowWrap: 'anywhere' }}>{detail.instance.id}</Text><Group gap="sm" wrap="wrap"><Text size="sm">{labelFlavor(detail.instance.flavor)} {detail.instance.minecraft_version}</Text><Text size="sm">Port {detail.instance.game_port}</Text><Text size="sm">{detail.instance.memory_mib} MiB</Text></Group></Stack><Badge color={detail.provisioning === 'not_installed' ? 'gray' : 'forest'}>{detail.provisioning === 'not_installed' ? 'Not installed' : detail.provisioning}</Badge><Button component={Link} to={'/instances/' + detail.instance.id} variant="light">Open server</Button></Group></Paper>)}</Stack>
+    {!!instances.length && <Paper withBorder p="md"><Text fw={600}>{instances.length} configured · {running} observed running</Text><Text size="sm">Online players: {complete ? observations.reduce((sum, value) => sum + (exactPlayers(value) ?? 0), 0) : 'Unknown fleet total · partial or missing observations'}</Text><Text size="xs" c="dimmed">Instance JVM telemetry only. Host utilization is not collected.</Text></Paper>}
+    <Stack gap="md">{instances.map(detail => <Paper key={detail.instance.id} withBorder p="lg"><Group className="app-server-summary" justify="space-between" align="start" wrap="wrap"><Stack gap="xs" style={{ minWidth: 0, flex: 1 }}><Anchor component={Link} to={'/instances/' + detail.instance.id} fw={650} fz="lg" style={{ overflowWrap: 'anywhere' }}>{detail.instance.name}</Anchor><Text size="sm" c="dimmed" style={{ overflowWrap: 'anywhere' }}>{detail.instance.id}</Text><Group gap="sm" wrap="wrap"><Text size="sm">{labelFlavor(detail.instance.flavor)} {detail.instance.minecraft_version}</Text><Text size="sm">Port {detail.instance.game_port}</Text><Text size="sm">{detail.instance.memory_mib} MiB</Text></Group></Stack><Badge color={detail.provisioning === 'not_installed' ? 'gray' : 'forest'}>{detail.provisioning === 'not_installed' ? 'Not installed' : detail.provisioning}</Badge><Button component={Link} to={'/instances/' + detail.instance.id} variant="light">Open server</Button></Group><LiveFacts live={live[detail.instance.id]} /></Paper>)}</Stack>
     <Modal opened={creating} onClose={() => setCreating(false)} title="Create server" size="lg"><InstanceForm onCancel={() => setCreating(false)} onSaved={async () => { setCreating(false); setNotice('Server created. Server files still need to be installed before it can start.'); await load().catch(error => setError(errorText(error))); }} /></Modal>
   </Stack>;
 }
 
 export function InstancePage() {
-  const { instanceId } = useParams(); const { user } = useAuth(); const navigate = useNavigate();
-  const [detail, setDetail] = useState<Detail | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [notice, setNotice] = useState('');
+  const { detail, refresh: load } = useInstanceContext(); const { user } = useAuth(); const navigate = useNavigate();
+  const [error, setError] = useState(''); const [notice, setNotice] = useState('');
   const [editing, setEditing] = useState(false); const [deleting, setDeleting] = useState(false); const [confirmation, setConfirmation] = useState(''); const [busy, setBusy] = useState(false); const [deleteError, setDeleteError] = useState('');
-  const load = useCallback(async (signal?: AbortSignal) => { const result = await api<DetailResponse>('/instances/' + encodeURIComponent(instanceId ?? ''), { signal }); setDetail(result.detail); setLoading(false); setError(''); }, [instanceId]);
-  useEffect(() => { const controller = new AbortController(); void load(controller.signal).catch(error => { if (!controller.signal.aborted) { setError(errorText(error)); setLoading(false); } }); return () => controller.abort(); }, [load]);
   async function remove(event: FormEvent) { event.preventDefault(); if (!detail) return; setBusy(true); setDeleteError(''); try { const body: components['schemas']['InstanceDelete'] = { confirmation }; await api('/instances/' + encodeURIComponent(detail.instance.id), { method: 'DELETE', body: JSON.stringify(body) }); void navigate('/'); } catch (error) { setDeleteError(errorText(error)); } finally { setBusy(false); } }
-  return <Stack gap="lg"><Anchor component={Link} to="/">Back to servers</Anchor>{error && <Alert color="red" role="alert">{error}</Alert>}{notice && <Alert color="green" role="status">{notice}</Alert>}{loading && <Loader aria-label="Loading server" />}{detail && <>
-    <Group justify="space-between" wrap="wrap"><div style={{ minWidth: 0 }}><Title order={2} style={{ overflowWrap: 'anywhere' }}>{detail.instance.name}</Title><Text c="dimmed">{detail.instance.id}</Text></div>{user?.role === 'admin' && <Button onClick={() => setEditing(true)}>Edit settings</Button>}</Group>
-    <Group className="app-instance-navigation" role="navigation" aria-label="Server features" wrap="wrap"><Button component={Link} to={'/instances/' + detail.instance.id + '/players'} variant="light">Players</Button><Button component={Link} to={'/instances/' + detail.instance.id + '/game-events'} variant="light">Deaths &amp; advancements</Button><Button component={Link} to={'/instances/' + detail.instance.id + '/console'} variant="light">Console</Button><Button component={Link} to={'/instances/' + detail.instance.id + '/world'} variant="light">Worlds</Button><Button component={Link} to={'/instances/' + detail.instance.id + '/map'} variant="light">Saved map</Button><Button component={Link} to={'/instances/' + detail.instance.id + '/metrics'} variant="light">Metrics</Button><Button component={Link} to={'/instances/' + detail.instance.id + '/backups'} variant="light">Backups and restore</Button><Button component={Link} to={'/instances/' + detail.instance.id + '/content'} variant="light">Mods and plugins</Button><Button component={Link} to={'/instances/' + detail.instance.id + '/modpack'} variant="light">Modpacks</Button><Button component={Link} to={'/instances/' + detail.instance.id + '/updates'} variant="light">Updates and rollback</Button><Button component={Link} to={'/instances/' + detail.instance.id + '/schedules'} variant="light">Schedules</Button></Group>
-    <LifecyclePanel detail={detail} onChanged={load} />
+  return <Stack gap="lg"><Anchor component={Link} to="/">Back to servers</Anchor>{error && <Alert color="red" role="alert">{error}</Alert>}{notice && <Alert color="green" role="status">{notice}</Alert>}{detail && <>
+    <MetricsPanel instanceId={detail.instance.id} compact />
+    <Group justify="space-between" wrap="wrap"><div style={{ minWidth: 0 }}><Title order={3}>Server settings</Title></div>{user?.role === 'admin' && <Button onClick={() => setEditing(true)}>Edit settings</Button>}</Group>
     <Text size="sm" c="dimmed">These are desired settings. Running values and gameplay effects have not been verified.</Text><Paper withBorder p="lg"><SimpleGrid cols={{ base: 1, sm: 2 }} spacing="lg"><Fact label="Minecraft" value={labelFlavor(detail.instance.flavor) + ' ' + detail.instance.minecraft_version} /><Fact label="Game port" value={String(detail.instance.game_port)} /><Fact label="Memory" value={detail.instance.memory_mib + ' MiB'} /><Fact label="Java requirement" value={'Adoptium Temurin ' + detail.instance.java_major + ' (managed)'} /><Fact label="World" value={detail.config.level_name} /><Fact label="Players" value={'Up to ' + detail.config.max_players} /><Fact label="Game mode" value={detail.config.game_mode} /><Fact label="Difficulty" value={detail.config.difficulty} /><Fact label="EULA" value={detail.eula.accepted ? 'Accepted' + (detail.eula.accepted_at ? ' on ' + new Date(detail.eula.accepted_at).toLocaleString() : '') : 'Not accepted'} /><Fact label="Server message" value={detail.config.motd} /><Fact label="Desired PVP" value={(detail.config.pvp ? 'Enabled' : 'Disabled') + ' · runtime not verified'} /></SimpleGrid></Paper>
     {user?.role === 'admin' && <Paper withBorder p="lg"><Stack gap="sm"><Title order={3} size="h4">Delete server</Title><Text size="sm">Permanently remove this server, its world, logs, and local backups. The server must be stopped with no queued or running jobs.</Text><Button color="red" variant="light" w="fit-content" onClick={() => { setConfirmation(''); setDeleteError(''); setDeleting(true); }}>Delete server</Button></Stack></Paper>}
     <Modal opened={editing} onClose={() => setEditing(false)} title="Edit server settings" size="lg"><InstanceForm detail={detail} onCancel={() => setEditing(false)} onSaved={async () => { setEditing(false); setNotice('Desired server settings saved. Runtime values have not been verified.'); await load().catch(error => setError(errorText(error))); }} /></Modal>

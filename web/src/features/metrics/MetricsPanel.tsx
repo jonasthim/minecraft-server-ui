@@ -3,6 +3,8 @@ import { Alert, Anchor, Badge, Button, Group, Paper, Select, SimpleGrid, Stack, 
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../../api/client';
 import { startMetricsPoll } from './poll';
+import { MetricCharts } from './MetricCharts';
+import { useAuth } from '../auth/AuthProvider';
 import type { components } from '../../api/schema';
 
 type Page = components['schemas']['MetricsPage'];
@@ -14,17 +16,18 @@ const bytes = (value: number | null | undefined) => value == null ? 'Unknown' : 
 const count = (value: number | null | undefined) => value == null ? 'Unknown' : Number.isInteger(value) ? String(value) : value.toFixed(1);
 const date = (value: string) => value.startsWith('0001-') ? 'Not observed' : new Date(value).toLocaleString();
 export function MetricsPage() {
-  const { instanceId = '' } = useParams();
-  return <Stack><Anchor component={Link} to={'/instances/' + encodeURIComponent(instanceId)}>Back to server</Anchor><MetricsPanel key={instanceId} instanceId={instanceId} /></Stack>;
+  const { instanceId = '' } = useParams(); const { user } = useAuth();
+  return <Stack><Anchor component={Link} to={'/instances/' + encodeURIComponent(instanceId)}>Back to server</Anchor><MetricsPanel key={instanceId + user?.role + user?.id} instanceId={instanceId} /></Stack>;
 }
-export function MetricsPanel({ instanceId }: { instanceId: string }) {
+export function MetricsPanel({ instanceId, compact = false }: { instanceId: string; compact?: boolean }) {
+  const { user } = useAuth();
   const [hours, setHours] = useState('1');
   const [data, setData] = useState<Page | null>(null);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
-    setLoading(true); setData(null);
+    setLoading(true); setData(null); setError('');
     return startMetricsPoll(async signal => {
       const to = new Date();
       const resolution = Number(hours) <= 6 ? 'raw' : 'hourly';
@@ -36,28 +39,31 @@ export function MetricsPanel({ instanceId }: { instanceId: string }) {
       for (let start = from.getTime(); start < to.getTime(); start += 999 * step) {
         signal.throwIfAborted();
         const end = Math.min(to.getTime(), start + 999 * step);
-        pages.push(await api<Page>(endpoint + new URLSearchParams({ from: new Date(start).toISOString(), to: new Date(end).toISOString(), resolution }), { signal }));
+        pages.push(await api<Page>(endpoint + new URLSearchParams({ from: new Date(start).toISOString(), to: new Date(end).toISOString(), resolution }), { signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) }));
       }
       signal.throwIfAborted();
       return { ...pages[0], points: pages.flatMap(part => part.points) };
     }, page => { setData(page); setError(''); setLoading(false); }, error => {
       setError(error instanceof Error ? error.message : 'Metrics could not be loaded.'); setLoading(false);
     });
-  }, [instanceId, hours, attempt]);
+  }, [instanceId, hours, attempt, user?.id, user?.role]);
   const latest = data?.points.at(-1);
   const rows = data?.points.toReversed() ?? [];
   const fields: { label: string; value: string }[] = [{ label: 'JVM CPU', value: latest?.cpu_percent == null ? 'Unknown' : latest.cpu_percent.toFixed(1) + '%' }, { label: 'JVM resident memory', value: bytes(latest?.resident_bytes) }, { label: 'JVM private memory', value: bytes(latest?.private_bytes) }, { label: 'Instance disk', value: bytes(latest?.disk_bytes) }, { label: data?.resolution === 'hourly' ? 'Average observed players' : 'Observed players', value: count(latest?.players) }];
   return <Stack style={{ minWidth: 0 }}>
-    <Group justify="space-between"><Title order={2}>JVM metrics</Title><Button variant="light" onClick={() => setAttempt(value => value + 1)} loading={loading}>Refresh metrics</Button></Group>
-    <Select label="Metric history range" data={options} value={hours} onChange={value => setHours(value || '1')} />
+    <Group justify="space-between"><Title order={compact ? 3 : 2}>{compact ? 'Resource trends' : 'JVM metrics'}</Title><Button variant="light" onClick={() => setAttempt(value => value + 1)} loading={loading}>Refresh metrics</Button></Group>
+    {!compact && <Select label="Metric history range" data={options} value={hours} onChange={value => setHours(value || '1')} />}
     {error && <Alert color="red" role="alert" title="Metrics unavailable; previously displayed values may be stale">{error}</Alert>}
     {loading && !data && <Text role="status">Loading metrics…</Text>}
-    <SimpleGrid cols={{ base: 1, xs: 2, md: 3 }}>{fields.map(field => <Paper key={field.label} withBorder p="sm"><Text size="sm" c="dimmed">{field.label}</Text><Text fw={600}>{field.value}</Text></Paper>)}</SimpleGrid>
+    {!compact && <SimpleGrid cols={{ base: 1, xs: 2, md: 3 }}>{fields.map(field => <Paper key={field.label} withBorder p="sm"><Text size="sm" c="dimmed">{field.label}</Text><Text fw={600}>{field.value}</Text></Paper>)}</SimpleGrid>}
     <Text size="sm">{data?.cpu_convention || '100% CPU means one fully busy logical CPU. JVM memory is not Java heap. Unavailable observations remain unknown.'}</Text>
     <Text size="sm">Disk totals include this server’s files, logs, backups and local state. Scans have size and time limits. Shared runtimes and the manager database are excluded. Player counts come from the server roster; <Anchor component={Link} to={'/instances/' + encodeURIComponent(instanceId) + '/players'}>player history</Anchor> records observed sessions and coverage gaps.</Text>
     {latest && <Paper withBorder p="sm"><Stack gap="xs"><Group><Text fw={600}>Latest sample · {date(latest.collected_at)}</Text><Badge color={latest.gap ? 'orange' : 'green'}>{latest.gap ? 'Coverage gaps' : 'Observed'}</Badge></Group><Text size="sm">{latest.counts.samples}/{latest.expected} scheduled observations. A missing bucket may reflect manager downtime, collection limits or an unavailable JVM.</Text><details><summary>Metric sources and gaps</summary><Stack gap="xs" mt="xs">{latest.sources.map((source, index) => <Text key={index} size="sm">{fieldLabel(source.field)}: {sourceLabel(source.kind)} · {date(source.observed_at)}{source.gap_reason ? ' · ' + source.gap_reason.replaceAll('_', ' ') : ''}</Text>)}</Stack></details></Stack></Paper>}
     <Text size="sm" c="dimmed">Collection every 30 seconds. Raw retention: 7 days; hourly retention: 90 days. Hourly values average available observations only. Current hourly buckets may be incomplete.</Text>
-    {data && <HistoryTable points={rows} total={data.points.length} />}
+    {latest && <Text size="sm" c="dimmed">{Date.now() - Date.parse(latest.collected_at) > (data?.resolution === 'hourly' ? 5400000 : 90000) ? 'Latest metric observation is stale.' : 'Sample timestamps identify the observation time, not current verified runtime values.'}</Text>}
+    {data && <MetricCharts points={data.points} interval={data.interval_seconds} />}
+    {compact && <Anchor component={Link} to={'/instances/' + encodeURIComponent(instanceId) + '/metrics'}>Open full metric history and time ranges</Anchor>}
+    {!compact && data && <HistoryTable points={rows} total={data.points.length} />}
   </Stack>;
 }
 function HistoryTable({ points, total }: { points: Point[]; total: number }) {

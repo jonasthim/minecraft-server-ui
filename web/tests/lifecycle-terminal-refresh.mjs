@@ -33,6 +33,9 @@ try {
       const fail = message => route.fulfill({ status: 503, json: { error: { code: 'fixture_failure', message } } });
       if (path === '/auth/status') return json({ needs_setup: false, local_login_enabled: true, oidc_enabled: false });
       if (path === '/auth/me') return json({ user: { id: 1, username: 'admin', display_name: 'Admin', email: '', role: 'admin', disabled: false, local: true }, csrf_token: 'fixture' });
+      if (path === '/instances') return json({ instances: [detail] });
+      if (path === '/instances/alpha/players') return json({ snapshot: { instance_id: 'alpha', generation: '', observed_at: '0001-01-01T00:00:00Z', known: false, complete: false, count: 0, players: [], gap: true, reason: 'Unknown fixture roster' } });
+      if (path === '/instances/alpha/metrics') return json({ instance_id: 'alpha', resolution: 'raw', interval_seconds: 30, points: [], cpu_convention: 'Fixture' });
       if (path === '/instances/alpha') {
         detailReads++;
         if (terminal && scenario === 'detail failure') return fail('Final detail refresh unavailable');

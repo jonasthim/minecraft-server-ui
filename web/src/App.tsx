@@ -6,6 +6,7 @@ const AccountPage = lazy(() => import('./features/auth/AccountPage').then(m => (
 const UsersPage = lazy(() => import('./features/auth/UsersPage').then(m => ({ default: m.UsersPage })))
 const OIDCSettingsPage = lazy(() => import('./features/auth/OIDCSettingsPage').then(m => ({ default: m.OIDCSettingsPage })))
 const InstancesPage = lazy(() => import('./features/instances').then(m => ({ default: m.InstancesPage })))
+const InstanceLayout = lazy(() => import('./features/instances').then(m => ({ default: m.InstanceLayout })))
 const InstancePage = lazy(() => import('./features/instances').then(m => ({ default: m.InstancePage })))
 const PlayersPage = lazy(() => import('./features/players/PlayersPage').then(m => ({ default: m.PlayersPage })))
 const GameEventsPage = lazy(() => import('./features/game-events/GameEventsPage').then(m => ({ default: m.GameEventsPage })))
@@ -33,18 +34,20 @@ function AdminOnly({ children }: { children: ReactNode }) {
 export default function App() {
   return <BrowserRouter><AuthGate><Shell><Suspense fallback={<Center mih={240}><Loader aria-label="Loading page" /></Center>}><Routes>
     <Route path="/" element={<InstancesPage />} />
-    <Route path="/instances/:instanceId" element={<InstancePage />} />
-    <Route path="/instances/:instanceId/players" element={<PlayersPage />} />
-    <Route path="/instances/:instanceId/game-events" element={<GameEventsPage />} />
-    <Route path="/instances/:instanceId/console" element={<ConsolePage />} />
-    <Route path="/instances/:instanceId/world" element={<WorldsPage />} />
-    <Route path="/instances/:instanceId/map" element={<MapPage />} />
-    <Route path="/instances/:instanceId/metrics" element={<MetricsPage />} />
-    <Route path="/instances/:instanceId/backups" element={<BackupsPage />} />
-    <Route path="/instances/:instanceId/content" element={<ContentPage />} />
-    <Route path="/instances/:instanceId/modpack" element={<ModpacksPage />} />
-    <Route path="/instances/:instanceId/updates" element={<UpdatesPage />} />
-    <Route path="/instances/:instanceId/schedules" element={<SchedulesPage />} />
+    <Route path="/instances/:instanceId" element={<InstanceLayout />}>
+      <Route index element={<InstancePage />} />
+      <Route path="players" element={<PlayersPage />} />
+      <Route path="game-events" element={<GameEventsPage />} />
+      <Route path="console" element={<ConsolePage />} />
+      <Route path="world" element={<WorldsPage />} />
+      <Route path="map" element={<MapPage />} />
+      <Route path="metrics" element={<MetricsPage />} />
+      <Route path="backups" element={<BackupsPage />} />
+      <Route path="content" element={<ContentPage />} />
+      <Route path="modpack" element={<ModpacksPage />} />
+      <Route path="updates" element={<UpdatesPage />} />
+      <Route path="schedules" element={<SchedulesPage />} />
+    </Route>
     <Route path="/catalog" element={<CatalogPage />} />
     <Route path="/jobs" element={<JobsPage />} />
     <Route path="/account" element={<AccountPage />} />
