@@ -91,8 +91,12 @@ func privateAllowACE(acl *windows.ACL, index uint32) (*windows.ACCESS_ALLOWED_AC
 		return nil, nil, errors.New("ACL entry is truncated")
 	}
 	sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-	sidBytes := 8 + 4*int(sid.SubAuthorityCount())
-	if sid.SubAuthorityCount() > 15 || sidBytes > int(ace.Header.AceSize)-int(unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart)) || !sid.IsValid() {
+	// x/sys's Win32 pointer-returning count accessor loses Go allocation
+	// provenance under checkptr. The minimum SID header was bounded above;
+	// read its count byte directly, as the native updater ACL validator does.
+	count := *(*byte)(unsafe.Add(unsafe.Pointer(sid), 1))
+	sidBytes := 8 + 4*int(count)
+	if count > 15 || sidBytes > int(ace.Header.AceSize)-int(unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart)) || !sid.IsValid() {
 		return nil, nil, errors.New("ACL SID is truncated")
 	}
 	return ace, sid, nil

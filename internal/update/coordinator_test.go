@@ -527,7 +527,9 @@ func TestCoordinatorBootIntentCrashReconstructsWorldRiskWithoutOldPointers(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if done := f.wait(t, job); done.State != domain.JobSucceeded {
+	// This setup performs a real safety backup and activation before injecting
+	// the boot-intent crash. It has no product three-second performance budget.
+	if done := f.waitWithin(t, job, 30*time.Second); done.State != domain.JobSucceeded {
 		t.Fatal(done)
 	}
 	var id, raw string
