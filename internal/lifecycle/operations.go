@@ -16,6 +16,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"github.com/jonasthim/minecraft-server-ui/internal/launcher"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/launchargs"
+	"github.com/jonasthim/minecraft-server-ui/internal/supervisor"
 )
 
 type Request struct {
@@ -445,10 +446,64 @@ func (s *Service) stop(ctx context.Context, e *jobs.Execution, in Request) error
 			return safeFailure("process_identity")
 		}
 		if err = s.native.Stop(cleanup, identity); err != nil {
+			if category := supervisor.StopFailureCategory(err); category != supervisor.StopFailureUnknown {
+				if message := stopFailureLogMessage(category); message != "" {
+					logCtx, logCancel := e.CleanupContext()
+					_ = e.Log(logCtx, message)
+					logCancel()
+				}
+			}
 			return domain.E(domain.CodeUnavailable, "Native stop did not complete cleanly; inspect current process state and launcher recovery details.")
 		}
 		return nil
 	})
+}
+
+func stopFailureLogMessage(category supervisor.StopFailureCode) string {
+	switch category {
+	case supervisor.StopFailureLockWait:
+		return "Native stop diagnostic: lock_wait_failed."
+	case supervisor.StopFailureInitialProbe:
+		return "Native stop diagnostic: initial_probe_failed."
+	case supervisor.StopFailureProcessProbe:
+		return "Native stop diagnostic: process_probe_failed."
+	case supervisor.StopFailureProcessWaitTimeout:
+		return "Native stop diagnostic: process_wait_timeout."
+	case supervisor.StopFailureAdmissionWaitTimeout:
+		return "Native stop diagnostic: admission_wait_timeout."
+	case supervisor.StopFailureContextCanceled:
+		return "Native stop diagnostic: context_canceled."
+	case supervisor.StopFailureInspection:
+		return "Native stop diagnostic: inspection_failed."
+	case supervisor.StopFailureMissingFinalMetadata:
+		return "Native stop diagnostic: missing_final_metadata."
+	case supervisor.StopFailureForcedTermination:
+		return "Native stop diagnostic: forced_termination."
+	case supervisor.StopFailureWatchdogFailure:
+		return "Native stop diagnostic: watchdog_failure."
+	case supervisor.StopFailureUncleanExit:
+		return "Native stop diagnostic: unclean_exit."
+	case supervisor.StopFailureControlResponseLost:
+		return "Native stop diagnostic: control_response_lost_unclassified."
+	case supervisor.StopFailureControlLostProbe:
+		return "Native stop diagnostic: control_response_lost_process_probe_failed."
+	case supervisor.StopFailureControlLostProcessTimeout:
+		return "Native stop diagnostic: control_response_lost_process_wait_timeout."
+	case supervisor.StopFailureControlLostAdmission:
+		return "Native stop diagnostic: control_response_lost_admission_wait_timeout."
+	case supervisor.StopFailureControlLostInspection:
+		return "Native stop diagnostic: control_response_lost_inspection_failed."
+	case supervisor.StopFailureControlLostMetadata:
+		return "Native stop diagnostic: control_response_lost_missing_final_metadata."
+	case supervisor.StopFailureControlLostForced:
+		return "Native stop diagnostic: control_response_lost_forced_termination."
+	case supervisor.StopFailureControlLostWatchdog:
+		return "Native stop diagnostic: control_response_lost_watchdog_failure."
+	case supervisor.StopFailureControlLostUnclean:
+		return "Native stop diagnostic: control_response_lost_unclean_exit."
+	default:
+		return ""
+	}
 }
 func (s *Service) autostart(ctx context.Context, e *jobs.Execution, enabled bool) error {
 	if err := e.Phase(ctx, "setting_autostart", 30); err != nil {

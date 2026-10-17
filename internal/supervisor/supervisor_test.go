@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -107,6 +108,82 @@ func TestAlreadyDeadStopWaitsForLauncherCompletion(t *testing.T) {
 	if err = s.Stop(ctx, identity); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("dead JVM bypassed active launcher completion: %v", err)
 	}
+	if got := StopFailureCategory(err); got != StopFailureAdmissionWaitTimeout {
+		t.Fatalf("category = %q, want admission wait timeout", got)
+	}
+}
+
+func TestWaitExitClassifiesLiveProcessTimeout(t *testing.T) {
+	root := t.TempDir()
+	p, err := launcher.Paths(root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(p.Server, 0700); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestSupervisorStopChild$")
+	cmd.Dir = p.Server
+	cmd.Env = append(os.Environ(), "MINECRAFT_TEST_SUPERVISOR_CHILD=1")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	defer func() {
+		if !waited {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	}()
+	identity, err := launcher.CaptureIdentity("test", cmd.Process.Pid, domain.LaunchSpec{Executable: exe, WorkingDir: p.Server})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(Config{DataDir: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	err = s.waitExit(ctx, identity)
+	cancel()
+	_ = stdin.Close()
+	if !errors.Is(err, context.DeadlineExceeded) || StopFailureCategory(err) != StopFailureProcessWaitTimeout {
+		t.Fatalf("waitExit err=%v category=%q", err, StopFailureCategory(err))
+	}
+	if err = cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	waited = true
+}
+
+func TestWaitExitClassifiesExpiredAndCancelledContextsBeforeProbe(t *testing.T) {
+	s, err := New(Config{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := staleIdentity(t)
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelExpired()
+	err = s.waitExit(expired, id)
+	if !errors.Is(err, context.DeadlineExceeded) || StopFailureCategory(err) != StopFailureProcessWaitTimeout {
+		t.Fatalf("expired wait err=%v category=%q", err, StopFailureCategory(err))
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = s.waitExit(cancelled, id)
+	if !errors.Is(err, context.Canceled) || StopFailureCategory(err) != StopFailureContextCanceled {
+		t.Fatalf("cancelled wait err=%v category=%q", err, StopFailureCategory(err))
+	}
 }
 func TestAlreadyDeadStopPreservesFinalFailure(t *testing.T) {
 	for _, kind := range []string{"forced", "recovery", "missing", "crashed", "clean"} {
@@ -140,13 +217,74 @@ func TestAlreadyDeadStopPreservesFinalFailure(t *testing.T) {
 				}
 			}
 			err = s.Stop(context.Background(), identity)
+			wantCategory := StopFailureUnknown
+			switch kind {
+			case "forced":
+				wantCategory = StopFailureForcedTermination
+			case "recovery":
+				wantCategory = StopFailureWatchdogFailure
+			case "missing":
+				wantCategory = StopFailureMissingFinalMetadata
+			case "crashed":
+				wantCategory = StopFailureUncleanExit
+			}
 			if kind == "clean" && err != nil {
 				t.Fatal(err)
 			}
 			if kind != "clean" && err == nil {
 				t.Fatalf("already dead Stop hid %s failure", kind)
 			}
+			if kind != "clean" {
+				if got := StopFailureCategory(err); got != wantCategory {
+					t.Fatalf("category = %q, want %q (err %v)", got, wantCategory, err)
+				}
+			}
 		})
+	}
+}
+
+func TestStopFailureCategoryIsFiniteAndPreservesCause(t *testing.T) {
+	want := StopFailureProcessWaitTimeout
+	err := &stopFailure{category: want, err: fmt.Errorf("private detail: %w", context.DeadlineExceeded)}
+	if got := StopFailureCategory(err); got != want {
+		t.Fatalf("category = %q, want %q", got, want)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("typed failure did not preserve wrapped cause")
+	}
+	if got := StopFailureCategory(errors.New("password=private")); got != StopFailureUnknown {
+		t.Fatalf("unknown error mapped to %q", got)
+	}
+	if got := StopFailureCategory(&stopFailure{category: StopFailureCode("raw private text"), err: errors.New("x")}); got != StopFailureUnknown {
+		t.Fatalf("malformed category mapped to %q", got)
+	}
+	var nilFailure *stopFailure
+	if got := StopFailureCategory(nilFailure); got != StopFailureUnknown {
+		t.Fatalf("typed nil category mapped to %q", got)
+	}
+}
+
+func TestStopInitialProbeFailureIsClassified(t *testing.T) {
+	s, err := New(Config{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := launcher.CaptureIdentity("test", os.Getpid(), domain.LaunchSpec{Executable: exe, WorkingDir: cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity.WorkingDir = filepath.Dir(cwd)
+	err = s.Stop(context.Background(), identity)
+	if err == nil || StopFailureCategory(err) != StopFailureInitialProbe {
+		t.Fatalf("Stop err=%v category=%q", err, StopFailureCategory(err))
 	}
 }
 
@@ -185,6 +323,18 @@ func TestStopDeliveryFailureNeedsMatchingCleanFinalMetadata(t *testing.T) {
 			}
 			if kind != "clean" && err == nil {
 				t.Fatal("failed or mismatched completion was accepted")
+			}
+			if kind != "clean" {
+				want := StopFailureControlLostMetadata
+				if kind == "forced" {
+					want = StopFailureControlLostForced
+				}
+				if got := StopFailureCategory(err); got != want {
+					t.Fatalf("category = %q, want %q", got, want)
+				}
+				if !errors.Is(err, deliveryErr) {
+					t.Fatal("lost response diagnostic dropped the control error cause")
+				}
 			}
 		})
 	}

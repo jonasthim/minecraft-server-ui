@@ -20,6 +20,76 @@ type Config struct {
 	DataDir, Executable string
 	StopTimeout         time.Duration
 }
+
+// StopFailureCode is a finite, safe classification of a failed Stop.
+// StopFailureUnknown means the error did not originate from a classified stop
+// path. Callers must not log or expose the error text as a substitute.
+type StopFailureCode string
+
+const (
+	StopFailureUnknown                   StopFailureCode = "unknown"
+	StopFailureLockWait                  StopFailureCode = "lock_wait_failed"
+	StopFailureInitialProbe              StopFailureCode = "initial_probe_failed"
+	StopFailureProcessProbe              StopFailureCode = "process_probe_failed"
+	StopFailureProcessWaitTimeout        StopFailureCode = "process_wait_timeout"
+	StopFailureAdmissionWaitTimeout      StopFailureCode = "admission_wait_timeout"
+	StopFailureContextCanceled           StopFailureCode = "context_canceled"
+	StopFailureInspection                StopFailureCode = "inspection_failed"
+	StopFailureMissingFinalMetadata      StopFailureCode = "missing_final_metadata"
+	StopFailureForcedTermination         StopFailureCode = "forced_termination"
+	StopFailureWatchdogFailure           StopFailureCode = "watchdog_failure"
+	StopFailureUncleanExit               StopFailureCode = "unclean_exit"
+	StopFailureControlResponseLost       StopFailureCode = "control_response_lost_unclassified"
+	StopFailureControlLostProbe          StopFailureCode = "control_response_lost_process_probe_failed"
+	StopFailureControlLostProcessTimeout StopFailureCode = "control_response_lost_process_wait_timeout"
+	StopFailureControlLostAdmission      StopFailureCode = "control_response_lost_admission_wait_timeout"
+	StopFailureControlLostInspection     StopFailureCode = "control_response_lost_inspection_failed"
+	StopFailureControlLostMetadata       StopFailureCode = "control_response_lost_missing_final_metadata"
+	StopFailureControlLostForced         StopFailureCode = "control_response_lost_forced_termination"
+	StopFailureControlLostWatchdog       StopFailureCode = "control_response_lost_watchdog_failure"
+	StopFailureControlLostUnclean        StopFailureCode = "control_response_lost_unclean_exit"
+)
+
+type stopFailure struct {
+	category StopFailureCode
+	err      error
+}
+
+func (e *stopFailure) Error() string { return e.err.Error() }
+func (e *stopFailure) Unwrap() error { return e.err }
+
+// StopFailureCategory returns only a fixed allowlisted category. Raw error
+// text is deliberately unavailable through this API.
+func StopFailureCategory(err error) StopFailureCode {
+	var failure *stopFailure
+	if !errors.As(err, &failure) {
+		return StopFailureUnknown
+	}
+	if failure == nil {
+		return StopFailureUnknown
+	}
+	switch failure.category {
+	case StopFailureLockWait, StopFailureInitialProbe, StopFailureProcessProbe,
+		StopFailureProcessWaitTimeout, StopFailureAdmissionWaitTimeout,
+		StopFailureContextCanceled, StopFailureInspection, StopFailureMissingFinalMetadata,
+		StopFailureForcedTermination, StopFailureWatchdogFailure, StopFailureUncleanExit,
+		StopFailureControlResponseLost, StopFailureControlLostProbe,
+		StopFailureControlLostProcessTimeout, StopFailureControlLostAdmission,
+		StopFailureControlLostInspection, StopFailureControlLostMetadata,
+		StopFailureControlLostForced, StopFailureControlLostWatchdog, StopFailureControlLostUnclean:
+		return failure.category
+	default:
+		return StopFailureUnknown
+	}
+}
+
+func wrapStopFailure(category StopFailureCode, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &stopFailure{category: category, err: err}
+}
+
 type Observation struct {
 	State          domain.InstanceState
 	ProcessRunning bool
@@ -250,7 +320,7 @@ func (s *Supervisor) ReleaseSaveLease(ctx context.Context, id domain.ProcessIden
 func (s *Supervisor) Stop(ctx context.Context, id domain.ProcessIdentity) error {
 	unlock, err := s.lock(ctx, id.InstanceID)
 	if err != nil {
-		return err
+		return wrapStopFailure(StopFailureLockWait, err)
 	}
 	defer unlock()
 	return s.stop(ctx, id)
@@ -258,7 +328,7 @@ func (s *Supervisor) Stop(ctx context.Context, id domain.ProcessIdentity) error 
 func (s *Supervisor) stop(ctx context.Context, id domain.ProcessIdentity) error {
 	alive, err := s.probe(ctx, id)
 	if err != nil {
-		return err
+		return wrapStopFailure(StopFailureInitialProbe, err)
 	}
 	if !alive {
 		wait, cancel := context.WithTimeout(ctx, s.cfg.StopTimeout+10*time.Second)
@@ -282,18 +352,57 @@ func (s *Supervisor) reconcileStopDeliveryFailure(ctx context.Context, id domain
 	if err := s.waitExit(wait, id); err == nil {
 		return nil
 	} else {
-		return domain.Wrap(domain.CodeUnavailable, "stop delivery failed and clean completion was not confirmed", errors.Join(deliveryErr, err))
+		category := stopControlLostCategory(StopFailureCategory(err))
+		return wrapStopFailure(category, domain.Wrap(domain.CodeUnavailable, "stop delivery failed and clean completion was not confirmed", errors.Join(deliveryErr, err)))
 	}
+}
+
+func stopControlLostCategory(inner StopFailureCode) StopFailureCode {
+	switch inner {
+	case StopFailureProcessProbe:
+		return StopFailureControlLostProbe
+	case StopFailureProcessWaitTimeout:
+		return StopFailureControlLostProcessTimeout
+	case StopFailureAdmissionWaitTimeout:
+		return StopFailureControlLostAdmission
+	case StopFailureInspection:
+		return StopFailureControlLostInspection
+	case StopFailureMissingFinalMetadata:
+		return StopFailureControlLostMetadata
+	case StopFailureForcedTermination:
+		return StopFailureControlLostForced
+	case StopFailureWatchdogFailure:
+		return StopFailureControlLostWatchdog
+	case StopFailureUncleanExit:
+		return StopFailureControlLostUnclean
+	default:
+		return StopFailureControlResponseLost
+	}
+}
+
+func stopWaitContextFailure(err error, lastObservedAlive bool) error {
+	if errors.Is(err, context.Canceled) {
+		return wrapStopFailure(StopFailureContextCanceled, err)
+	}
+	if lastObservedAlive {
+		return wrapStopFailure(StopFailureProcessWaitTimeout, err)
+	}
+	return wrapStopFailure(StopFailureAdmissionWaitTimeout, err)
 }
 
 func (s *Supervisor) waitExit(ctx context.Context, id domain.ProcessIdentity) error {
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
+	lastObservedAlive := true
 	for {
 		alive, err := s.probe(ctx, id)
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return stopWaitContextFailure(ctx.Err(), lastObservedAlive)
+			}
+			return wrapStopFailure(StopFailureProcessProbe, err)
 		}
+		lastObservedAlive = alive
 		if !alive {
 			// Wait for launcher bookkeeping/lock release as well as the JVM itself.
 			release, e := launcher.AcquireAdmission(s.cfg.DataDir, id.InstanceID)
@@ -301,19 +410,19 @@ func (s *Supervisor) waitExit(ctx context.Context, id domain.ProcessIdentity) er
 				release()
 				o, e := s.Inspect(ctx, id)
 				if e != nil {
-					return e
+					return wrapStopFailure(StopFailureInspection, e)
 				}
 				if o.Exit != nil && o.Exit.Forced {
-					return domain.E(domain.CodeInternal, "JVM required forced termination")
+					return wrapStopFailure(StopFailureForcedTermination, domain.E(domain.CodeInternal, "JVM required forced termination"))
 				}
 				if o.Exit == nil || o.Exit.ExitedAt.IsZero() {
-					return domain.E(domain.CodeInternal, "JVM exited without final launcher exit metadata")
+					return wrapStopFailure(StopFailureMissingFinalMetadata, domain.E(domain.CodeInternal, "JVM exited without final launcher exit metadata"))
 				}
 				if o.Exit.WatchdogError != "" {
-					return domain.E(domain.CodeInternal, "launcher reported a control or save recovery failure")
+					return wrapStopFailure(StopFailureWatchdogFailure, domain.E(domain.CodeInternal, "launcher reported a control or save recovery failure"))
 				}
 				if !o.Exit.Deliberate || o.Exit.ExitCode != 0 {
-					return domain.E(domain.CodeInternal, "JVM completion was not a clean deliberate stop")
+					return wrapStopFailure(StopFailureUncleanExit, domain.E(domain.CodeInternal, "JVM completion was not a clean deliberate stop"))
 				}
 
 				return nil
@@ -321,7 +430,7 @@ func (s *Supervisor) waitExit(ctx context.Context, id domain.ProcessIdentity) er
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return stopWaitContextFailure(ctx.Err(), lastObservedAlive)
 		case <-tick.C:
 		}
 	}

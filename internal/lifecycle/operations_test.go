@@ -322,7 +322,16 @@ func TestStopVerificationFailureAndEmergencyNativeFailureAreHonest(t *testing.T)
 	if result.State != domain.JobFailed || !n.running || n.stops != 0 {
 		t.Fatalf("normal stop bypassed missing console: %+v native=%+v", result, n)
 	}
-	n.stopErr = errors.New("native graceful completion unavailable")
+	classifiedSupervisor, err := supervisor.New(supervisor.Config{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	n.stopErr = classifiedSupervisor.Stop(canceled, domain.ProcessIdentity{InstanceID: "test"})
+	if supervisor.StopFailureCategory(n.stopErr) != supervisor.StopFailureLockWait {
+		t.Fatalf("test error was not classified: %v", n.stopErr)
+	}
 	job, err = s.Enqueue(ctx, u, "test", Request{Operation: "stop", Emergency: true, Confirmation: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -330,6 +339,22 @@ func TestStopVerificationFailureAndEmergencyNativeFailureAreHonest(t *testing.T)
 	result = waitJob(t, s, job)
 	if result.State != domain.JobFailed || !n.running || n.stops != 1 {
 		t.Fatalf("native failure misreported: %+v native=%+v", result, n)
+	}
+	logs, err := s.queue.Logs(ctx, job.ID, 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, line := range logs {
+		if line.Message == "Native stop diagnostic: lock_wait_failed." {
+			count++
+		}
+		if strings.Contains(line.Message, "context canceled") {
+			t.Fatalf("raw cause leaked to job log: %q", line.Message)
+		}
+	}
+	if count != 1 {
+		t.Fatalf("got %d fixed stop diagnostic log entries: %+v", count, logs)
 	}
 }
 func TestStartedProcessWithoutReadinessRemainsRunningAndReportsIt(t *testing.T) {

@@ -70,3 +70,37 @@ the authority for success. Root independently reran both packages with race
 detection and vet; both passed. No retry, forced termination, or restart was
 added. Source acceptance does not establish the cause of the hosted failure;
 the next installed-game run must still pass stop and restore on each host.
+
+## Run 39046816923 and bounded stop-failure evidence
+
+Run `39046816923` at `cdf5dc2f2e35b6f364fdf37d2f3196ba21e6158c` again failed
+both hosted game jobs in `deliberate_stop_restore`, with phase
+`stopping_process` and public job diagnostic `native_stop_unclean`. The retained
+Linux and Windows summaries now both contain available launcher diagnostics:
+the recorded identity matches, exit metadata is present with a nonzero exit
+time, the stop is deliberate, `forced=false`, watchdog recovery is absent, and
+the exit code is zero with operator reason. The process was stopped on both
+hosts. These observations still do not identify which internal `Stop` check
+returned the failure, and they do not establish a new source-level cause.
+
+To make the next run useful, `Supervisor.Stop` now preserves an internal typed
+failure category across its existing error paths. Categories cover initial
+lock/probe failures, process-wait and admission-wait timeouts, probe/inspection
+errors, missing final metadata, forced termination, watchdog failure, and
+unclean exit. A lost control response has a finite explicit category for its
+completion failure. The accessor returns only allowlisted codes and unknown
+errors map to `unknown`; wrapped causes remain available to Go callers through
+`errors.Is`/`errors.As` but are never included in the new journal message.
+Lifecycle logs one fixed authored category message under its bounded cleanup
+context and retains the prior generic public failure. The qualification client
+classifies only exact authored messages; suffixes and arbitrary messages remain
+unclassified. No retry, deadline, completion gate, or success condition changed.
+
+Focused tests cover actual timeout and final-metadata/forced branches, lost
+control response category retention and cause preservation, unknown or malformed
+category rejection, and exact-message qualification parsing with negative
+suffix cases. Already-expired and canceled contexts are classified consistently
+even when the probe sees them before the wait loop's select. This source
+instrumentation is intended to identify a later failure stage; it does not
+convert run `39046816923` into a pass or make any claim about its underlying
+cause.

@@ -331,6 +331,10 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
             ([{"message": "Lifecycle managed java verification failed; inspect job phase and current process state before retrying."}], ["managed_java_verification_failed"]),
             ([{"message": "Lifecycle process identity failed; inspect job phase and current process state before retrying."}], ["process_identity_failed"]),
             ([{"message": "Native stop did not complete cleanly; inspect current process state and launcher recovery details."}], ["native_stop_unclean"]),
+            ([{"message": "Native stop diagnostic: process_wait_timeout."}], ["stop_process_wait_timeout"]),
+            ([{"message": "Native stop diagnostic: control_response_lost_missing_final_metadata."}], ["stop_control_response_lost_missing_final_metadata"]),
+            ([{"message": "Native stop diagnostic: process_wait_timeout. password=private"}], ["unclassified"]),
+            ([{"message": "Native stop diagnostic: arbitrary_private_error."}], ["unclassified"]),
             ([{"message": "Native stop did not complete cleanly; inspect current process state and launcher recovery details. private"}], ["unclassified"]),
         ]
         for logs, expected in cases:
