@@ -52,6 +52,49 @@ function Assert-ServiceIdentity([string]$Name, [string]$ExpectedSid, [string]$Ex
  Assert-True ($null -ne $service -and $service.PathName -ceq $ExpectedPath) 'SCM executable binding differs.'
  Assert-True ((Resolve-ServiceAccountSid $service.StartName) -eq $ExpectedSid) 'SCM account SID differs.'
 }
+$script:permissionSnapshots = [Collections.Generic.List[object]]::new()
+function Write-PermissionSummary([string]$Phase) {
+ if ($Phase -notin @('before-install','after-install','failure-before-cleanup')) { throw 'Fixed diagnostic phase required.' }
+ # Metadata only for the exact bootstrap paths/ancestors inspected by the
+ # shipping guard. No file contents, SDDL, credentials or arbitrary paths.
+ $paths = @(
+  'C:\ProgramData\MinecraftUIUpdate','C:\ProgramData','C:\',
+  'C:\ProgramData\MinecraftUIUpdate\bootstrap-capability.json',
+  'C:\ProgramData\MinecraftUIUpdate\stages',
+  'C:\Program Files\MinecraftUI','C:\Program Files',
+  'C:\Program Files\MinecraftUI\minecraft-ui.exe',
+  'C:\Program Files\MinecraftUI\selfupdate.exe'
+ )
+ $records = @()
+ foreach ($path in $paths) {
+  $record = @{path=$path}
+  try {
+   if (-not (Test-Path -LiteralPath $path)) { $record.exists=$false; $records += $record; continue }
+   $item = Get-Item -LiteralPath $path -Force
+   $acl = Get-Acl -LiteralPath $path
+   $record.exists = $true
+   $record.owner_sid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+   $record.directory = $item.PSIsContainer
+   $record.reparse_point = (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+   $record.inheritance_protected = $acl.AreAccessRulesProtected
+   $aces = @()
+   foreach ($entry in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+    $aces += @{
+     principal_sid = $entry.IdentityReference.Value
+     rights_mask = ([int64]$entry.FileSystemRights -band 0xffffffffL)
+     access_type = [int]$entry.AccessControlType
+     inherited = $entry.IsInherited
+     inheritance_flags = [int]$entry.InheritanceFlags
+     propagation_flags = [int]$entry.PropagationFlags
+    }
+   }
+   $record.aces = $aces
+  } catch { $record.metadata_read_failed = $true }
+  $records += $record
+ }
+ $script:permissionSnapshots.Add(@{phase=$Phase;paths=$records})
+ ConvertTo-Json -Depth 7 -InputObject ($script:permissionSnapshots.ToArray()) | Set-Content (Join-Path $OutputDirectory 'permission-summary-windows.json')
+}
 try {
  New-Item -ItemType Directory -Path $scratch | Out-Null
  $scratchCreated = $true
@@ -91,8 +134,10 @@ try {
  $rightGranted = $true
  Assert-True (-not (Get-LocalGroupMember -SID 'S-1-5-32-544' | Where-Object { $_.SID.Value -eq $sid })) 'Manager account is an administrator.'
  $stage = 'shipping installer'
+ Write-PermissionSummary before-install
  $installStarted = $true
  & (Join-Path $PSScriptRoot '..\windows\install.ps1') -Binary $InitialBinary -Credential $credential -UpdaterBinary $UpdaterBinary
+ Write-PermissionSummary after-install
  Assert-ServiceIdentity MinecraftUI $sid '"C:\Program Files\MinecraftUI\minecraft-ui.exe" serve'
  Assert-ServiceIdentity MinecraftUIUpdateProbe $sid '"C:\Program Files\MinecraftUI\minecraft-ui-probe.exe" update-schema-service'
  Assert-ServiceIdentity MinecraftUIUpdater 'S-1-5-18' '"C:\Program Files\MinecraftUI\selfupdate.exe" service'
@@ -145,6 +190,7 @@ try {
  Write-Output 'PASS installed Windows genuine activation, negative health rollback and interrupted candidate recovery'
 } catch {
  $failed = $true
+ try { Write-PermissionSummary failure-before-cleanup } catch { Write-Output 'FAIL fixed-path permission diagnostics' }
  Write-Output ('FAIL installed updater at ' + $stage + ' (' + $_.Exception.GetType().Name + ')')
  if ($script:assertionFailure) { Write-Output ('Assertion: ' + $script:assertionFailure) }
 } finally {

@@ -6,6 +6,8 @@ cleanup operands are evaluated. Every absolute path is mapped under TemporaryDir
 before shell/file operations; no service/account commands are extracted.
 """
 import re
+import importlib.util
+import json
 import shlex
 import subprocess
 import tempfile
@@ -75,6 +77,54 @@ class UpdaterPathsTest(unittest.TestCase):
     def test_empty_fixture_passes_refusal_and_final_absence(self):
         self.assertEqual(self.run_fragment(self.guard).returncode, 0)
         self.assertEqual(self.run_fragment(self.final).returncode, 0)
+
+    def prefix_functions(self):
+        prefix = self.root / "borrowed-bin"
+        prefix.mkdir()
+        functions = []
+        for name in ("prepare_hosted_prefix_mode", "restore_hosted_prefix"):
+            body = re.search(r"^" + name + r"\(\) \{\n.*?^\}", self.source, re.M | re.S).group()
+            functions.append(body.replace("/usr/local/bin", shlex.quote(str(prefix))))
+        return prefix, "\n".join(functions)
+
+    def test_borrowed_prefix_restores_exact_mode_and_preserves_other_bits(self):
+        prefix, functions = self.prefix_functions()
+        for original in (0o777, 0o2777, 0o1777, 0o755):
+            with self.subTest(original=oct(original)):
+                prefix.chmod(original)
+                script = "set -eu\nborrowed_bin_prepared=0\n" + functions + "\nprepare_hosted_prefix_mode\n"
+                script += 'printf "%s\\n" "$(stat -c %a ' + shlex.quote(str(prefix)) + ')"\nrestore_hosted_prefix\n'
+                result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(int(result.stdout.strip(), 8), original & ~0o22)
+                self.assertEqual(prefix.stat().st_mode & 0o7777, original)
+
+    def test_borrowed_prefix_restore_refuses_changed_directory_binding(self):
+        prefix, functions = self.prefix_functions()
+        target = self.root / "different-directory"
+        target.mkdir(mode=0o777)
+        target.chmod(0o777)
+        script = "set -eu\nborrowed_bin_prepared=0\n" + functions + "\nprepare_hosted_prefix_mode\n"
+        script += "mv " + shlex.quote(str(prefix)) + " " + shlex.quote(str(self.root / "old-binding")) + "\n"
+        script += "ln -s " + shlex.quote(str(target)) + " " + shlex.quote(str(prefix)) + "\nrestore_hosted_prefix\n"
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(target.stat().st_mode & 0o7777, 0o777, "restore chmod followed a replaced binding")
+
+    def test_permission_diagnostics_emit_only_fixed_metadata(self):
+        path = HARNESS.with_name("updater_permissions.py")
+        spec = importlib.util.spec_from_file_location("updater_permissions", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        fixture = self.root / "private-fixture"
+        fixture.write_text("credential-like fixture contents must never be reported")
+        module.PATHS = (str(fixture), str(self.root / "missing"))
+        report = module.snapshot("before-prefix-provisioning")
+        self.assertEqual(report["paths"][0]["mode"], format(fixture.stat().st_mode & 0o7777, "o"))
+        self.assertFalse(report["paths"][1]["exists"])
+        self.assertNotIn(fixture.read_text(), json.dumps(report))
+        allowed = {"path", "exists", "uid", "gid", "mode", "directory", "symlink", "metadata_read_failed"}
+        self.assertTrue(all(set(record) <= allowed for record in report["paths"]))
 
 
 if __name__ == "__main__":

@@ -38,10 +38,43 @@ done
 [[ -z $(systemctl list-units --all --plain --no-legend --no-pager 'minecraft-ui-update@*.service') ]] || { echo 'Refusing preexisting updater operation.' >&2; exit 2; }
 scratch=$(mktemp -d /tmp/minecraft-updater-acceptance.XXXXXX)
 owned=0
+borrowed_bin_mode=
+borrowed_bin_identity=
+borrowed_bin_prepared=0
+record_permissions() {
+    python3 "$here/updater_permissions.py" "$output/permission-summary-linux.json" "$1"
+}
+provision_hosted_prefix() {
+    # Explicit disposable-image provisioning: never silently change a production
+    # prefix or relax the shipping updater's root-protected-ancestry requirement.
+    local parent mode
+    for parent in / /usr /usr/local /usr/local/bin; do
+        [[ -d $parent && ! -L $parent && $(stat -c '%u' "$parent") == 0 ]] || return 1
+        mode=$(stat -c '%a' "$parent")
+        if [[ $parent != /usr/local/bin ]]; then [[ $((8#$mode & 0022)) == 0 ]] || return 1; fi
+    done
+    prepare_hosted_prefix_mode
+}
+prepare_hosted_prefix_mode() {
+    local mode
+    borrowed_bin_mode=$(stat -c '%a' /usr/local/bin)
+    borrowed_bin_identity=$(stat -c '%d:%i:%u:%g' /usr/local/bin)
+    borrowed_bin_prepared=1
+    printf -v mode '%o' "$((8#$borrowed_bin_mode & ~0022))"
+    chmod "$mode" /usr/local/bin
+    [[ $(stat -c '%a' /usr/local/bin) == "$mode" && $(stat -c '%d:%i:%u:%g' /usr/local/bin) == "$borrowed_bin_identity" ]]
+}
+restore_hosted_prefix() {
+    [[ $borrowed_bin_prepared == 1 ]] || return 0
+    [[ -d /usr/local/bin && ! -L /usr/local/bin && $(stat -c '%d:%i:%u:%g' /usr/local/bin) == "$borrowed_bin_identity" ]] || return 1
+    chmod "$borrowed_bin_mode" /usr/local/bin || return 1
+    [[ $(stat -c '%a' /usr/local/bin) == "$borrowed_bin_mode" && $(stat -c '%d:%i:%u:%g' /usr/local/bin) == "$borrowed_bin_identity" ]]
+}
 cleanup() {
     local status=$?
     trap - EXIT
     set +e
+    record_permissions before-cleanup || status=1
     if [[ $owned == 1 ]]; then
         # Fixed fields only. No raw journals, challenges, configs, keys or DB.
         systemctl show minecraft-ui.service -p User -p Group -p MainPID -p ActiveState -p SubState -p Result -p ExecMainStatus -p NoNewPrivileges -p ProtectSystem -p ProtectHome -p ProtectControlGroups -p PrivateTmp >"$output/manager-unit-summary.txt"
@@ -63,9 +96,11 @@ cleanup() {
         id minecraft-ui &>/dev/null && status=1
         getent group minecraft-ui &>/dev/null && status=1
     fi
+    restore_hosted_prefix || status=1
+    record_permissions after-prefix-restoration || status=1
     rm -rf "$scratch"
     printf '{"exit_code":%s,"scope":"installed-updater-fixture-acquisition","cleanup_checked":true}\n' "$status" >"$output/result.json"
-    for report in result.json acceptance-summary.json interruption-boundary.json api-assertions.txt manager-unit-summary.txt updater-unit-summary.txt journal-summary.json input-summary.txt; do
+    for report in result.json acceptance-summary.json interruption-boundary.json api-assertions.txt manager-unit-summary.txt updater-unit-summary.txt journal-summary.json input-summary.txt permission-summary-linux.json; do
         [[ ! -f $output/$report ]] || chmod 0644 "$output/$report"
     done
     exit "$status"
@@ -82,6 +117,9 @@ trap cleanup EXIT
     for binary in "$initial" "$success" "$updater" "$qualifier" "$negative" "$peer_success" "$peer_negative"; do sha256sum "$binary" | cut -d' ' -f1; done
 } >"$output/input-summary.txt"
 "$qualifier" prepare --success "$success" --negative "$negative" --peer-success "$peer_success" --peer-negative "$peer_negative" --license "$repo/LICENSE" --notices "$repo/THIRD_PARTY_NOTICES.txt" --out "$scratch/fixtures"
+record_permissions before-prefix-provisioning
+provision_hosted_prefix
+record_permissions after-prefix-provisioning
 owned=1
 bash "$repo/deploy/linux/install.sh" "$initial" "$updater"
 install -o root -g root -m 0644 "$scratch/fixtures/public-trust.json" /etc/minecraft-ui/update-trust.json

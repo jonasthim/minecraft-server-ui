@@ -195,3 +195,102 @@ three tests pass (`Ran 3 tests ... OK`). `bash -n
 deploy/qualification/linux-updater.sh` and scoped whitespace checks also pass.
 No broad unchanged suites or native installations were repeated. Hosted updater
 qualification remains pending integrator review and execution.
+
+## First hosted updater run — actual failure, 2026-10-17
+
+[Run39030086733](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39030086733)
+at `33c256a1c685e0b24f525309cdd9d09fc4697cfa` (embedded schema19) passed both native
+input-build jobs, then **failed all three installed jobs at shipping installer
+bootstrap, before activation**. The source approval and local fixture results
+above do not override this failed native result.
+
+| Actual runner | Image version | Result before activation |
+| --- | --- | --- |
+| Ubuntu22.04/systemd249.11-0ubuntu3.22 | `ubuntu22 20261012.322.1` | Bootstrap refused: `native updater directory is not root-owned and protected` |
+| Ubuntu24.04/systemd255.4-1ubuntu8.17 | `ubuntu24 20261012.334.1` | Same protected-directory refusal |
+| WindowsServer2022 | `win22 20261012.333.1` | Bootstrap refused: `native update path is writable by an untrusted principal` |
+
+The scrubbed artifacts were inspected read-only using `gh run download`.
+All three retain failed results with cleanup checked; there are no successful
+activation summaries. Windows records only `MinecraftUI`, stopped with PID0
+and SCM exit1077 (not started); updater/probe creation and administrator setup
+were not reached. No game/EULA/release action occurred.
+
+### Linux cause and explicit hosted-image provisioning
+
+The Linux bootstrap opens protected state first and then the fixed executable
+directory `/usr/local/bin`. The matching official image build sources explicitly
+execute `sudo chmod -R 777 /usr/local/bin`:
+
+- Ubuntu22 tag `ubuntu22/20261012.322`, source commit
+  `f4ad24e10727c119f9f86675a60808ccc241774d`:
+  [install-nodejs.sh](https://github.com/actions/runner-images/blob/f4ad24e10727c119f9f86675a60808ccc241774d/images/ubuntu/scripts/build/install-nodejs.sh).
+- Ubuntu24 tag `ubuntu24/20261012.334`, source commit
+  `7e7dc1bcc0ef464e5e315a2b4c33609590c6cffe`:
+  [install-nodejs.sh](https://github.com/actions/runner-images/blob/7e7dc1bcc0ef464e5e315a2b4c33609590c6cffe/images/ubuntu/scripts/build/install-nodejs.sh).
+
+The installer protects its own executable but does not change that shared
+directory. A writable executable parent is unsafe: another account could
+replace directory entries despite the installed file's root ownership. The
+shipping `protectedInfo` rejection must remain intact. The first run did not
+capture the rejected path's actual metadata; the exact matching image sources
+identify `/usr/local/bin` as the expected rejecting prefix, and new fixed-path
+diagnostics will verify the actual before/after metadata on the next run.
+
+Root explicitly authorized this narrow disposable-host provisioning exception:
+after hosted/root/fresh-install checks and before invoking the shipping
+installer, verify real root-owned `/`, `/usr`, `/usr/local`, `/usr/local/bin`
+ancestry (other ancestors must already be protected), record original
+owner/group/mode and directory identity, and remove only group/other write bits
+from `/usr/local/bin`. Preserve all other permission bits. Cleanup restores the
+exact original mode only if directory identity/owner/group remain unchanged,
+asserts restoration, and reports failure if restoration cannot be verified.
+This borrowed-directory mode change is documented separately from cleanup of
+owned application state. No unrelated owner/group/ACL is changed.
+
+The result will therefore qualify installation **after explicit hosted-image
+prefix provisioning**, not out-of-box self-update on a writable prefix. No
+shipping installer or native protection guard has been modified.
+
+### Windows diagnostic gap — no product correction yet
+
+Windows bootstrap first calls `openProtectedRoot` on
+`C:\ProgramData\MinecraftUIUpdate`, walking through `C:\ProgramData` and `C:\`
+before validating `bootstrap-capability.json`; it later checks the executable
+ancestry. The initial artifacts contain no path/DACL metadata, so the exact
+rejecting path/principal/mask is **not yet established**. The preceding
+`bootstrap-capability.json` ownership log does not prove that file caused the
+refusal.
+
+The shipping guard treats rights bit2 as a forbidden write on every path. For a
+directory, bit2 means create-file; existing-child replacement and delete-child
+rights are separate. A standard create-only ancestor ACE is a plausible
+explanation, pending actual evidence. See Microsoft's
+[file access constants](https://learn.microsoft.com/en-us/windows/win32/fileio/file-access-rights-constants)
+and [file security semantics](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights).
+No Windows product fix or ancestor permission change is authorized or made.
+Any later correction must retain protected leaf/file checks and existing
+replacement, deletion, DACL, owner, reparse and binding defenses.
+
+Both owned harnesses now emit metadata-only permission reports for fixed native
+paths/ancestors, including a failure snapshot before cleanup. Linux emits
+`permission-summary-linux.json` with UID/GID/mode/type; Windows emits
+`permission-summary-windows.json` with owner/principal SIDs, numeric rights,
+allow/deny type, inheritance/propagation flags and reparse status. No file
+contents, SDDL, credentials or arbitrary input paths are included. These files
+match the existing scrubbed artifact uploader's JSON allowlist.
+
+### Narrow local verification of the diagnostic/provisioning packet
+
+`python3 -B deploy/qualification/updater_paths_test.py -v` passes all six tests.
+The new tests remap the mode lifecycle to temporary directories: `0777`,
+`02777`, `01777`, and `0755` lose only group/other write bits and return to
+their exact original modes; a changed/symlink directory binding refuses
+restoration without touching its target. A temporary diagnostic fixture proves
+that only allowlisted metadata is emitted, never file contents. No canonical
+host path, service or account is changed by these tests.
+
+Bash syntax, Python3.10 grammar and scoped whitespace checks pass. New Windows
+PowerShell diagnostics still require actual hosted parsing/execution. The
+diagnostic rerun remains an integrator dispatch/review gate; no successful
+installed updater evidence has yet been obtained.
