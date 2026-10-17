@@ -1,0 +1,113 @@
+"""Updater HTTP client fixtures only; no socket, installed service or native operation.
+
+The in-memory HTTP transport checks session/header construction, not product
+authorization. Shipping CSRF and installed activation retain separate evidence.
+"""
+import contextlib
+from email.message import Message
+import io
+import json
+import unittest
+import urllib.request
+import urllib.response
+
+import updater_api as updater
+
+
+class SessionTransport(urllib.request.BaseHandler):
+    handler_order = 100
+
+    def __init__(self):
+        self.requests = []
+        self.accepted = 0
+        self.reject_apply = False
+        self.expose_token = True
+
+    def http_open(self, request):
+        cookie = request.get_header("Cookie")
+        token = {"fixture-session=A": "fixture-private-csrf-A",
+                 "fixture-session=B": "fixture-private-csrf-B"}[cookie]
+        path = request.selector
+        self.requests.append((path, cookie, request.get_header("X-csrf-token")))
+        if path == "/api/v1/auth/me":
+            status, body = 200, {"user": {"id": 1, "role": "admin"}}
+            if self.expose_token:
+                body["csrf_token"] = token
+        elif path == "/api/v1/system/update/apply":
+            if json.loads(request.data) != {"stage_id": "a" * 64, "confirm": True}:
+                raise AssertionError("Activation input differs")
+            if request.get_header("X-csrf-token") == token and not self.reject_apply:
+                self.accepted += 1
+                status, body = 202, {"status": "accepted"}
+            else:
+                status, body = 403, {"error": "fixture-private-rejection-body"}
+        else:
+            raise AssertionError("Unexpected fixture route; no network fallback")
+        headers = Message()
+        headers["Content-Type"] = "application/json"
+        response = urllib.response.addinfourl(io.BytesIO(json.dumps(body).encode()), headers, request.full_url, status)
+        response.msg = "fixture HTTP response"
+        return response
+
+
+class UpdaterClientTests(unittest.TestCase):
+    def session(self, cookie="fixture-session=A"):
+        session = updater.client()
+        transport = SessionTransport()
+        session.add_handler(transport)
+        session.addheaders = [("Cookie", cookie)]
+        return session, transport
+
+    def test_missing_and_wrong_session_csrf_rejected(self):
+        session, transport = self.session()
+        for token in (None, "fixture-private-csrf-B"):
+            session.addheaders = [("Cookie", "fixture-session=A")]
+            if token is not None:
+                session.addheaders.append(("X-CSRF-Token", token))
+            updater.request(session, "/api/v1/system/update/apply", {"stage_id": "a" * 64, "confirm": True}, 403)
+        self.assertEqual(transport.accepted, 0)
+
+    def test_apply_fetches_actual_session_token_and_sends_it_only_in_memory(self):
+        for cookie in ("fixture-session=A", "fixture-session=B"):
+            with self.subTest(cookie=cookie):
+                session, transport = self.session(cookie)
+                session.addheaders.append(("x-CsRf-ToKeN", "stale-private-token"))
+                original = list(session.addheaders)
+                with contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(io.StringIO()) as stderr:
+                    result = updater.apply_update(session, "a" * 64)
+                self.assertEqual(result, {"status": "accepted"})
+                self.assertEqual(transport.accepted, 1)
+                self.assertEqual([item[0] for item in transport.requests], ["/api/v1/auth/me", "/api/v1/system/update/apply"])
+                self.assertEqual(transport.requests[-1][1], cookie)
+                self.assertEqual(transport.requests[-1][2], "fixture-private-csrf-" + cookie[-1])
+                self.assertEqual(session.addheaders, original, "temporary token headers leaked into later client requests")
+                self.assertEqual(stdout.getvalue() + stderr.getvalue(), "")
+
+    def test_failed_apply_restores_headers_and_does_not_log_token_or_body(self):
+        session, transport = self.session()
+        # A mutation failure exercises the real request helper's fixed status
+        # diagnostic; its raw rejection body/token must remain private.
+        transport.reject_apply = True
+        session.addheaders.append(("X-CSRF-Token", "fixture-private-csrf-B"))
+        original = list(session.addheaders)
+        with contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(io.StringIO()) as stderr:
+            with self.assertRaisesRegex(RuntimeError, "unexpected HTTP status at /api/v1/system/update/apply: 403") as caught:
+                updater.apply_update(session, "a" * 64)
+        self.assertNotIn("fixture-private", str(caught.exception))
+        self.assertEqual(stdout.getvalue() + stderr.getvalue(), "")
+        self.assertEqual(transport.accepted, 0)
+        self.assertEqual(session.addheaders, original)
+
+    def test_missing_token_response_refuses_before_mutation(self):
+        session, transport = self.session()
+        transport.expose_token = False
+        original = list(session.addheaders)
+        with self.assertRaisesRegex(RuntimeError, "^session CSRF token unavailable$"):
+            updater.apply_update(session, "a" * 64)
+        self.assertEqual([item[0] for item in transport.requests], ["/api/v1/auth/me"])
+        self.assertEqual(transport.accepted, 0)
+        self.assertEqual(session.addheaders, original)
+
+
+if __name__ == "__main__":
+    unittest.main()

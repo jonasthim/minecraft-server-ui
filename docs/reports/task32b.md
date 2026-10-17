@@ -357,3 +357,33 @@ The new Windows diagnostic PowerShell actually parsed and ran on the native
 host, but installed updater activation remains unqualified on all three
 targets. This run proves Linux provisioning/restoration and identifies the next
 two blockers; it does not prove successful executable replacement or recovery.
+
+## Harness CSRF correction after rerun39033415308
+
+Only the owned updater client changed: each of its three activation mutations
+now calls `apply_update`, which obtains the current cookie session's actual
+token from `GET /api/v1/auth/me`, sends `X-CSRF-Token` for that confirmed
+activation POST, and restores the previous client headers on success or failure.
+Missing token responses fail before mutation. Tokens remain in memory; neither
+token values nor response bodies enter logging or public reports. Existing
+stage/confirmation inputs and activation/recovery assertions are preserved.
+The shared `manager_api.py` and product CSRF enforcement remain unchanged.
+
+Verification commands and results:
+
+- `python3 -B deploy/qualification/updater_api_test.py -v`: **4 tests pass**.
+  An in-memory urllib transport (no socket/service) rejects missing/wrong-session
+  tokens, verifies the freshly fetched token and original cookie are sent for
+  each of two distinct sessions, checks exact stage/confirmation input, and
+  verifies header restoration/no token or response-body logging on failure.
+  These are HTTP client construction fixtures, not native/product authorization
+  acceptance. The previously absent CSRF helper failed the new acquisition/send
+  regression before implementation.
+- `go test ./internal/auth -run '^TestHTTPRequiresCSRFAndRejectsCrossOrigin$' -count=1`:
+  **passes**, retaining actual shipping missing-token/cross-origin rejection
+  and correct-token authorization in its existing isolated HTTP handler test.
+- Python3.10 grammar and scoped whitespace checks: **pass**.
+
+No canonical host paths, services, accounts or games were touched and no broad
+unchanged suites repeated. Actual installed activation remains pending the
+reviewed combined correction and subsequent hosted rerun.

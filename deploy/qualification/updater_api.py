@@ -17,6 +17,20 @@ import time
 from manager_api import client, control, ready, request, require
 
 
+def apply_update(session, stage_id):
+    # The shipping cookie-write CSRF gate requires this exact session's token.
+    # Keep it in memory and scoped to the mutation; never put it in reports.
+    token = request(session, "/api/v1/auth/me").get("csrf_token")
+    require(isinstance(token, str) and 0 < len(token) <= 256, "session CSRF token unavailable")
+    previous = session.addheaders
+    session.addheaders = [(name, value) for name, value in previous if name.lower() != "x-csrf-token"]
+    session.addheaders.append(("X-CSRF-Token", token))
+    try:
+        return request(session, "/api/v1/system/update/apply", {"stage_id": stage_id, "confirm": True}, 202)
+    finally:
+        session.addheaders = previous
+
+
 def native(command, timeout=180):
     result = subprocess.run(command, capture_output=True, timeout=timeout)
     require(result.returncode == 0, "native updater acceptance operation failed")
@@ -187,12 +201,12 @@ def main():
         print("PASS installed updater " + label, flush=True)
         return actual
 
-    request(session, "/api/v1/system/update/apply", {"stage_id": success["id"], "confirm": True}, 202)
+    apply_update(session, success["id"])
     journal = wait_terminal(state, success["id"], "healthy")
     require(not journal["rollback_attempted"], "successful activation attempted rollback")
     after_success = preserved("genuine-success", "healthy", success_hash, first["pid"])
 
-    request(session, "/api/v1/system/update/apply", {"stage_id": negative["id"], "confirm": True}, 202)
+    apply_update(session, negative["id"])
     # Require a real running negative service/image. A probe rejection or abort
     # cannot accidentally qualify the health-failure recovery case.
     def negative_running():
@@ -205,7 +219,7 @@ def main():
     after_rollback = preserved("negative-health-rollback", "rolled_back", negative_hash, negative_process["pid"])
     require(after_success["pid"] not in installed_pids(), "prior manager process survived negative activation")
 
-    request(session, "/api/v1/system/update/apply", {"stage_id": negative["id"], "confirm": True}, 202)
+    apply_update(session, negative["id"])
     interrupted_process = wait_for(negative_running, 80, "interruption candidate boundary absent")
     # candidate is saved after verified replacement and its durability fence.
     # The unhealthy fixture holds that phase for the fixed 90s readiness gate.
