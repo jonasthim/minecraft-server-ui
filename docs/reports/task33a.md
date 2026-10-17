@@ -111,3 +111,48 @@ PASS (exit0)
 The installed .NET SDK10.0.112 also compiled the **actual** C# text extracted from `WINDOWS_SNAPSHOT_SCRIPT` in a temporary net10.0 library project. Command: `dotnet build <temporary>/Snapshot.csproj --nologo --verbosity quiet --ignore-failed-sources`; output: `Build succeeded. 0 Warning(s), 0 Error(s)` (exit0,2.98s). The SDK additionally printed a workload-verification notice; no workload changes were performed. This checks C# compilation only and does not execute Windows APIs. The temporary project and outputs were removed. `pwsh` remains unavailable locally, so hosted PowerShell parsing, actual Windows native-handle behavior and real game evidence are still required.
 
 No local privileged operations, Windows calls, services or games were executed. Nothing was staged or committed by this worker.
+
+## First hosted attempt — run39035607511
+
+[Installed Minecraft acceptance39035607511](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39035607511) ran the exact source `02b554d797e543452fb99ff7ffc66c340caae73c`, with explicit EULA acceptance and Vanilla1.21.9, on Ubuntu24.04 and WindowsServer2022. Both jobs finished **failure**. This worker monitored the existing root dispatch and did not dispatch another run.
+
+The artifact contents were read directly from the GitHub artifact ZIPs in memory, using only the workflow's allowlisted report files. Completed job logs were filtered to their fixed `PHASE`/`FAIL` messages and exit codes. No private runtime state or raw service logs were downloaded.
+
+| Host | Scrubbed artifact | Manager SHA256 | Observed result |
+|---|---|---|---|
+| Ubuntu24.04 |12101883478|`f39ae7c1e10bb9cb6a7c803de235b89407e4a263527413b806f6d0e4456a86a3`|`official_resolve_install`; job failed at `installing`; wrapper exit1|
+| WindowsServer2022 |12102186851|`e63bda82a280e6d01fb0b7ea64d69606f76290b84052ffdcf97b5f08e39b8d32`|Wrapper failed at `dependencies`; fixed catch type `ParameterBindingValidationException`; no API summary|
+
+Ubuntu evidence establishes actual native manager startup, empty-state first-admin setup, instance creation/EULA acceptance and official Vanilla resolution. The resolved server artifact was58638725bytes with published SHA1 `11e54c2081420a4d49db3007e66c80a22579ff2a`. Installation failed before phase `managed_java`, so this attempt does not establish runtime installation, server launch, client play/chunks, backup, restore or reconnect.
+
+The old Linux report retained only generic terminal state/phase. `jobs.Service` deliberately writes a generic public `job.error`; lifecycle logging also omits wrapped causes. Therefore the exact installation failure cause is **unknown** from this attempt. Source inspection places the failure before managed-runtime work, among stopped-job admission, activation recovery, preview validation and managed-service availability. A writable hosted-image `/usr/local/bin` prefix would violate the shipping supervisor's root-owned-ancestry guard, as seen in prior updater qualification, but this artifact does not record its mode. It is a plausible precondition, **not a confirmed explanation for this run**.
+
+Windows failed before firewall/account/installer/API work. The original `dependencies` stage covers Node validation and npm installation, and its catch omitted source location, so the exact throwing statement is **unknown**. No game or client qualification is implied by either failed job.
+
+## First-run diagnostic and disposable-host preparation patch
+
+Root authorized only the following harness changes; production guards and shipping code remain unchanged:
+
+- Failed API jobs now read one bounded public `/jobs/{id}/logs?after=0&limit=500` page and map **exact** known authored messages to fixed diagnostic enums. Generic lifecycle failures remain `lifecycle_failure_unspecified`; unknown text stays `unclassified`. Retrieval/bounds errors have fixed diagnostic codes and never replace the original failed job state/phase. No log text, wrapped error cause, path, URL, secret, request payload or arbitrary error body is emitted.
+- Linux records fixed filesystem permission metadata for the executable/helper/unit and their fixed ancestors in the existing `result.json`: UID/GID, mode, inode/device, existence and file type only. Snapshots bracket prefix preparation and cleanup. There are no new artifact filenames.
+- Linux ports the already reviewed updater harness's explicit disposable-image preparation: validate root ownership, directory type, no symlinks and safe ancestor modes; record the original `/usr/local/bin` mode and device/inode/UID/GID; clear only group/other write bits for the test; preserve every unrelated mode bit; then restore the exact original mode only if the original directory binding remains intact. This prepares a trusted native installation without bypassing supervisor checks. It may remove a runner precondition but does not prove the old failure's cause. Actual pre-test mode and restoration will be visible on the next reviewed hosted attempt.
+- Windows now separates `dependency_node` and `dependency_npm` and records only a fixed exception classification and bounded numeric source line. This adds diagnosis, not a speculative fix for the unknown parameter-validation cause.
+
+Deterministic source evidence:
+
+```text
+python3 -B -m unittest discover -s deploy/qualification -p game_api_test.py -v
+Diagnostic tests before implementation: Ran14; FAILED (failures=1, errors=8).
+Prefix/metadata tests before implementation: Ran17; FAILED (failures=2, errors=1).
+After both changes: Ran17; OK (0.202s).
+bash -n deploy/qualification/linux-game.sh
+PASS (exit0)
+python3 -m py_compile deploy/qualification/game_api.py deploy/qualification/game_api_test.py
+PASS (exit0)
+git diff --check -- deploy/qualification/game_api.py deploy/qualification/game_api_test.py deploy/qualification/linux-game.sh deploy/qualification/windows-game.ps1 docs/reports/task33a.md
+PASS (exit0)
+```
+
+New source fixtures verify exact classification and rejection of malicious/near-match messages, unavailable/oversized diagnostic pages, metadata-only output, mode preservation/restoration for0777/02777/01777/0755, and refusal to restore through a replaced directory binding. All prefix paths are remapped under temporary fixture directories; no privileged host prefix, native service or game was touched locally. Existing `.new` refusal/removal/final-absence tests continue to pass. `pwsh` remains unavailable locally, so the new Windows source diagnostics still require hosted PowerShell execution.
+
+This patch requires independent source review and a later integrator-owned exact-source dispatch. The failed attempt remains failed; Task33A real gameplay acceptance and the broader Task33 matrix remain open.

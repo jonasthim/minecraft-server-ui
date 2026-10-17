@@ -34,13 +34,16 @@ $rightGranted = $false
 $installStarted = $false
 $firewallCreated = $false
 $failed = $false
+$failureDiagnostic = $null
 $stage = 'dependencies'
 $binaryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Binary).Hash.ToLowerInvariant()
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('minecraft-game-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $scratch | Out-Null
 try {
+ $stage = 'dependency_node'
  & node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)'
  if ($LASTEXITCODE -ne 0) { throw 'node_version' }
+ $stage = 'dependency_npm'
  & npm ci --ignore-scripts --prefix (Join-Path $PSScriptRoot 'game-client') *> (Join-Path $scratch 'npm')
  if ($LASTEXITCODE -ne 0) { throw 'npm_ci' }
  $stage = 'firewall'
@@ -80,6 +83,11 @@ try {
  $stage = 'complete'
 } catch {
  $failed = $true
+ $failureLine = [int]$_.InvocationInfo.ScriptLineNumber
+ if ($failureLine -lt 0 -or $failureLine -gt 10000) { $failureLine = 0 }
+ $failureCode = 'unclassified'
+ if ($_.Exception -is [Management.Automation.ParameterBindingValidationException]) { $failureCode = 'parameter_binding_validation' }
+ $failureDiagnostic = @{code=$failureCode;source_line=$failureLine}
  # Fixed stage/type only: exception messages may contain arbitrary native data.
  Write-Output ('FAIL game acceptance stage=' + $stage + ' type=' + $_.Exception.GetType().Name)
 } finally {
@@ -108,6 +116,6 @@ try {
  } catch { $failed = $true; Write-Output 'FAIL account_right_cleanup' }
  try { if ($firewallCreated) { Remove-NetFirewallRule -Name MinecraftGameAcceptance } } catch { $failed = $true; Write-Output 'FAIL firewall_cleanup' }
  try { Remove-Item -LiteralPath $scratch -Recurse -Force } catch { $failed = $true; Write-Output 'FAIL private_scratch_cleanup' }
- @{scope='vanilla-1.21.9-real-headless-game';failed=$failed;last_stage=$stage;manager_sha256=$binaryHash} | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'result.json')
+ @{scope='vanilla-1.21.9-real-headless-game';failed=$failed;last_stage=$stage;manager_sha256=$binaryHash;failure_diagnostic=$failureDiagnostic} | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'result.json')
 }
 if ($failed) { exit 1 }

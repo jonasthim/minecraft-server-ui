@@ -24,15 +24,58 @@ done
 [[ $ID == ubuntu && $VERSION_ID == 24.04 && $(uname -m) == x86_64 ]] || { echo 'FAIL host_not_allowlisted' >&2; exit 2; }
 scratch=$(mktemp -d /tmp/minecraft-game-acceptance.XXXXXX)
 owned=0
+borrowed_bin_mode=
+borrowed_bin_identity=
+borrowed_bin_prepared=0
 firewall4=0
 firewall6=0
 stage=dependencies
 binary_hash=$(sha256sum "$binary")
 binary_hash=${binary_hash%% *}
+record_permissions() {
+    python3 - "$scratch/permissions.json" "$1" "$here" <<'PY'
+import json
+from pathlib import Path
+import sys
+sys.path.insert(0, sys.argv[3])
+from game_api import permission_snapshot
+path = Path(sys.argv[1])
+history = json.loads(path.read_text()) if path.exists() else []
+history.append(permission_snapshot(sys.argv[2]))
+path.write_text(json.dumps(history))
+PY
+}
+provision_hosted_prefix() {
+    # Same reviewed disposable-host preparation as the updater harness. Never
+    # relax the shipping supervisor's protected-ancestry requirement.
+    local parent mode
+    for parent in / /usr /usr/local /usr/local/bin; do
+        [[ -d $parent && ! -L $parent && $(stat -c '%u' "$parent") == 0 ]] || return 1
+        mode=$(stat -c '%a' "$parent")
+        if [[ $parent != /usr/local/bin ]]; then [[ $((8#$mode & 0022)) == 0 ]] || return 1; fi
+    done
+    prepare_hosted_prefix_mode
+}
+prepare_hosted_prefix_mode() {
+    local mode
+    borrowed_bin_mode=$(stat -c '%a' /usr/local/bin)
+    borrowed_bin_identity=$(stat -c '%d:%i:%u:%g' /usr/local/bin)
+    borrowed_bin_prepared=1
+    printf -v mode '%o' "$((8#$borrowed_bin_mode & ~0022))"
+    chmod "$mode" /usr/local/bin
+    [[ $(stat -c '%a' /usr/local/bin) == "$mode" && $(stat -c '%d:%i:%u:%g' /usr/local/bin) == "$borrowed_bin_identity" ]]
+}
+restore_hosted_prefix() {
+    [[ $borrowed_bin_prepared == 1 ]] || return 0
+    [[ -d /usr/local/bin && ! -L /usr/local/bin && $(stat -c '%d:%i:%u:%g' /usr/local/bin) == "$borrowed_bin_identity" ]] || return 1
+    chmod "$borrowed_bin_mode" /usr/local/bin || return 1
+    [[ $(stat -c '%a' /usr/local/bin) == "$borrowed_bin_mode" && $(stat -c '%d:%i:%u:%g' /usr/local/bin) == "$borrowed_bin_identity" ]]
+}
 cleanup() {
     local status=$?
     trap - EXIT
     set +e
+    record_permissions before-cleanup || status=1
     if [[ $owned == 1 ]]; then
         timeout 170s systemctl stop minecraft-ui.service >"$scratch/manager-cleanup" 2>&1
         [[ $? == 0 ]] || status=1
@@ -72,7 +115,17 @@ cleanup() {
         ip6tables -D INPUT ! -i lo -p tcp -m multiport --dports 8080,25565 -m comment --comment minecraft-game-acceptance -j DROP
         [[ $? == 0 ]] || status=1
     fi
-    printf '{"scope":"vanilla-1.21.9-real-headless-game","exit_code":%s,"last_stage":"%s","manager_sha256":"%s"}\n' "$status" "$stage" "$binary_hash" >"$output/result.json"
+    restore_hosted_prefix || status=1
+    record_permissions after-prefix-restoration || status=1
+    python3 - "$status" "$stage" "$binary_hash" "$scratch/permissions.json" <<'PY' >"$output/result.json"
+import json
+from pathlib import Path
+import sys
+path = Path(sys.argv[4])
+print(json.dumps({"scope": "vanilla-1.21.9-real-headless-game", "exit_code": int(sys.argv[1]),
+                  "last_stage": sys.argv[2], "manager_sha256": sys.argv[3],
+                  "permission_snapshots": json.loads(path.read_text()) if path.exists() else []}))
+PY
     chmod 0644 "$output/result.json"
     [[ ! -f $output/game-summary.json ]] || chmod 0644 "$output/game-summary.json"
     rm -rf "$scratch"
@@ -90,6 +143,10 @@ ip6tables -I INPUT 1 ! -i lo -p tcp -m multiport --dports 8080,25565 -m comment 
 firewall6=1
 iptables -C INPUT ! -i lo -p tcp -m multiport --dports 8080,25565 -m comment --comment minecraft-game-acceptance -j DROP
 ip6tables -C INPUT ! -i lo -p tcp -m multiport --dports 8080,25565 -m comment --comment minecraft-game-acceptance -j DROP
+stage=prefix_preparation
+record_permissions before-prefix-provisioning
+provision_hosted_prefix
+record_permissions after-prefix-provisioning
 stage=installer
 owned=1
 bash "$repo/deploy/linux/install.sh" "$binary" >"$scratch/install" 2>&1

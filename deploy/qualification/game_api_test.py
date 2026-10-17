@@ -109,6 +109,19 @@ class Helpers(unittest.TestCase):
         for value in (121.25, float("inf"), float("nan"), "31.25"):
             self.assertFalse(game.yaw_matches(value, 31.25))
 
+    def test_permission_snapshot_emits_fixed_metadata_without_file_contents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp) / "private"
+            fixture.write_text("secret fixture contents")
+            with mock.patch.object(game, "PERMISSION_PATHS", (str(fixture), str(Path(tmp) / "missing"))):
+                result = game.permission_snapshot("before-prefix-provisioning")
+            self.assertEqual(result["paths"][0]["mode"], format(fixture.stat().st_mode & 0o7777, "o"))
+            self.assertEqual(result["paths"][0]["inode"], fixture.stat().st_ino)
+            self.assertFalse(result["paths"][1]["exists"])
+            self.assertNotIn("secret", json.dumps(result))
+            allowed = {"path", "exists", "uid", "gid", "mode", "device", "inode", "directory", "regular", "symlink", "metadata_read_failed"}
+            self.assertTrue(all(set(entry) <= allowed for entry in result["paths"]))
+
     def test_api_csrf_origin_no_proxy_and_redacted_errors(self):
         api = game.API()
         api.csrf = "private-csrf"
@@ -135,7 +148,28 @@ class Helpers(unittest.TestCase):
         with mock.patch.object(api, "request", return_value={"job": {"id": "abc", "state": "failed", "phase": "verifying_backup", "error": "secret"}}):
             with self.assertRaises(game.Failure) as failure:
                 api.job({"job": {"id": "abc"}})
-            self.assertEqual(failure.exception.evidence, {"job_state": "failed", "job_phase": "verifying_backup"})
+            self.assertEqual(failure.exception.evidence, {"job_state": "failed", "job_phase": "verifying_backup", "job_diagnostics": ["unclassified"]})
+
+    def test_job_diagnostics_classify_only_exact_public_authored_messages(self):
+        api = game.API()
+        cases = [
+            ([{"message": "install preview expired or instance changed; resolve again"}], ["install_preview_stale"]),
+            ([{"message": "Lifecycle operation failed; inspect its phase and current process state before retrying."}], ["lifecycle_failure_unspecified"]),
+            ([{"message": "native systemd installation is missing or unsafe: /secret/token"}], ["unclassified"]),
+            ([{"message": "https://private.invalid/password-secret"}], ["unclassified"]),
+            ([{"message": "install preview expired or instance changed; resolve again secret"}], ["unclassified"]),
+            ([{"message": 42}], ["unclassified"]),
+            ([{"message": "Lifecycle managed java verification failed; inspect job phase and current process state before retrying."}], ["managed_java_verification_failed"]),
+        ]
+        for logs, expected in cases:
+            with self.subTest(logs=logs), mock.patch.object(api, "request", return_value={"logs": logs}) as request:
+                self.assertEqual(api.job_diagnostics("abc"), expected)
+                self.assertEqual(request.call_args.args[0], "/api/v1/jobs/abc/logs?after=0&limit=500")
+                self.assertNotIn("secret", json.dumps(api.job_diagnostics("abc")))
+        with mock.patch.object(api, "request", side_effect=game.Failure("api_http_status", http_status=503)):
+            self.assertEqual(api.job_diagnostics("abc"), ["diagnostics_unavailable"])
+        with mock.patch.object(api, "request", return_value={"logs": [{"message": "ignored"}] * 501}):
+            self.assertEqual(api.job_diagnostics("abc"), ["diagnostics_bound"])
 
     def test_archive_checks_hashes_player_marker_and_unsafe_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -238,6 +272,40 @@ class LinuxGamePaths(unittest.TestCase):
         self.assertEqual(self.fragment(final.group()).returncode, 1)
         self.scratch.unlink()
         self.assertEqual(self.fragment(final.group()).returncode, 0)
+
+    def prefix_functions(self):
+        prefix = self.root / "borrowed-bin"
+        prefix.mkdir()
+        functions = []
+        for name in ("prepare_hosted_prefix_mode", "restore_hosted_prefix"):
+            body = re.search(r"^" + name + r"\(\) \{\n.*?^\}", self.source, re.M | re.S)
+            self.assertIsNotNone(body, "borrowed prefix function missing")
+            functions.append(body.group().replace("/usr/local/bin", shlex.quote(str(prefix))))
+        return prefix, "\n".join(functions)
+
+    def test_borrowed_prefix_preserves_unrelated_bits_and_restores_exact_mode(self):
+        prefix, functions = self.prefix_functions()
+        for original in (0o777, 0o2777, 0o1777, 0o755):
+            with self.subTest(original=oct(original)):
+                prefix.chmod(original)
+                script = "set -eu\nborrowed_bin_prepared=0\n" + functions + "\nprepare_hosted_prefix_mode\n"
+                script += 'printf "%s\\n" "$(stat -c %a ' + shlex.quote(str(prefix)) + ')"\nrestore_hosted_prefix\n'
+                result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(int(result.stdout.strip(), 8), original & ~0o22)
+                self.assertEqual(prefix.stat().st_mode & 0o7777, original)
+
+    def test_borrowed_prefix_restore_refuses_changed_inode_binding(self):
+        prefix, functions = self.prefix_functions()
+        target = self.root / "different-directory"
+        target.mkdir(mode=0o777)
+        target.chmod(0o777)
+        script = "set -eu\nborrowed_bin_prepared=0\n" + functions + "\nprepare_hosted_prefix_mode\n"
+        script += "mv " + shlex.quote(str(prefix)) + " " + shlex.quote(str(self.root / "old-binding")) + "\n"
+        script += "ln -s " + shlex.quote(str(target)) + " " + shlex.quote(str(prefix)) + "\nrestore_hosted_prefix\n"
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(target.stat().st_mode & 0o7777, 0o777)
 
 
 if __name__ == "__main__":

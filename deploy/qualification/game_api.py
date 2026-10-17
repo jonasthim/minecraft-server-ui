@@ -19,6 +19,7 @@ import queue
 import re
 import secrets
 import sqlite3
+import stat
 import struct
 import subprocess
 import sys
@@ -41,6 +42,11 @@ DATA = Path(r"C:\ProgramData\MinecraftUI" if os.name == "nt" else "/var/lib/mine
 HERE = Path(__file__).resolve().parent
 IDENTIFIER = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
+PERMISSION_PATHS = (
+    "/", "/usr", "/usr/local", "/usr/local/bin", "/usr/local/bin/minecraft-ui",
+    "/usr/local/lib", "/usr/local/lib/minecraft-ui", "/usr/local/lib/minecraft-ui/unitctl",
+    "/etc", "/etc/systemd", "/etc/systemd/system", "/etc/systemd/system/minecraft@.service",
+)
 
 
 class Failure(Exception):
@@ -58,6 +64,24 @@ def require(condition, code):
 def hosted():
     require(os.environ.get("GITHUB_ACTIONS") == "true" and
             os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted", "hosted_only")
+
+
+def permission_snapshot(phase):
+    require(phase in {"before-prefix-provisioning", "after-prefix-provisioning", "before-cleanup", "after-prefix-restoration"}, "permission_phase")
+    records = []
+    for path in PERMISSION_PATHS:
+        record = {"path": path}
+        try:
+            info = os.lstat(path)
+            record.update(exists=True, uid=info.st_uid, gid=info.st_gid, mode=format(stat.S_IMODE(info.st_mode), "o"),
+                          device=info.st_dev, inode=info.st_ino, directory=stat.S_ISDIR(info.st_mode),
+                          regular=stat.S_ISREG(info.st_mode), symlink=stat.S_ISLNK(info.st_mode))
+        except FileNotFoundError:
+            record["exists"] = False
+        except OSError:
+            record["metadata_read_failed"] = True
+        records.append(record)
+    return {"phase": phase, "paths": records}
 
 
 def safe_directory(value):
@@ -141,10 +165,45 @@ class API:
                 phase = job.get("phase", "unknown")
                 phase = phase if isinstance(phase, str) and re.fullmatch(r"[a-z_]{1,64}", phase) else "unclassified"
                 if state != "succeeded":
-                    raise Failure("job_terminal_failure", job_state=state, job_phase=phase)
+                    raise Failure("job_terminal_failure", job_state=state, job_phase=phase,
+                                  job_diagnostics=self.job_diagnostics(identifier))
                 return job
             time.sleep(1)
         raise Failure("job_timeout")
+
+    def job_diagnostics(self, identifier):
+        # Job.error is intentionally generic. Classify only exact authored
+        # public lifecycle messages from one bounded page; never emit its text,
+        # wrapped causes, arbitrary paths/URLs, or raw job output.
+        messages = {
+            "Lifecycle operation failed; inspect its phase and current process state before retrying.": "lifecycle_failure_unspecified",
+            "install preview expired or instance changed; resolve again": "install_preview_stale",
+            "original selection changed since preview": "install_selection_changed",
+            "install preview no longer matches the exact instance selection": "install_selection_mismatch",
+            "preview Java selection changed": "install_java_selection_changed",
+            "managed distribution/runtime service unavailable": "managed_services_unavailable",
+            "current-job lifecycle verification is unavailable": "job_lifecycle_verification_unavailable",
+            "instance unit state is unknown": "native_unit_state_unknown",
+            "instance unit is active": "native_unit_active",
+            "Lifecycle activation recovery failed; inspect job phase and current process state before retrying.": "activation_recovery_failed",
+            "Lifecycle managed java verification failed; inspect job phase and current process state before retrying.": "managed_java_verification_failed",
+            "Lifecycle materialization failed; inspect job phase and current process state before retrying.": "materialization_failed",
+            "Lifecycle verified distribution install failed; inspect job phase and current process state before retrying.": "verified_distribution_install_failed",
+            "Lifecycle activation failed; inspect job phase and current process state before retrying.": "activation_failed",
+        }
+        try:
+            page = self.request("/api/v1/jobs/" + safe_id(identifier) + "/logs?after=0&limit=500")
+        except Exception:
+            return ["diagnostics_unavailable"]
+        logs = page.get("logs", []) if isinstance(page, dict) else []
+        if not isinstance(logs, list) or len(logs) > 500:
+            return ["diagnostics_bound"]
+        codes = set()
+        for line in logs:
+            text = line.get("message") if isinstance(line, dict) else None
+            if isinstance(text, str) and len(text) <= 8192 and text in messages:
+                codes.add(messages[text])
+        return sorted(codes) or ["unclassified"]
 
     def lifecycle(self, operation, **kwargs):
         return self.job(self.request(PREFIX + "/lifecycle", {"operation": operation, **kwargs}, 202), 900 if operation == "install" else 300)
