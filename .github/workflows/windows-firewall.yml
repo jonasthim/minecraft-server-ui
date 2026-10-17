@@ -1,0 +1,28 @@
+name: Windows game firewall investigation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  firewall:
+    name: Compare equivalent loopback exclusions
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Exercise fixed firewall expressions without starting a game
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path firewall-results -ErrorAction Stop | Out-Null
+          & ./deploy/qualification/windows-firewall.ps1 -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE 'firewall-results')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain bounded investigation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-firewall-${{ github.sha }}
+          path: firewall-results/firewall-summary.json
+          if-no-files-found: error
+          retention-days: 14
