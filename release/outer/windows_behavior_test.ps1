@@ -51,7 +51,32 @@ foreach ($legacySemantics in @($false,$true)) {
     }
 }
 
-$source = [System.IO.File]::ReadAllText($EntryScript)
+$source = [System.IO.File]::ReadAllText($EntryScript).Replace("`r`n","`n")
+$dispositionImport = '        [DllImport("kernel32.dll", SetLastError=true)]' + "`n" + '        static extern bool SetFileInformationByHandle(SafeFileHandle handle, uint kind, ref Disposition information, uint size);'
+foreach ($needle in @('public static class PrivateIO {',$dispositionImport,'        [DllImport("kernel32.dll")]','            System.Threading.Thread.Sleep(100);')) {
+    if (($source.Split(@($needle),[StringSplitOptions]::None)).Count -ne 2) { throw 'directory retry test seam drift' }
+}
+$source = $source.Replace('public static class PrivateIO {', @'
+public static class PrivateIO {
+        public static Action RetryPauseForTest;
+        public static int TestDispositionFailures;
+        public static int TestDispositionError;
+        public static int TestDispositionSkip;
+'@)
+$nativeDispositionImport = '        [DllImport("kernel32.dll", EntryPoint="SetFileInformationByHandle", SetLastError=true)]' + "`n" + '        static extern bool NativeSetFileInformationByHandle(SafeFileHandle handle, uint kind, ref Disposition information, uint size);'
+$source = $source.Replace($dispositionImport,$nativeDispositionImport)
+if (($source.Split(@($nativeDispositionImport),[StringSplitOptions]::None)).Count -ne 2) { throw 'native disposition retry test seam lost its Win32 entrypoint' }
+$source = $source.Replace('        [DllImport("kernel32.dll")]', @'
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern void SetLastError(uint error);
+        static bool SetFileInformationByHandle(SafeFileHandle handle, uint kind, ref Disposition information, uint size) {
+            if (TestDispositionSkip > 0) { TestDispositionSkip--; return NativeSetFileInformationByHandle(handle,kind,ref information,size); }
+            if (TestDispositionFailures > 0) { TestDispositionFailures--; SetLastError((uint)TestDispositionError); return false; }
+            return NativeSetFileInformationByHandle(handle,kind,ref information,size);
+        }
+        [DllImport("kernel32.dll")]
+'@)
+$source = $source.Replace('            System.Threading.Thread.Sleep(100);','            if (RetryPauseForTest != null) RetryPauseForTest(); else System.Threading.Thread.Sleep(100);')
 $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count -ne 0) { throw 'generated PowerShell failed parsing' }
@@ -130,6 +155,34 @@ $fakeRunner = @'
 [System.IO.File]::WriteAllText($env:OUTER_TEST_ARGS,(ConvertTo-Json -InputObject $nativeArgs -Compress))
 [System.IO.File]::WriteAllText($resultPath,'{"prepared":true}')
 if ($env:OUTER_TEST_MODE -eq 'foreign-child') { [System.IO.File]::WriteAllText([System.IO.Path]::Combine($scratch,'unowned.txt'),'preserve foreign child') }
+if ($env:OUTER_TEST_MODE -in @('delete-pending-child','parent-substitution','changed-directory-acl')) {
+    $transientPath = [System.IO.Path]::Combine($scratch,'transient.txt')
+    [System.IO.File]::WriteAllText($transientPath,'transient child')
+    $global:outerTransientHandle = [System.IO.File]::Open($transientPath,[System.IO.FileMode]::Open,[System.IO.FileAccess]::ReadWrite,[System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+    [System.IO.File]::Delete($transientPath)
+    [MinecraftUiOuter.PrivateIO]::RetryPauseForTest = [System.Action]{
+        $global:outerTransientHandle.Dispose()
+        $global:outerTransientHandle = $null
+        $actualScratch = [System.IO.File]::ReadAllText($env:OUTER_TEST_SCRATCH)
+        if ($env:OUTER_TEST_MODE -eq 'parent-substitution') {
+            [System.IO.Directory]::Move($actualScratch,$actualScratch+'.moved')
+            [void][System.IO.Directory]::CreateDirectory($actualScratch)
+            [System.IO.File]::WriteAllText([System.IO.Path]::Combine($actualScratch,'replacement.txt'),'preserve replacement')
+        } elseif ($env:OUTER_TEST_MODE -eq 'changed-directory-acl') {
+            $security = Get-Acl -LiteralPath $actualScratch
+            $everyone = [System.Security.Principal.SecurityIdentifier]::new('S-1-1-0')
+            $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($everyone,[System.Security.AccessControl.FileSystemRights]::ReadAndExecute,[System.Security.AccessControl.AccessControlType]::Allow)
+            $security.AddAccessRule($rule)
+            Set-Acl -LiteralPath $actualScratch -AclObject $security
+        }
+        [System.IO.File]::WriteAllText($env:OUTER_TEST_RETRY_MARKER,'retry reached')
+    }
+}
+if ($env:OUTER_TEST_MODE -in @('non145-file-disposition','non145-directory-disposition')) {
+    [MinecraftUiOuter.PrivateIO]::TestDispositionError = 5
+    [MinecraftUiOuter.PrivateIO]::TestDispositionFailures = 1
+    if ($env:OUTER_TEST_MODE -eq 'non145-directory-disposition') { [MinecraftUiOuter.PrivateIO]::TestDispositionSkip = 4 }
+}
 if ($env:OUTER_TEST_MODE -eq 'changed-child-owner') {
     $security = Get-Acl -LiteralPath $trustPath
     $security.SetOwner([System.Security.Principal.WindowsIdentity]::GetCurrent().User)
@@ -153,7 +206,7 @@ try {
     if (-not $match.Success) { throw 'URL seam drift' }
     $expectedRepository = $match.Groups[2].Value
     $env:OUTER_EXPECTED_URL = $match.Groups[1].Value
-    $cases = @('good','tamper','oversize','truncate','error','malicious-version','foreign-child')
+    $cases = @('good','tamper','oversize','truncate','error','malicious-version','foreign-child','delete-pending-child','parent-substitution','changed-directory-acl','non145-file-disposition','non145-directory-disposition')
     $who = [System.Security.Principal.WindowsIdentity]::GetCurrent()
     $adminToken = [System.Security.Principal.WindowsPrincipal]::new($who).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
     if ($adminToken) { $cases += 'changed-child-owner' }
@@ -163,6 +216,7 @@ try {
         $env:OUTER_TEST_ARGS = [System.IO.Path]::Combine($root,($mode+'.args'))
         $env:OUTER_TEST_SCRATCH = [System.IO.Path]::Combine($root,($mode+'.scratch'))
         $env:OUTER_TEST_ACLS = [System.IO.Path]::Combine($root,($mode+'.acls'))
+        $env:OUTER_TEST_RETRY_MARKER = [System.IO.Path]::Combine($root,($mode+'.retry'))
         $output = [System.IO.Path]::Combine($root,'literal $(Write-Output PWNED); output')
         $version = 'latest'
         if ($mode -eq 'malicious-version') { $version = 'v1.2.3;$(Write-Output PWNED)' }
@@ -177,12 +231,13 @@ try {
             $captured = & $engine @call 2>&1 | Out-String
             $exit = $LASTEXITCODE
         } finally { $ErrorActionPreference = $priorPreference }
-        $success = $mode -eq 'good'
-        $runnerReached = $mode -in @('good','foreign-child','changed-child-owner')
+        $success = $mode -in @('good','delete-pending-child')
+        $runnerReached = $mode -in @('good','foreign-child','changed-child-owner','delete-pending-child','parent-substitution','changed-directory-acl','non145-file-disposition','non145-directory-disposition')
         if (($exit -eq 0) -ne $success) { throw ('unexpected result for '+$mode) }
         if ($captured.Contains('private-secret')) { throw 'raw error leak' }
         if (-not $success -and $captured.Contains('"prepared":true')) { throw 'success JSON emitted on failure' }
         if ((Test-Path -LiteralPath $env:OUTER_TEST_ARGS) -ne $runnerReached) { throw ('unexpected native runner reachability for '+$mode) }
+        if ((Test-Path -LiteralPath $env:OUTER_TEST_RETRY_MARKER) -ne ($mode -in @('delete-pending-child','parent-substitution','changed-directory-acl'))) { throw ('unexpected directory retry seam for '+$mode) }
         if ($runnerReached) {
             $actualScratch = [System.IO.File]::ReadAllText($env:OUTER_TEST_SCRATCH)
             $expectedArgv = @('prepare','--repository',$expectedRepository,'--trust-file',[System.IO.Path]::Combine($actualScratch,'trust.json'),'--version',$version,'--output',$output)
@@ -204,6 +259,26 @@ try {
                 if (-not (Test-Path -LiteralPath ([System.IO.Path]::Combine($scratch,'trust.json')))) { throw 'cleanup deleted child after ownership change' }
                 if (-not $captured.Contains('scratch cleanup refused')) { throw 'changed owner refusal was hidden' }
                 # Test-owned fixture cleanup after preservation assertions.
+                [System.IO.Directory]::Delete($scratch,$true)
+            } elseif ($mode -eq 'parent-substitution') {
+                $replacement = [System.IO.Path]::Combine($scratch,'replacement.txt')
+                $moved = $scratch+'.moved'
+                if (-not (Test-Path -LiteralPath $replacement) -or [System.IO.File]::ReadAllText($replacement) -cne 'preserve replacement') { throw 'replacement parent was not preserved' }
+                if (-not (Test-Path -LiteralPath $moved)) { throw 'original directory identity was not preserved after rename' }
+                if (-not $captured.Contains('scratch cleanup refused')) { throw 'parent substitution refusal was hidden' }
+                [System.IO.Directory]::Delete($scratch,$true)
+                [System.IO.Directory]::Delete($moved,$true)
+            } elseif ($mode -eq 'changed-directory-acl') {
+                if (-not $captured.Contains('scratch cleanup refused')) { throw 'changed directory ACL refusal was hidden' }
+                if (@([System.IO.Directory]::EnumerateFileSystemEntries($scratch)).Count -ne 0) { throw 'changed ACL fixture retained unexpected children' }
+                [System.IO.Directory]::Delete($scratch,$true)
+            } elseif ($mode -eq 'non145-file-disposition') {
+                if (-not $captured.Contains('scratch cleanup refused')) { throw 'non-145 disposition refusal was hidden' }
+                if (-not (Test-Path -LiteralPath ([System.IO.Path]::Combine($scratch,'trust.json')))) { throw 'non-145 failure retried or removed owned file' }
+                [System.IO.Directory]::Delete($scratch,$true)
+            } elseif ($mode -eq 'non145-directory-disposition') {
+                if (-not $captured.Contains('scratch cleanup refused')) { throw 'non-145 directory disposition refusal was hidden' }
+                if (@([System.IO.Directory]::EnumerateFileSystemEntries($scratch)).Count -ne 0) { throw 'directory non-145 fixture retained unexpected children' }
                 [System.IO.Directory]::Delete($scratch,$true)
             } elseif (Test-Path -LiteralPath $scratch) { throw 'owned scratch leaked' }
         }

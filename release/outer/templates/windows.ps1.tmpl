@@ -29,6 +29,7 @@ function Initialize-PrivateIO {
     # repair is used and every error is scrubbed by the outer authored handler.
     Add-Type -Language CSharp -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -104,6 +105,11 @@ namespace MinecraftUiOuter {
                 for (int i=0;i<a.Length;i++) if (!String.Equals(a[i],e[i],StringComparison.Ordinal)) throw Failure();
             } finally { if (descriptor != IntPtr.Zero) LocalFree(descriptor); }
         }
+        static bool EmptyDirectory(string path) {
+            try {
+                using (IEnumerator<string> entries=System.IO.Directory.EnumerateFileSystemEntries(path).GetEnumerator()) { return !entries.MoveNext(); }
+            } catch { throw Failure(); }
+        }
         public static void AssertBound(SafeFileHandle handle, string identity, string sddl, bool directory) {
             if (!String.Equals(Identity(Information(handle,directory)),identity,StringComparison.Ordinal)) throw Failure();
             Security(handle,sddl);
@@ -128,10 +134,24 @@ namespace MinecraftUiOuter {
         public static void DeleteOwned(string path, string identity, string sddl, bool directory) {
             // A renamed/replaced path is never deleted. Security and identity
             // are checked on the exact DELETE handle used for disposition.
-            using (SafeFileHandle handle=Open(path,Delete|ReadControl|ReadAttributes,7,3,directory,null)) {
+            SafeFileHandle handle=Open(path,Delete|ReadControl|ReadAttributes,7,3,directory,null);
+            try {
                 AssertBound(handle,identity,sddl,directory);
                 Disposition disposition=new Disposition(); disposition.DeleteFile=true;
-                if (!SetFileInformationByHandle(handle,4,ref disposition,1)) throw Failure();
+                if (SetFileInformationByHandle(handle,4,ref disposition,1)) return;
+                int error=Marshal.GetLastWin32Error();
+                if (!directory || error != 145) throw Failure();
+            } finally { handle.Dispose(); }
+            // ERROR_DIR_NOT_EMPTY can be transient while a child is delete-pending
+            // with another shared-delete handle open. Retry once after a short,
+            // fixed pause; the second handle excludes directory rename while an
+            // independently disposed enumeration confirms the directory empty.
+            System.Threading.Thread.Sleep(100);
+            using (SafeFileHandle retry=Open(path,Delete|ReadControl|ReadAttributes,3,3,true,null)) {
+                AssertBound(retry,identity,sddl,true);
+                if (!EmptyDirectory(path)) throw Failure();
+                Disposition disposition=new Disposition(); disposition.DeleteFile=true;
+                if (!SetFileInformationByHandle(retry,4,ref disposition,1)) throw Failure();
             }
         }
     }
