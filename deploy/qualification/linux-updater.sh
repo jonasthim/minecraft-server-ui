@@ -123,7 +123,7 @@ record_permissions before-prefix-provisioning
 provision_hosted_prefix
 record_permissions after-prefix-provisioning
 owned=1
-bash "$repo/deploy/linux/install.sh" "$initial" "$updater"
+bash "$here/linux-seed.sh" "$repo/deploy/linux" "$initial" "$updater"
 install -o root -g root -m 0644 "$scratch/fixtures/public-trust.json" /etc/minecraft-ui/update-trust.json
 install -o root -g root -m 0755 "$qualifier" /usr/local/lib/minecraft-ui/qualification-updater
 cp -r "$scratch/fixtures" /var/lib/minecraft-ui/selfupdate/qualification-input

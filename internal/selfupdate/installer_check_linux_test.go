@@ -16,12 +16,13 @@ import (
 
 func TestInspectLinuxInstallerStateIsReadOnlyAcrossStateRelations(t *testing.T) {
 	cases := []struct {
-		name    string
-		prepare func(*testing.T, linuxInstallerHooks, nativePaths)
-		want    Installed
-		present bool
-		pending bool
-		wantErr bool
+		name     string
+		prepare  func(*testing.T, linuxInstallerHooks, nativePaths)
+		want     Installed
+		present  bool
+		pending  bool
+		terminal bool
+		wantErr  bool
 	}{
 		{
 			name: "absent",
@@ -50,13 +51,34 @@ func TestInspectLinuxInstallerStateIsReadOnlyAcrossStateRelations(t *testing.T) 
 			prepare: func(t *testing.T, _ linuxInstallerHooks, p nativePaths) {
 				prepareLinuxTerminalFixture(t, p, "healthy", "candidate", false)
 			},
-			want:    inspectionFixtureInstalled("candidate"),
-			present: true,
+			want:     inspectionFixtureInstalled("candidate"),
+			present:  true,
+			terminal: true,
+		},
+		{
+			name: "terminal rolled back snapshot",
+			prepare: func(t *testing.T, _ linuxInstallerHooks, p nativePaths) {
+				prepareLinuxTerminalFixture(t, p, "rolled_back", "prior", true)
+			},
+			want:     inspectionFixtureInstalled("prior"),
+			present:  true,
+			terminal: true,
 		},
 		{
 			name: "nonterminal activation",
 			prepare: func(t *testing.T, _ linuxInstallerHooks, p nativePaths) {
-				writeLinuxInspectionJSON(t, filepath.Join(p.State, "activation.json"), map[string]any{"format": 1})
+				prepareLinuxTerminalFixture(t, p, "healthy", "candidate", false)
+				path := filepath.Join(p.State, "activation.json")
+				body, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var journal activationJournal
+				if err = json.Unmarshal(body, &journal); err != nil {
+					t.Fatal(err)
+				}
+				journal.Phase = "candidate"
+				writeLinuxInspectionJSON(t, path, journal)
 			},
 			pending: true,
 			wantErr: true,
@@ -84,13 +106,13 @@ func TestInspectLinuxInstallerStateIsReadOnlyAcrossStateRelations(t *testing.T) 
 			h, paths := linuxInstallerFixture(t)
 			tc.prepare(t, h, paths)
 			before := snapshotInspectionTree(t, filepath.Dir(paths.State))
-			got, present, pending, err := inspectLinuxInstallerState(context.Background(), h)
+			got, err := inspectLinuxInstallerState(context.Background(), h)
 			after := snapshotInspectionTree(t, filepath.Dir(paths.State))
 			if !reflect.DeepEqual(before, after) {
 				t.Fatalf("read-only inspection changed its fixture tree:\nbefore=%v\nafter=%v", before, after)
 			}
-			if (err != nil) != tc.wantErr || got != tc.want || present != tc.present || pending != tc.pending {
-				t.Fatalf("inspection=(%+v,%v,%v,%v), want=(%+v,%v,%v,err=%v)", got, present, pending, err, tc.want, tc.present, tc.pending, tc.wantErr)
+			if (err != nil) != tc.wantErr || got.Installed != tc.want || got.Present != tc.present || got.Pending != tc.pending || got.Terminal != tc.terminal {
+				t.Fatalf("inspection=(%+v,%v), want=(%+v,err=%v)", got, err, LinuxInstallerInspection{Installed: tc.want, Present: tc.present, Pending: tc.pending, Terminal: tc.terminal}, tc.wantErr)
 			}
 		})
 	}
@@ -104,7 +126,7 @@ func TestInspectLinuxInstallerStateChecksAuthorityBeforePathIO(t *testing.T) {
 		called = true
 		return nil, errors.New("unexpected root open")
 	}
-	if _, _, _, err := inspectLinuxInstallerState(context.Background(), h); err == nil {
+	if _, err := inspectLinuxInstallerState(context.Background(), h); err == nil {
 		t.Fatal("inspection without authority succeeded")
 	}
 	if called {
@@ -112,6 +134,23 @@ func TestInspectLinuxInstallerStateChecksAuthorityBeforePathIO(t *testing.T) {
 	}
 	if _, err := os.Stat(paths.State); err != nil {
 		t.Fatalf("fixture state unexpectedly changed: %v", err)
+	}
+}
+
+func TestInspectLinuxInstallerStateClearsTerminalOnPostSnapshotError(t *testing.T) {
+	h, paths := linuxInstallerFixture(t)
+	prepareLinuxTerminalFixture(t, paths, "healthy", "candidate", false)
+	calls := 0
+	h.checkUpdaterLock = func(*os.Root) error {
+		calls++
+		if calls == 2 {
+			return errors.New("lock changed")
+		}
+		return nil
+	}
+	inspection, err := inspectLinuxInstallerState(context.Background(), h)
+	if err == nil || !inspection.Pending || inspection.Terminal {
+		t.Fatalf("inspection=%+v err=%v; terminal evidence must be withheld on a late error", inspection, err)
 	}
 }
 

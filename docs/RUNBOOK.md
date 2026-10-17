@@ -4,6 +4,8 @@ The current build is `0.0.0-dev`. No stable release or supported Minecraft/loade
 
 ## Installation and recovery boundary
 
+The [Linux installer guide](linux-installer.md) describes the authenticated `--install` entry point and native check, recovery, upgrade and uninstall commands. Its Ubuntu lifecycle qualification is in progress. `deploy/linux/install.sh` now forwards lifecycle commands to the installed helper; it does not copy a bare executable onto an existing installation.
+
 Use the reviewed native installers only after designating a test host and reviewing its service configuration. Linux runs the manager as `minecraft-ui`, with a root-owned `/usr/local/bin/minecraft-ui`; the manager must never be granted arbitrary privileged copy or shell access. The existing `unitctl` accepts lifecycle operations on validated instance identifiers only. Windows Server2022 installed-service, ACL and updater checks have hosted evidence; other Windows targets and the full installer lifecycle still need qualification.
 
 Keep `manager.db` and its SQLite WAL/SHM sidecars private. Game backups exclude manager state. Manager snapshots and restore operate only while the manager is stopped; never copy only a live WAL-mode database file. Restoring manager state requires explicit review and does not rewind game worlds.

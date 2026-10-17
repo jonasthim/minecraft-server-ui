@@ -27,6 +27,10 @@ Each packet requires independent source review and integrator verification befor
 - Launch permission during an installer transaction must bind the exact immutable intent, expected image, live worker start identity and existing kernel updater lock. A stale permit never bypasses recovery. The installed updater recovery callback must recognize this independently of the existing web-update permit.
 - The worker must survive the invoking shell exiting. It runs from a verified private transaction copy and keeps bounded rollback independent of caller cancellation; a reboot/worker kill leaves durable recovery state and blocks normal startup until reconciled.
 - On rollback/uninstall, preserve the account, data, configuration, trust and snapshots. Unknown replacements are left intact with a truthful recovery-required result.
+- Explicit recovery may complete a fully written pending publication only after validating its typed operation, immutable intent, permitted transition, exact current preimage and native file identities. Read-only check and ordinary apply do not reconcile pending files. Partial, corrupt or unrelated pending files remain untouched.
+- Before publishing a maintenance challenge, the installer may remove only the exact captured controls of a verified terminal ordinary updater operation under the actual updater lock. Privileged updater records and executable scratch remain until the manager has drained and the data lock is held. The manager never receives both challenge protocols at once.
+- A durable native evidence marker records that ordinary updater reconciliation finished before asset replacement. Recovery must not require the current executable to match the prior receipt while an installer replacement is between its asset and receipt publications.
+- Read-only check may report the current verified terminal updater receipt when it supersedes the installer inventory's manager image. The database schema and every other owned deployment asset must still match; operator-managed optional updater trust is separately validated.
 
 ## Current acceptance
 

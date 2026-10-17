@@ -7,9 +7,14 @@ in this session. Package tests launch real local child processes; that evidence
 does not qualify systemd behavior. Run on both supported x64 Debian and Ubuntu
 hosts before marking Task 04 accepted.
 
-Install the root-owned binary, service templates and narrow helper with
-`sh deploy/linux/install.sh /absolute/path/to/minecraft-ui`. Confirm fixed paths
-and the manager environment use `/var/lib/minecraft-ui`. The native supervisor
+For shipping first installation, independently verify the release-specific
+bootstrap script and its embedded preparer hash/public key, then use
+`sudo bash ./minecraft-ui-prepare.sh --version latest --install` (or pass an
+exact `vMAJOR.MINOR.PATCH` release).
+The legacy systemd smoke setup is not a shipping installer test; on a disposable
+GitHub-hosted runner it is seeded only by `deploy/qualification/linux-seed.sh`.
+Confirm fixed paths and the manager environment use `/var/lib/minecraft-ui`.
+The native supervisor
 requires exactly that data root and `/usr/local/bin/minecraft-ui`; a dev manager
 with another root or executable fails closed before touching the production unit
 namespace. The smoke test explicitly supplies the canonical installed executable.

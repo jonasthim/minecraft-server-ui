@@ -27,6 +27,9 @@ type Image struct {
 type Outcome string
 
 const (
+	// Pending means the independent worker's terminal outcome is not yet known
+	// to the invoking client. It is never a completed coordinator outcome.
+	OutcomePending      Outcome = "pending"
 	OutcomeUnchanged    Outcome = "unchanged"
 	OutcomeInstalled    Outcome = "installed"
 	OutcomeUninstalled  Outcome = "uninstalled"

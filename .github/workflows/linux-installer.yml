@@ -1,0 +1,168 @@
+name: Linux installer qualification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-inputs:
+    name: Build and execute ${{ matrix.goos }} installer inputs
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            goos: linux
+            extension: ''
+          - os: windows-2022
+            goos: windows
+            extension: .exe
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      CANDIDATE_OS: ${{ matrix.goos }}
+      BINARY_EXTENSION: ${{ matrix.extension }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: x64
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded UI and native stamped fixture versions
+        run: |
+          test "$RUNNER_ARCH" = X64
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(go env GOHOSTOS)" = "$CANDIDATE_OS"
+          test "$(go env GOOS)" = "$CANDIDATE_OS"
+          test "$(go env GOARCH)" = amd64
+          npm ci --prefix web
+          npm run build --prefix web
+          mkdir -p "installer-input/$CANDIDATE_OS"
+          for version in v0.0.1 v0.0.2 v0.0.3; do
+            dir="installer-input/$CANDIDATE_OS/$version"
+            mkdir -p "$dir"
+            if [[ "$CANDIDATE_OS" == linux && "$version" == v0.0.3 ]]; then
+              python3 .github/scripts/linux-installer-failure-overlay.py --source cmd/minecraft-ui/main.go --scratch "$RUNNER_TEMP/installer-v3-overlay"
+              go build -trimpath -overlay "$RUNNER_TEMP/installer-v3-overlay/overlay.json" -ldflags "-s -w -X main.version=$version" -o "$dir/manager$BINARY_EXTENSION" ./cmd/minecraft-ui
+            else
+              go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$dir/manager$BINARY_EXTENSION" ./cmd/minecraft-ui
+            fi
+            go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$dir/updater$BINARY_EXTENSION" ./cmd/minecraft-ui-update
+            go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$dir/bootstrap$BINARY_EXTENSION" ./cmd/minecraft-ui-bootstrap
+            python3 .github/scripts/candidate-receipts.py --version "$version" --target "$CANDIDATE_OS" --manager "$dir/manager$BINARY_EXTENSION" --updater "$dir/updater$BINARY_EXTENSION" --bootstrap "$dir/bootstrap$BINARY_EXTENSION"
+            if [[ "$CANDIDATE_OS" == linux && "$version" == v0.0.3 ]]; then
+              printf 'modified_unhealthy_fixture=true\nfixture=serve command waits for cancellation before readiness\nnot_for_release=true\n' >"$dir/fixture-scope.txt"
+            fi
+          done
+          if [[ "$CANDIDATE_OS" == linux ]]; then
+            go build -trimpath -o installer-input/linux/qualify-selfupdate ./cmd/qualify-selfupdate
+          fi
+          git rev-parse HEAD >installer-input/$CANDIDATE_OS/source-commit.txt
+          go version >installer-input/$CANDIDATE_OS/go-version.txt
+          printf '%s %s %s %s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$ImageOS" "$ImageVersion" >installer-input/$CANDIDATE_OS/build-runner.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-installer-input-${{ matrix.goos }}-${{ github.sha }}
+          path: installer-input/${{ matrix.goos }}
+          if-no-files-found: error
+          retention-days: 7
+
+  candidates:
+    name: Produce ephemeral signed Linux installer fixtures
+    needs: native-inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache-dependency-path: go.sum
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-installer-input-linux-${{ github.sha }}
+          path: installer-input/linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-installer-input-windows-${{ github.sha }}
+          path: installer-input/windows
+      - name: Verify and sign disposable native candidates in memory
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          go run ./cmd/qualify-installer --source-root "$GITHUB_WORKSPACE" --input-root "$GITHUB_WORKSPACE/installer-input" --output "$GITHUB_WORKSPACE/installer-candidates"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-installer-candidates-${{ github.sha }}
+          path: installer-candidates
+          if-no-files-found: error
+          retention-days: 7
+
+  installed-lifecycle:
+    name: ${{ matrix.scenario }} on ${{ matrix.os }}
+    needs: candidates
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        scenario: [lifecycle, retained-retry, updater-coexistence]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-installer-input-linux-${{ github.sha }}
+          path: installer-input/linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-installer-candidates-${{ github.sha }}
+          path: installer-fixtures
+      - uses: actions/download-artifact@v4
+        if: matrix.scenario == 'updater-coexistence'
+        with:
+          name: linux-installer-input-windows-${{ github.sha }}
+          path: installer-input/windows
+      - name: Record disposable runner identity
+        run: |
+          test "$RUNNER_ARCH" = X64
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          mkdir -p installer-results
+          git rev-parse HEAD >installer-results/source-commit.txt
+          printf '%s %s %s %s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$ImageOS" "$ImageVersion" >installer-results/runner.txt
+      - name: Run shipping native Linux installer lifecycle
+        timeout-minutes: 38
+        run: |
+          chmod 0755 installer-input/linux/*/bootstrap
+          if [[ "${{ matrix.scenario }}" == updater-coexistence ]]; then
+            chmod 0755 installer-input/linux/qualify-selfupdate
+            sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT bash deploy/qualification/linux-installer.sh "$GITHUB_WORKSPACE/installer-input/linux/v0.0.1/bootstrap" "$GITHUB_WORKSPACE/installer-fixtures" "$GITHUB_WORKSPACE/installer-results" "${{ matrix.scenario }}" "$GITHUB_WORKSPACE/installer-input/linux/qualify-selfupdate" "$GITHUB_WORKSPACE/installer-input/linux" "$GITHUB_WORKSPACE/installer-input/windows"
+          else
+            sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT bash deploy/qualification/linux-installer.sh "$GITHUB_WORKSPACE/installer-input/linux/v0.0.1/bootstrap" "$GITHUB_WORKSPACE/installer-fixtures" "$GITHUB_WORKSPACE/installer-results" "${{ matrix.scenario }}"
+          fi
+      - name: Retain bounded scrubbed evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-installer-${{ matrix.os }}-${{ matrix.scenario }}-${{ github.sha }}
+          path: |
+            installer-results/*.json
+            installer-results/*.txt
+          if-no-files-found: error
+          retention-days: 14

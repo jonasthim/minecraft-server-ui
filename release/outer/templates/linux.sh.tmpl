@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare verified installation inputs only. This script never runs an installer.
+# Prepare verified inputs, or install them with explicit --install.
 # Initial trust: review this release-specific script and its hashes/public keys
 # independently. Fetching script and keys from an untrusted source proves no identity.
 # {{if .Development}}DEVELOPMENT ONLY: explicit --allow-development required.{{else}}OWNER TRUST: development metadata is refused.{{end}}
@@ -18,15 +18,25 @@ done < /etc/os-release
 version=latest
 output=''
 development=0
+apply=0
+repair=0
+seen=' '
 while (($#)); do
+  [[ "$seen" != *" $1 "* ]] || fail 'duplicate preparation argument'
+  seen+="$1 "
   case "$1" in
     --version) (($# >= 2)) || fail 'missing version'; version=$2; shift 2 ;;
     --output) (($# >= 2)) || fail 'missing output'; output=$2; shift 2 ;;
     --allow-development) development=1; shift ;;
+    --install) apply=1; shift ;;
+    --repair) repair=1; shift ;;
     *) fail 'unknown preparation argument' ;;
   esac
 done
+((repair == 0 || apply == 1)) || fail 'repair requires --install'
+((apply == 0 || EUID == 0)) || fail 'installation requires root'
 [[ "$version" == latest || "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail 'invalid selected manager version'
+if [[ -n "$output" ]] || ((apply == 0)); then
 [[ "$output" == /* && "$output" != / && "$output" != */ && ! -e "$output" && ! -L "$output" ]] || fail 'new absolute output directory required'
 parent=${output%/*}; [[ -n "$parent" ]] || parent=/
 [[ -d "$parent" ]] || fail 'output parent must exist'
@@ -37,6 +47,7 @@ while :; do
   [[ "$check" == / ]] && break
   check=${check%/*}; [[ -n "$check" ]] || check=/
 done
+fi
 {{if .Development}}((development == 1)) || fail 'DEVELOPMENT ONLY script requires --allow-development'
 {{else}}((development == 0)) || fail 'owner entry script refuses development mode'
 {{end}}# /tmp is the OS-owned sticky temporary root; never honor environment TMPDIR.
@@ -46,6 +57,7 @@ cleanup() { rm -rf -- "$scratch"; }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+if [[ -z "$output" ]]; then output="$scratch/prepared"; fi
 printf '%s' {{.TrustLiteral}} > "$scratch/trust.json"
 expected_size={{.Binary.Size}}
 expected_sha='{{.Binary.SHA256}}'
@@ -78,10 +90,16 @@ actual_sha=$(sha256sum -- "$scratch/preparer")
 [[ "${actual_sha%% *}" == "$expected_sha" ]] || fail 'preparer SHA256 mismatch'
 chmod 700 -- "$scratch/preparer"
 args=(prepare --repository '{{.Repository}}' --trust-file "$scratch/trust.json" --version "$version" --output "$output")
+if ((apply == 1)); then args+=(--install); fi
+if ((repair == 1)); then args+=(--repair); fi
 {{if .Development}}args+=(--allow-development)
-{{end}}# This verified native command validates/extracts inputs; it executes no bundle
-# members. Capture its output privately and expose only bounded success JSON.
+{{end}}# The verified command authenticates inputs before optional installation.
+# Capture output privately; expose a bounded structured result even on a failed
+# install so an independent worker's operation ID is available for recovery.
 if ! "$scratch/preparer" "${args[@]}" > "$scratch/result" 2> "$scratch/error"; then
+  if ((apply == 1)) && [[ "$(wc -c < "$scratch/result")" -gt 0 && "$(wc -c < "$scratch/result")" -le 32768 ]]; then
+    head -c 32768 -- "$scratch/result"
+  fi
   fail 'verified preparer refused inputs'
 fi
 [[ "$(wc -c < "$scratch/result")" -gt 0 && "$(wc -c < "$scratch/result")" -le 32768 ]] || fail 'preparer success response exceeds bounds'

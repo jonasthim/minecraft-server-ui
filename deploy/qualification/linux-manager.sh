@@ -64,7 +64,7 @@ if [[ -n $baseline ]]; then
     [[ -f $baseline ]] || exit 2
     cp "$baseline" "$scratch/bundle/minecraft-ui.service"
 fi
-bash "$scratch/bundle/install.sh" "$binary"
+bash "$here/linux-seed.sh" "$scratch/bundle" "$binary"
 install -m 0755 -o root -g root "$here/unit-probe.sh" /usr/local/lib/minecraft-ui/native-smoke-probe
 install -d -m 0755 /etc/systemd/system/minecraft-ui.service.d
 set_probe() {

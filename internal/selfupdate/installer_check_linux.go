@@ -12,45 +12,53 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 )
 
-// InspectLinuxInstallerState returns a read-only, pinned view of the ordinary
-// updater's installed receipt and activation state. It never creates state or
-// locks and never runs manager or systemd commands.
-func InspectLinuxInstallerState(ctx context.Context) (Installed, bool, bool, error) {
+// LinuxInstallerInspection is a read-only, pinned view of the ordinary
+// updater's installed receipt and activation state.
+type LinuxInstallerInspection struct {
+	Installed Installed
+	Present   bool
+	Pending   bool
+	Terminal  bool
+}
+
+// InspectLinuxInstallerState returns a pinned inspection of updater state. It
+// never creates state or locks and never runs manager or systemd commands.
+func InspectLinuxInstallerState(ctx context.Context) (LinuxInstallerInspection, error) {
 	return inspectLinuxInstallerState(ctx, productionLinuxInstallerHooks())
 }
 
-func inspectLinuxInstallerState(ctx context.Context, h linuxInstallerHooks) (installed Installed, present, pending bool, retErr error) {
+func inspectLinuxInstallerState(ctx context.Context, h linuxInstallerHooks) (inspection LinuxInstallerInspection, retErr error) {
 	if ctx == nil || h.authorized == nil || h.openProtectedRoot == nil || h.checkProtectedFile == nil {
-		return Installed{}, false, false, errors.New("Linux updater inspection is unavailable")
+		return LinuxInstallerInspection{}, errors.New("Linux updater inspection is unavailable")
 	}
 	if err := ctx.Err(); err != nil {
-		return Installed{}, false, false, err
+		return LinuxInstallerInspection{}, err
 	}
 	if err := h.authorized(); err != nil {
-		return Installed{}, false, false, errors.New("administrator authority is required")
+		return LinuxInstallerInspection{}, errors.New("administrator authority is required")
 	}
 	paths := h.paths
 	if !canonicalMaintenancePaths(paths) {
-		return Installed{}, false, false, errors.New("canonical updater paths are unavailable")
+		return LinuxInstallerInspection{}, errors.New("canonical updater paths are unavailable")
 	}
 	state, err := h.openProtectedRoot(ctx, paths.State)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := inspectAbsentLinuxUpdaterState(ctx, h); err != nil {
-			return Installed{}, false, true, err
+			return LinuxInstallerInspection{Pending: true}, err
 		}
 		if appeared, err := h.openProtectedRoot(ctx, paths.State); err == nil {
-			return Installed{}, false, true, errors.Join(errors.New("updater state appeared during absent-state inspection"), appeared.Close())
+			return LinuxInstallerInspection{Pending: true}, errors.Join(errors.New("updater state appeared during absent-state inspection"), appeared.Close())
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return Installed{}, false, true, fmt.Errorf("updater state absence could not be revalidated: %w", err)
+			return LinuxInstallerInspection{Pending: true}, fmt.Errorf("updater state absence could not be revalidated: %w", err)
 		}
-		return Installed{}, false, false, nil
+		return LinuxInstallerInspection{}, nil
 	}
 	if err != nil {
-		return Installed{}, false, false, fmt.Errorf("protected updater state is unavailable: %w", err)
+		return LinuxInstallerInspection{}, fmt.Errorf("protected updater state is unavailable: %w", err)
 	}
 	bin, err := h.openProtectedRoot(ctx, paths.Bin)
 	if err != nil {
-		return Installed{}, false, false, errors.Join(fmt.Errorf("protected manager directory is unavailable: %w", err), state.Close())
+		return LinuxInstallerInspection{}, errors.Join(fmt.Errorf("protected manager directory is unavailable: %w", err), state.Close())
 	}
 	mh := maintenanceHooks{
 		paths:              paths,
@@ -71,32 +79,37 @@ func inspectLinuxInstallerState(ctx context.Context, h linuxInstallerHooks) (ins
 		checkUpdaterLock:   h.checkUpdaterLock,
 	}
 	session := &LinuxInstaller{maintenance: maintenance, state: state, bin: bin, hooks: installerHooks}
-	defer func() { retErr = errors.Join(retErr, session.Close()) }()
+	defer func() {
+		retErr = errors.Join(retErr, session.Close())
+		if retErr != nil {
+			inspection.Terminal = false
+		}
+	}()
 	if err := session.verify(ctx); err != nil {
-		return Installed{}, false, false, fmt.Errorf("protected updater root changed: %w", err)
+		return LinuxInstallerInspection{}, fmt.Errorf("protected updater root changed: %w", err)
 	}
 	if h.checkUpdaterLock != nil {
 		if err := h.checkUpdaterLock(state); err != nil {
-			return Installed{}, false, false, errors.New("updater operation lock is unsafe")
+			return LinuxInstallerInspection{}, errors.New("updater operation lock is unsafe")
 		}
 	}
 	snapshot, err := session.SnapshotUpdater(ctx)
 	if err != nil {
-		return Installed{}, false, true, fmt.Errorf("updater state requires reconciliation: %w", err)
+		return LinuxInstallerInspection{Pending: true}, fmt.Errorf("updater state requires reconciliation: %w", err)
 	}
-	installed, present = snapshot.Installed()
+	installed, present := snapshot.Installed()
 	if err := session.verify(ctx); err != nil {
-		return Installed{}, false, true, fmt.Errorf("protected updater root changed during inspection: %w", err)
+		return LinuxInstallerInspection{Pending: true}, fmt.Errorf("protected updater root changed during inspection: %w", err)
 	}
 	if h.checkUpdaterLock != nil {
 		if err := h.checkUpdaterLock(state); err != nil {
-			return Installed{}, false, true, errors.New("updater operation lock changed during inspection")
+			return LinuxInstallerInspection{Pending: true}, errors.New("updater operation lock changed during inspection")
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return Installed{}, false, true, err
+		return LinuxInstallerInspection{Pending: true}, err
 	}
-	return installed, present, false, nil
+	return LinuxInstallerInspection{Installed: installed, Present: present, Terminal: snapshot.HasTerminal()}, nil
 }
 
 func inspectAbsentLinuxUpdaterState(ctx context.Context, h linuxInstallerHooks) error {

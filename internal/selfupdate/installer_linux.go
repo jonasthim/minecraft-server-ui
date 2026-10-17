@@ -57,6 +57,7 @@ type LinuxInstaller struct {
 type LinuxUpdaterSnapshot struct {
 	owner             *LinuxInstaller
 	journal           *capturedInstallerFile
+	receipt           *MaintenanceReceipt
 	request           *capturedInstallerFile
 	previous, next    *capturedInstallerFile
 	control           map[string]*capturedInstallerFile
@@ -300,6 +301,7 @@ func (s *LinuxInstaller) SnapshotUpdater(ctx context.Context) (*LinuxUpdaterSnap
 		if err != nil {
 			return fail(err)
 		}
+		snap.receipt = r
 		if r != nil && r.present {
 			if _, statErr := s.bin.Lstat(s.maintenance.paths.Binary); statErr == nil {
 				if err = s.maintenance.verifyExecutable(ctx, r.value); err != nil {
@@ -329,6 +331,7 @@ func (s *LinuxInstaller) SnapshotUpdater(ctx context.Context) (*LinuxUpdaterSnap
 	if err != nil {
 		return fail(err)
 	}
+	snap.receipt = r
 	if r == nil || !r.present || r.value != want {
 		return fail(errors.New("terminal journal and installed receipt disagree"))
 	}

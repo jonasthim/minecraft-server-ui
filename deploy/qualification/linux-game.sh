@@ -151,7 +151,7 @@ provision_hosted_prefix
 record_permissions after-prefix-provisioning
 stage=installer
 owned=1
-bash "$repo/deploy/linux/install.sh" "$binary" >"$scratch/install" 2>&1
+bash "$here/linux-seed.sh" "$repo/deploy/linux" "$binary" >"$scratch/install" 2>&1
 stage=native_start
 timeout 90s systemctl start minecraft-ui.service >"$scratch/start" 2>&1
 stage=game_api

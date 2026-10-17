@@ -241,18 +241,24 @@ func TestLinuxEntryBehavior(t *testing.T) {
 	for _, test := range []struct {
 		name, mode, version        string
 		development, flag, success bool
+		install, repair, nonroot   bool
 	}{
-		{"verified literal arguments", "good", "latest", false, false, true},
-		{"tampered never runs", "tamper", "latest", false, false, false},
-		{"oversized never runs", "oversize", "latest", false, false, false},
-		{"truncated never runs", "truncate", "latest", false, false, false},
-		{"failed download scrubbed", "error", "latest", false, false, false},
-		{"wrong redirect never runs", "wronghost", "latest", false, false, false},
-		{"signed GitHub redirect kept private", "redirect", "v2.3.4", false, false, true},
-		{"malicious version never interpreted", "good", "v1.2.3;$(touch PWNED)", false, false, false},
-		{"development requires opt in", "good", "latest", true, false, false},
-		{"development explicit", "good", "latest", true, true, true},
-		{"owner refuses development flag", "good", "latest", false, true, false},
+		{"verified literal arguments", "good", "latest", false, false, true, false, false, false},
+		{"tampered never runs", "tamper", "latest", false, false, false, false, false, false},
+		{"oversized never runs", "oversize", "latest", false, false, false, false, false, false},
+		{"truncated never runs", "truncate", "latest", false, false, false, false, false, false},
+		{"failed download scrubbed", "error", "latest", false, false, false, false, false, false},
+		{"wrong redirect never runs", "wronghost", "latest", false, false, false, false, false, false},
+		{"signed GitHub redirect kept private", "redirect", "v2.3.4", false, false, true, false, false, false},
+		{"malicious version never interpreted", "good", "v1.2.3;$(touch PWNED)", false, false, false, false, false, false},
+		{"development requires opt in", "good", "latest", true, false, false, false, false, false},
+		{"development explicit", "good", "latest", true, true, true, false, false, false},
+		{"owner refuses development flag", "good", "latest", false, true, false, false, false, false},
+		{"install with private temporary preparation", "good", "latest", false, false, true, true, false, false},
+		{"repair forwarded to trusted command", "good", "v2.3.4", false, false, true, true, true, false},
+		{"repair requires install", "good", "latest", false, false, false, false, true, false},
+		{"nonroot installation refused before acquisition", "good", "latest", false, false, false, true, false, true},
+		{"tampered installer never runs", "tamper", "latest", false, false, false, true, false, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -284,6 +290,16 @@ printf '200\n\n' >&2
 			// A trusted fake runner seam replaces only the final native invocation.
 			// Downloaded fixture bytes never execute. All validation remains shipping code.
 			script := string(renderScript(t, test.development))
+			// Exercise root admission with a fixture value; the final verified
+			// executable invocation below remains replaced by the no-effects seam.
+			if strings.Count(script, "EUID == 0") != 1 {
+				t.Fatal("authority seam drift")
+			}
+			authority := "0 == 0"
+			if test.nonroot {
+				authority = "1 == 0"
+			}
+			script = strings.Replace(script, "EUID == 0", authority, 1)
 			write(t, filepath.Join(root, "os-release"), []byte("ID=debian\n"))
 			script = strings.Replace(script, "/etc/os-release", filepath.Join(root, "os-release"), 1)
 			marker := `if ! "$scratch/preparer" "${args[@]}"`
@@ -296,6 +312,12 @@ if ! outer_test_run "${args[@]}"`, 1)
 			write(t, path, []byte(script))
 			output := filepath.Join(root, "literal $(touch PWNED); output")
 			args := []string{path, "--version", test.version, "--output", output}
+			if test.install {
+				args = []string{path, "--version", test.version, "--install"}
+			}
+			if test.repair {
+				args = append(args, "--repair")
+			}
 			if test.flag {
 				args = append(args, "--allow-development")
 			}
@@ -312,11 +334,27 @@ if ! outer_test_run "${args[@]}"`, 1)
 					t.Fatal("runner not reached", e)
 				}
 				fields := strings.Split(string(argv), "\x00")
-				if len(fields) < 10 || fields[6] != test.version || fields[8] != output {
+				if len(fields) < 10 || fields[6] != test.version {
+					t.Fatal(fields)
+				}
+				if test.install {
+					scratch := string(read(t, filepath.Join(root, "scratch")))
+					if fields[8] != filepath.Join(scratch, "prepared") || !strings.Contains(string(argv), "\x00--install\x00") {
+						t.Fatal(fields)
+					}
+				} else if fields[8] != output {
+					t.Fatal(fields)
+				}
+				if test.repair && !strings.Contains(string(argv), "\x00--repair\x00") {
 					t.Fatal(fields)
 				}
 			} else if e == nil {
 				t.Fatal("unverified runner invoked")
+			}
+			if test.nonroot {
+				if _, err := os.Lstat(filepath.Join(root, "urls")); !os.IsNotExist(err) {
+					t.Fatal("unauthorized acquisition", err)
+				}
 			}
 			if bytes.Contains(response, []byte("private-secret")) {
 				t.Fatal("leaked private response", string(response))

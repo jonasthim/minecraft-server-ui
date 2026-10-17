@@ -23,6 +23,7 @@ The default data directory is `./data`, resolved relative to your working direct
 - [Development](docs/development.md): prerequisites, frontend/backend development, generated API types and checks.
 - [Identity and access](docs/identity.md): administrator setup, local/OIDC accounts, roles and tokens.
 - [Runbook](docs/RUNBOOK.md): host operation, safety boundaries, updates and qualification requirements.
+- [Linux installer](docs/linux-installer.md): authenticated installation, check, upgrade, recovery and retained-data uninstall; native qualification in progress.
 - [Approved design](docs/superpowers/specs/2026-10-16-minecraft-server-ui-design.md): product scope and release requirements.
 
 The optional privileged updater is built separately with `make build-updater`; building it does not install or enable a host service. See the runbook before any host installation.
