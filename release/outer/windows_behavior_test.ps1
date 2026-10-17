@@ -169,3 +169,6 @@ try {
 } finally {
     [System.IO.Directory]::Delete($root,$true)
 }
+# Refusal cases intentionally leave a child exit code of 1. Only after every
+# assertion and cleanup succeeds does this harness itself report success.
+exit 0
