@@ -17,6 +17,38 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : '
 const when = (value?: string) => value ? new Date(value).toLocaleString() : 'None';
 const inputOf = (s: Schedule): Input => ({ name: s.name, enabled: s.enabled, expression: s.expression, timezone: s.timezone, action: s.action, ...(s.action === 'backup' ? { backup_kind: s.backup_kind } : {}), ...(s.action === 'command' ? { command: s.command } : {}), ...(s.action === 'announcement' ? { announcement: s.announcement } : {}), ...(s.action === 'restart' ? { countdown_seconds: s.countdown_seconds } : {}) });
 
+const presets = [
+  { value: '0 3 * * *', label: 'Daily at 03:00' },
+  { value: '0 * * * *', label: 'Hourly on the hour' },
+  { value: '@every 6h', label: 'Every six hours (elapsed)' },
+  { value: '0 3 * * 0', label: 'Sundays at 03:00' },
+  { value: '0 3 * * 1-5', label: 'Weekdays at 03:00' },
+  { value: 'custom', label: 'Custom cron or interval' },
+];
+function timingPreview(expression: string, zone: string) {
+  const value = expression.trim().replace(/\s+/g, ' ');
+  const aliases: Record<string, string> = { '@daily': '0 0 * * *', '@midnight': '0 0 * * *', '@hourly': '0 * * * *', '@weekly': '0 0 * * 0', '@monthly': '0 0 1 * *', '@yearly': '0 0 1 1 *', '@annually': '0 0 1 1 *' };
+  const interval = /^@every ([1-9]\d*)(m|h)$/.exec(value);
+  if (interval) return `Every ${interval[1]} ${interval[2] === 'h' ? 'hours' : 'minutes'} of elapsed time. Stored timezone: ${zone || 'choose a timezone'}.`;
+  const fields = (aliases[value] || value).split(' ');
+  const [minute, hour, day, month, weekday] = fields;
+  const suffix = ` in ${zone || 'choose a timezone'}.`;
+  if (fields.length === 5 && /^\d+$/.test(minute) && Number(minute) < 60) {
+    if (hour === '*' && day === '*' && month === '*' && weekday === '*') return `Hourly at minute ${minute.padStart(2, '0')}${suffix}`;
+    if (/^\d+$/.test(hour) && Number(hour) < 24) {
+      const time = `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`;
+      if (day === '*' && month === '*') {
+        if (weekday === '*') return `Daily at ${time}${suffix}`;
+        if (weekday === '0' || weekday === '7') return `Sundays at ${time}${suffix}`;
+        if (weekday === '1-5') return `Weekdays at ${time}${suffix}`;
+      }
+      if (day === '1' && month === '*' && weekday === '*') return `First day of each month at ${time}${suffix}`;
+      if (day === '1' && month === '1' && weekday === '*') return `January 1 at ${time}${suffix}`;
+    }
+  }
+  return `Custom expression “${expression}” in ${zone || 'choose a timezone'}. The server validates this expression and reports the next run after saving.`;
+}
+
 export function SchedulesPage() {
   const { instanceId = '' } = useParams();
   return <Stack><Anchor component={Link} to={'/instances/' + encodeURIComponent(instanceId)}>Back to server</Anchor><SchedulesPanel key={instanceId} instanceId={instanceId} /></Stack>;
@@ -58,7 +90,7 @@ export function SchedulesPanel({ instanceId }: { instanceId: string }) {
       return <Paper key={schedule.id} withBorder p="md" style={{ minWidth: 0, overflowWrap: 'anywhere' }}><Stack gap="xs">
         <Group justify="space-between" wrap="wrap"><Title order={3}>{schedule.name}</Title><Badge color={schedule.enabled ? 'green' : 'gray'}>{schedule.enabled ? 'Enabled' : 'Disabled'}</Badge></Group>
         <Text>{labels[schedule.action]} · {schedule.expression} · {schedule.timezone}</Text>
-        <Text size="sm">Next: {when(schedule.next_run_at)}</Text>
+        <Text size="sm">{timingPreview(schedule.expression, schedule.timezone)}</Text><Text size="sm">Next: {when(schedule.next_run_at)}</Text>
         {schedule.last_run && <Text size="sm">Last: {when(schedule.last_run.due_at)} · {schedule.last_run.state.replaceAll('_', ' ')}{schedule.last_run.job_state ? ' · ' + schedule.last_run.job_state : ''}</Text>}
         {schedule.disabled_reason && <Alert color="yellow">{schedule.disabled_reason}</Alert>}
         <Group wrap="wrap"><Button size="xs" variant="default" loading={busy} onClick={() => { void showHistory(schedule); }}>Run history</Button>{owner && <><Button size="xs" variant="light" onClick={() => setEditing(schedule)}>Edit</Button><Button size="xs" variant="default" loading={busy} disabled={!schedule.enabled && !data.available_actions.includes(schedule.action)} onClick={() => { void mutate(() => save({ ...inputOf(schedule), enabled: !schedule.enabled }, schedule.id)); }}>{schedule.enabled ? 'Disable' : 'Enable'}</Button><Button size="xs" variant="subtle" color="red" onClick={() => setRemoving(schedule)}>Delete</Button></>}</Group>
@@ -79,6 +111,7 @@ function ScheduleForm({ initial, timezone, available, onSave }: { initial: Sched
   const [name, setName] = useState(initial?.name || '');
   const [action, setAction] = useState<Action>(initial?.action || 'backup');
   const [expression, setExpression] = useState(initial?.expression || '0 3 * * *');
+  const [customTiming, setCustomTiming] = useState(!presets.some(preset => preset.value === (initial?.expression || '0 3 * * *')));
   const [zone, setZone] = useState(initial?.timezone || timezone);
   const [enabled, setEnabled] = useState(initial?.enabled || false);
   const [command, setCommand] = useState(initial?.command || 'list');
@@ -92,7 +125,8 @@ function ScheduleForm({ initial, timezone, available, onSave }: { initial: Sched
     const input: Input = { name, enabled: !!initial && enabled && available.includes(action), action, expression, timezone: zone, ...(action === 'backup' ? { backup_kind: kind } : {}), ...(action === 'command' ? { command } : {}), ...(action === 'announcement' ? { announcement } : {}), ...(action === 'restart' ? { countdown_seconds: countdown } : {}) };
     try { await onSave(input, initial?.id); } catch (error) { setError(errorText(error)); } finally { setBusy(false); }
   };
-  return <form onSubmit={submit}><Stack>{error && <Alert color="red" role="alert">{error}</Alert>}<TextInput label="Name" required maxLength={80} value={name} onChange={e => setName(e.currentTarget.value)} /><Select label="Action" required value={action} data={Object.entries(labels).map(([value, label]) => ({ value, label }))} onChange={value => { if (value && value in labels) setAction(value as Action); }} /><TextInput label="Cron or interval" description="Five fields: minute hour day month weekday. Descriptors such as @daily and @every 6h are accepted. Minimum interval is one minute." required maxLength={256} value={expression} onChange={e => setExpression(e.currentTarget.value)} /><TextInput label="IANA timezone" description="Stored independently of future host timezone changes, for example Europe/Stockholm or UTC." required maxLength={128} value={zone} onChange={e => setZone(e.currentTarget.value)} />
+  return <form onSubmit={submit}><Stack>{error && <Alert color="red" role="alert">{error}</Alert>}<TextInput label="Name" required maxLength={80} value={name} onChange={e => setName(e.currentTarget.value)} /><Select label="Action" required value={action} data={Object.entries(labels).map(([value, label]) => ({ value, label }))} onChange={value => { if (value && value in labels) setAction(value as Action); }} /><Select label="Timing preset" description="Choose a starting point or enter a custom expression below." value={customTiming ? 'custom' : expression} data={presets} onChange={value => { if (value) { setCustomTiming(value === 'custom'); if (value !== 'custom') setExpression(value); } }} /><TextInput label="Cron or interval" description="Five fields: minute hour day month weekday. Descriptors such as @daily and @every 6h are accepted. Minimum interval is one minute." required maxLength={256} value={expression} onChange={e => { setExpression(e.currentTarget.value); setCustomTiming(true); }} /><TextInput label="IANA timezone" description="Stored independently of future host timezone changes, for example Europe/Stockholm or UTC." required maxLength={128} value={zone} onChange={e => setZone(e.currentTarget.value)} />
+    <Text size="sm" role="status">Timing preview: {timingPreview(expression, zone)}</Text><Text size="xs" c="dimmed">Cron uses the stored timezone; missing daylight saving times are skipped and repeated times run twice. Elapsed intervals do not follow wall-clock times. Next-run time is authoritative only after server validation.</Text>
     {action === 'backup' && <Select label="Backup scope" value={kind} data={[{ value: 'world', label: 'World and dimensions' }, { value: 'full', label: 'Full local server and addon data' }]} onChange={value => { if (value === 'world' || value === 'full') setKind(value); }} />}
     {action === 'command' && <TextInput label="Approved command" description="list, say plain text, or administrator-only seed. Other commands use dedicated instance controls." required maxLength={516} value={command} onChange={e => setCommand(e.currentTarget.value)} />}
     {action === 'announcement' && <TextInput label="Announcement" description="Plain text without selectors; delivery requires server acknowledgement." required maxLength={512} value={announcement} onChange={e => setAnnouncement(e.currentTarget.value)} />}

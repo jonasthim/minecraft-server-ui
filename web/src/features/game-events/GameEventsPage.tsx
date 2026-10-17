@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Anchor, Badge, Button, Group, Paper, Stack, Text, Title } from '@mantine/core';
+import { Alert, Anchor, Badge, Button, Group, Paper, Select, SimpleGrid, Stack, Text, TextInput, Title } from '@mantine/core';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../../api/client';
 import type { components } from '../../api/schema';
@@ -15,8 +15,13 @@ export function GameEventsPage() {
 }
 
 export function GameEventsPanel({ instanceId }: { instanceId: string }) {
-  const [history, setHistory] = useState<History | null>(null);
+  const [history, setHistory] = useState<(History & { discarded?: boolean }) | null>(null);
   const [request, setRequest] = useState({ after: 0, refresh: 0 });
+  const [player, setPlayer] = useState('');
+  const [text, setText] = useState('');
+  const [kind, setKind] = useState('all');
+  const [afterTime, setAfterTime] = useState('');
+  const [beforeTime, setBeforeTime] = useState('');
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -27,7 +32,7 @@ export function GameEventsPanel({ instanceId }: { instanceId: string }) {
         setHistory(previous => {
           if (request.after === 0 || !previous) return page;
           const events = [...new Map([...previous.events, ...page.events].map(event => [event.id, event])).values()];
-          return { ...page, events: events.slice(-500) };
+          return { ...page, gap: previous.gap || page.gap || events.some(event => event.gap || event.kind === 'source_gap'), retention_floor: Math.max(previous.retention_floor, page.retention_floor), discarded: previous.discarded || events.length > 500, events: events.slice(-500) };
         });
         setError('');
       })
@@ -37,6 +42,15 @@ export function GameEventsPanel({ instanceId }: { instanceId: string }) {
   }, [instanceId, request]);
   const refresh = () => { setBusy(true); setError(''); setRequest(previous => ({ after: 0, refresh: previous.refresh + 1 })); };
   const more = () => { if (history) { setBusy(true); setError(''); setRequest(previous => ({ ...previous, after: history.next_cursor })); } };
+  const filtered = history?.events.filter(event => {
+    const observed = Date.parse(event.observed_at);
+    return (!player || (event.player.name || '').toLocaleLowerCase().includes(player.toLocaleLowerCase()))
+      && (!text || event.message.toLocaleLowerCase().includes(text.toLocaleLowerCase()))
+      && (kind === 'all' || kind === event.kind)
+      && (!afterTime || observed >= Date.parse(afterTime + 'Z'))
+      && (!beforeTime || observed <= Date.parse(beforeTime + 'Z'));
+  }) || [];
+  const invalidRange = !!afterTime && !!beforeTime && afterTime > beforeTime;
   return <Stack gap="lg">
     <Group justify="space-between" wrap="wrap"><div><Title order={1}>Deaths &amp; advancements</Title><Text c="dimmed">Observed native log history</Text></div><Button variant="light" disabled={busy} onClick={refresh}>Refresh history</Button></Group>
     {error && <Alert color="red" role="alert">{error} Displayed records may be out of date.<Button variant="subtle" onClick={refresh} disabled={busy}>Retry history</Button></Alert>}
@@ -50,10 +64,24 @@ export function GameEventsPanel({ instanceId }: { instanceId: string }) {
     <Paper withBorder p="lg"><Stack>
       <Title order={2}>Retained observations</Title>
       <Text size="sm">Oldest first. Times are manager ingestion observations; server dates and time zones are unknown. Names are name-only evidence and never establish UUIDs.</Text>
+      <SimpleGrid cols={{ base: 1, sm: 2 }}>
+        <TextInput label="Player name contains" value={player} onChange={event => setPlayer(event.currentTarget.value)} />
+        <TextInput label="Event text contains" value={text} onChange={event => setText(event.currentTarget.value)} />
+        <Select label="Event type" value={kind} onChange={value => setKind(value || 'all')} data={[{ value: 'all', label: 'All observations' }, { value: 'death', label: 'Deaths' }, { value: 'advancement', label: 'Advancements' }, { value: 'source_gap', label: 'Source gaps' }]} />
+        <TextInput type="datetime-local" label="Observed at or after (UTC)" value={afterTime} onChange={event => setAfterTime(event.currentTarget.value)} />
+        <TextInput type="datetime-local" label="Observed at or before (UTC)" value={beforeTime} onChange={event => setBeforeTime(event.currentTarget.value)} />
+      </SimpleGrid>
+      <Button variant="default" onClick={() => { setPlayer(''); setText(''); setKind('all'); setAfterTime(''); setBeforeTime(''); }}>Reset event filters</Button>
+      {invalidRange && <Alert color="orange">The end of the observation range precedes its start.</Alert>}
+      {history && <Text role="status" size="sm">Showing {filtered.length} of {history.events.length} loaded observations. Filters search only this loaded buffer, not all retained server history.{history.more ? ' More retained observations are available below.' : ' The retained-history cursor reached the end at the last read.'}</Text>}
+      {history?.discarded && <Alert color="yellow">The 500-observation screen limit discarded earlier loaded rows. Refresh to return to the start of retained history.</Alert>}
+      {history && (history.gap || history.events.some(event => event.gap || event.kind === 'source_gap')) && <Alert color="yellow">Loaded source coverage has gaps. Filters and the screen limit can hide gap records; missing events cannot be recovered by changing a filter.</Alert>}
+      {history?.reason && <Text size="sm">History source: {history.reason}</Text>}
       {!!history?.retention_floor && <Alert color="yellow">Earlier retained events have expired. This history is incomplete.</Alert>}
-      {history && !history.events.some(event => event.kind !== 'source_gap') && <Alert color="gray">No retained deaths or advancements have been observed. Missing or disabled log output can hide events.</Alert>}
+      {history && !history.events.some(event => event.kind !== 'source_gap') && <Alert color="gray">No deaths or advancements are present in the loaded observations. Missing or disabled log output can hide events.</Alert>}
       {!history && busy && <Text role="status">Loading event history…</Text>}
-      {history?.events.map(event => <EventRow key={event.id} event={event} />)}
+      {history && history.events.length > 0 && filtered.length === 0 && <Text>No loaded observations match these filters.</Text>}
+      {filtered.map(event => <EventRow key={event.id} event={event} />)}
       <Text size="sm" c="dimmed">Up to 500 observations are kept on screen. Refresh returns to the beginning of retained history.</Text>
       <Button variant="light" disabled={busy || !history?.more} loading={busy && !!history} onClick={more}>Load more retained observations</Button>
       {history && !history.more && <Text size="sm" c="dimmed">End of retained history. Refresh to check for new observations.</Text>}

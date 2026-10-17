@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { Alert, Anchor, Badge, Button, Group, NumberInput, Paper, Select, SimpleGrid, Stack, Text, Title } from '@mantine/core';
+import { Alert, Anchor, Badge, Button, Checkbox, Group, NumberInput, Paper, Select, SimpleGrid, Stack, Text, Title } from '@mantine/core';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../../api/client';
 import type { components } from '../../api/schema';
@@ -23,10 +23,30 @@ export function MapPanel({ instanceId }: { instanceId: string }) {
   const [center, setCenter] = useState({ x: 0, z: 0 });
   const [height, setHeight] = useState<number | string>('');
   const [zoom, setZoom] = useState(1);
+  const [touchDrag, setTouchDrag] = useState(false);
+  const [offset, setOffset] = useState({ x: 0, z: 0 });
+  const drag = useRef<{ id: number; x: number; y: number; width: number; height: number; zoom: number } | null>(null);
+  const pendingCenter = useRef<{ x: number; z: number } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState('');
   const [summaryError, setSummaryError] = useState('');
   const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    drag.current = null; setOffset({ x: 0, z: 0 }); setZoom(1);
+    setCenter(pendingCenter.current || { x: 0, z: 0 }); pendingCenter.current = null;
+  }, [dimension]);
+  useEffect(() => {
+    const element = canvas.current;
+    if (!element) return;
+    const wheel = (event: WheelEvent) => {
+      if (document.activeElement !== element && !event.ctrlKey) return;
+      event.preventDefault();
+      drag.current = null; setOffset({ x: 0, z: 0 });
+      if (event.deltaY) setZoom(value => event.deltaY < 0 ? Math.min(4, value * 2) : Math.max(1, value / 2));
+    };
+    element.addEventListener('wheel', wheel, { passive: false });
+    return () => element.removeEventListener('wheel', wheel);
+  }, []);
   useEffect(() => startVisiblePoll(signal => api<Summary>(endpoint, { signal }), value => {
     dispatchSelection({ type: 'summary', value }); setSummaryError('');
   }, error => setSummaryError(message(error))), [endpoint, attempt]);
@@ -41,7 +61,7 @@ export function MapPanel({ instanceId }: { instanceId: string }) {
     if (!context) return;
     context.fillStyle = '#17252b'; context.fillRect(0, 0, 480, 480);
     if (!view) return;
-    context.save(); context.translate(240, 240); context.scale(zoom, zoom); context.translate(-240, -240);
+    context.save(); context.translate(offset.x, offset.z); context.translate(240, 240); context.scale(zoom, zoom); context.translate(-240, -240);
     for (const tile of view.tiles) {
       const left = (tile.chunk_x - center.x + 1) * 160, top = (tile.chunk_z - center.z + 1) * 160;
       if (tile.state === 'ready' && tile.cells.length === 256) tile.cells.forEach((cell, index) => {
@@ -59,9 +79,10 @@ export function MapPanel({ instanceId }: { instanceId: string }) {
       context.fillStyle = '#ffffff'; context.font = `${12 / zoom}px sans-serif`; context.fillText(marker.player.name || marker.player.uuid || 'Observed player', x + 7 / zoom, z - 7 / zoom);
     }
     context.restore();
-  }, [view, center.x, center.z, zoom, dimension]);
+  }, [view, center.x, center.z, zoom, dimension, offset]);
   const resetView = () => { dispatchSelection({ type: 'clear_view' }); setError(''); };
-  const pan = (x: number, z: number) => { resetView(); setCenter(previous => ({ x: Math.max(-1874999, Math.min(1874998, previous.x + x)), z: Math.max(-1874999, Math.min(1874998, previous.z + z)) })); };
+  const cancelDrag = () => { drag.current = null; setOffset({ x: 0, z: 0 }); };
+  const pan = (x: number, z: number) => { cancelDrag(); resetView(); setCenter(previous => ({ x: Math.max(-1874999, Math.min(1874998, previous.x + x)), z: Math.max(-1874999, Math.min(1874998, previous.z + z)) })); };
   const counts = view?.tiles.reduce<Record<string, number>>((all, tile) => { all[tile.state] = (all[tile.state] || 0) + 1; return all; }, {}) || {};
   const unknown = view?.tiles.flatMap(tile => tile.cells).filter(cell => !cell.empty && !cell.known).length || 0;
   const described = Object.entries(counts).map(([state, count]) => count + ' ' + state).join(', ');
@@ -75,13 +96,33 @@ export function MapPanel({ instanceId }: { instanceId: string }) {
       <NumberInput label="Inclusive maximum Y" description="Blank: surface. Highest non-air at or below Y, not an exact plane." placeholder="Surface" min={-2032} max={2031} allowDecimal={false} value={height} onChange={value => { resetView(); setHeight(value); }} />
     </SimpleGrid>
     <Paper withBorder p="sm"><Stack gap="sm">
-      <Group justify="space-between"><Text size="sm">Center chunk {center.x}, {center.z} · {48 / zoom} blocks across · north ↑</Text><Select aria-label="Map zoom" value={String(zoom)} onChange={value => setZoom(Number(value || 1))} data={['1', '2', '4'].map(value => ({ value, label: value + '× zoom' }))} w={112} /></Group>
+      <Group justify="space-between"><Text size="sm">Center chunk {center.x}, {center.z} · {48 / zoom} blocks across · north ↑</Text><Select aria-label="Map zoom" value={String(zoom)} onChange={value => { cancelDrag(); setZoom(Number(value || 1)); }} data={['1', '2', '4'].map(value => ({ value, label: value + '× zoom' }))} w={112} /></Group>
       <Group gap="xs" justify="center"><Button size="xs" variant="default" onClick={() => pan(-1, 0)}>West</Button><Button size="xs" variant="default" onClick={() => pan(0, -1)}>North</Button><Button size="xs" variant="default" onClick={() => pan(0, 1)}>South</Button><Button size="xs" variant="default" onClick={() => pan(1, 0)}>East</Button></Group>
-      <canvas ref={canvas} width={480} height={480} tabIndex={0} role="img" aria-label="Saved terrain map. Use arrow keys to pan and plus or minus to zoom." aria-describedby="map-summary" style={{ width: '100%', maxWidth: 640, alignSelf: 'center', imageRendering: 'pixelated', borderRadius: 4 }} onKeyDown={event => {
+      <Text size="xs" c="dimmed">Drag to pan saved chunks. Focus the map (or hold Ctrl) and scroll to zoom. Arrow keys and the buttons also navigate. Touch dragging is optional so page scrolling remains available.</Text>
+      <Checkbox label="Enable touch map dragging" checked={touchDrag} onChange={event => { cancelDrag(); setTouchDrag(event.currentTarget.checked); }} />
+      <canvas ref={canvas} width={480} height={480} tabIndex={0} role="img" aria-label="Saved terrain map. Use arrow keys to pan and plus or minus to zoom." aria-describedby="map-summary" style={{ width: '100%', height: 'auto', aspectRatio: '1', touchAction: touchDrag ? 'none' : 'pan-y', cursor: 'grab', maxWidth: 640, alignSelf: 'center', imageRendering: 'pixelated', borderRadius: 4 }} onPointerDown={event => {
+        if (event.button !== 0 || (event.pointerType === 'touch' && !touchDrag)) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        event.currentTarget.focus({ preventScroll: true });
+        event.currentTarget.setPointerCapture(event.pointerId);
+        drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, width: rect.width, height: rect.height, zoom };
+      }} onPointerMove={event => {
+        const start = drag.current;
+        if (!start || start.id !== event.pointerId) return;
+        setOffset({ x: (event.clientX - start.x) * 480 / start.width, z: (event.clientY - start.y) * 480 / start.height });
+      }} onPointerUp={event => {
+        const start = drag.current;
+        if (!start || start.id !== event.pointerId) return;
+        const x = Math.round(-(event.clientX - start.x) * 3 / start.width / start.zoom);
+        const z = Math.round(-(event.clientY - start.y) * 3 / start.height / start.zoom);
+        cancelDrag();
+        if (x || z) pan(x, z);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      }} onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag} onBlur={cancelDrag} onKeyDown={event => {
         const direction: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
         if (direction[event.key]) { event.preventDefault(); pan(...direction[event.key]); }
-        if (event.key === '+' || event.key === '=') { event.preventDefault(); setZoom(value => Math.min(4, value * 2)); }
-        if (event.key === '-') { event.preventDefault(); setZoom(value => Math.max(1, value / 2)); }
+        if (event.key === '+' || event.key === '=') { event.preventDefault(); cancelDrag(); setZoom(value => Math.min(4, value * 2)); }
+        if (event.key === '-') { event.preventDefault(); cancelDrag(); setZoom(value => Math.max(1, value / 2)); }
       }}>Saved terrain is described in the map summary and chunk details below.</canvas>
       <Text id="map-summary" size="sm" role="status">{view ? described + '. ' + unknown + ' unknown non-air cells (purple).' : 'Waiting for the selected saved area.'} Empty cells are dark. Hatched chunks have no validated terrain; their state appears below.</Text>
       <Text size="xs" c="dimmed">Five-second active sampling; hidden pages pause. Last view sample: {when(view?.sampled_at)}. Saved source age is independent of this observation time.</Text>
@@ -97,7 +138,7 @@ export function MapPanel({ instanceId }: { instanceId: string }) {
         <Text size="sm" fw={600}>{marker.player.name || marker.player.uuid} · {marker.dimension}</Text>
         <Text size="xs">{marker.x.toFixed(1)}, {marker.y.toFixed(1)}, {marker.z.toFixed(1)} · {when(marker.observed_at)} · {marker.source} · {marker.player.authority}</Text>
         {typeof height === 'number' && marker.y > height && <Text size="xs">Player is above the selected terrain ceiling.</Text>}
-        {summary?.discovery.dimensions.some(d => d.id === marker.dimension) && <Button size="xs" variant="light" onClick={() => { resetView(); setDimension(marker.dimension); setCenter({ x: Math.max(-1874999, Math.min(1874998, Math.floor(marker.x / 16))), z: Math.max(-1874999, Math.min(1874998, Math.floor(marker.z / 16))) }); }}>Center on {marker.player.name || 'player'}</Button>}
+        {summary?.discovery.dimensions.some(d => d.id === marker.dimension) && <Button size="xs" variant="light" onClick={() => { resetView(); cancelDrag(); const target = { x: Math.max(-1874999, Math.min(1874998, Math.floor(marker.x / 16))), z: Math.max(-1874999, Math.min(1874998, Math.floor(marker.z / 16))) }; if (marker.dimension !== dimension) pendingCenter.current = target; setDimension(marker.dimension); setCenter(target); }}>Center on {marker.player.name || 'player'}</Button>}
       </Stack>)}
       <Text size="xs" c="dimmed">Targeted native data-get reads need no add-on. Field shapes are statically checked for 1.21.9 and 26.3; actual game interoperability is not yet qualified. Other versions and unfamiliar/localized/plugin feedback remain unknown. Native coordinates and saved terrain have different ages.</Text>
     </Stack></Paper>
