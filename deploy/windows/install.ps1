@@ -9,7 +9,15 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $target = 'C:\Program Files\MinecraftUI'
-function Test-AbsolutePath([string]$Value) { return ($Value -match '^[A-Za-z]:[\/]' -or $Value -match '^\\[^\/]+[\/][^\/]+(?:[\/]|$)') }
+function Test-AbsolutePath([string]$Value) {
+ # PowerShell single quotes preserve regex backslashes. A separator class
+ # needs \\ to represent a literal backslash; \/ alone matches only slash.
+ $drive = '^[A-Za-z]:[\\/][^<>:"|?*\x00-\x1F]*\z'
+ # Require both UNC server/share components; reject device namespaces and
+ # invalid Windows filename characters rather than accepting a root prefix.
+ $unc = '^\\\\(?!\.{1,2}[\\/])[^\\/:*?"<>|\x00-\x1F]+[\\/](?!\.{1,2}(?:[\\/]|\z))[^\\/:*?"<>|\x00-\x1F]+(?:[\\/][^<>:"|?*\x00-\x1F]*)?\z'
+ return ($Value -match $drive -or $Value -match $unc)
+}
 if (-not (Test-AbsolutePath $Binary) -or -not (Test-AbsolutePath $DataDir)) { throw 'Absolute paths required.' }
 if ($Credential.UserName -match '^(LocalSystem|NT AUTHORITY\\SYSTEM|Administrator)$') { throw 'Use a dedicated unprivileged account.' }
 if (Get-Service -Name MinecraftUI -ErrorAction SilentlyContinue) { throw 'Service already exists. Use the documented stop/wait upgrade procedure.' }

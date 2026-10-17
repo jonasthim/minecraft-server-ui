@@ -10,6 +10,8 @@ $administrator = [Security.Principal.WindowsPrincipal]::new([Security.Principal.
 if (-not $administrator.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Administrator required.' }
 $Binary = (Resolve-Path -LiteralPath $Binary).Path
 $OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
+# Pure shipping-function regressions run before account/service/file mutation.
+& (Join-Path $PSScriptRoot 'windows-paths.ps1') | Tee-Object -FilePath (Join-Path $OutputDirectory 'path-assertions.txt')
 $target = 'C:\Program Files\MinecraftUI'
 $data = 'C:\ProgramData\MinecraftUI'
 if ((Get-Service MinecraftUI -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $target) -or (Test-Path -LiteralPath $data)) { throw 'Refusing existing installation.' }

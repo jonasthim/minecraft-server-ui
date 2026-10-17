@@ -35,9 +35,9 @@ game isolation/lifetime, backup/restore, updater activation or stable release.
   stop/start and restart, retained admin/session/password login, changed PID,
   listener closure and absence of orphan installed manager processes. Random
   application credentials and cookies stay in memory.
-- The draft workflow is
-  `.superpowers/sdd/2026-10-17-valheim-parity-completion/install-smoke.workflow.yml`.
-  Integrator owns its `.github/workflows` placement and hosted dispatch. It is
+- The integrated workflow is `.github/workflows/installed-manager.yml`, with
+  its original draft retained under the completion plan's scratch directory.
+  Integrator owns workflow wiring and hosted dispatch. It is
   manual, has three native runners, exact source SHA/hash/version reports,
   bounded commands and jobs, and always uploads scrubbed allowlisted reports.
   Raw journals/events, database, application state, environments and credentials
@@ -67,6 +67,30 @@ existing bounded setuid helper. It adds no capability and changes no helper,
 sudo grant or game unit; game namespace/seccomp/NNP restrictions are intact.
 Hosted baseline/candidate evidence is required before accepting the fix as
 native tested behavior.
+
+## Independent review correction I1 — Windows absolute paths
+
+Independent review of `b82a867` found the shipping installer's separator regex
+rejected native `C:\...` and UNC paths before service installation. Root
+authorized narrow ownership of `Test-AbsolutePath` in `deploy/windows/install.ps1`.
+The function now accepts rooted drive paths and complete UNC server/share
+paths with slash or backslash separators. It refuses relative and drive-relative
+paths, incomplete/malformed UNC, device namespaces, invalid Windows filename
+characters and control characters. Strict end anchors reject trailing newlines.
+The installer lifecycle and service-credential model are unchanged.
+
+`deploy/qualification/windows-paths.ps1` parses the actual shipping installer,
+extracts and defines only its path predicate, and runs 9 accepted and 26 rejected
+cases without invoking the installer or changing accounts/services/files. The
+Windows native harness runs it before any installation mutation and captures
+its fixed assertion count in the scrubbed reports. This requires no additional
+workflow step or dependency.
+
+Before correction, local extracted-regex reproduction rejected canonical native
+drive and UNC examples. After correction, the exact regex source passes all 35
+cases in a Python regex cross-check. This is not native .NET/PowerShell evidence;
+the pure PowerShell regression and actual canonical installer/SCM flow must pass
+on the hosted Windows runner. Local `pwsh` remains unavailable.
 
 ## Local evidence
 
