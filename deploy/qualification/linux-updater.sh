@@ -114,6 +114,7 @@ trap cleanup EXIT
     cat "$scratch/initial-version" "$scratch/success-version"
     "$updater" version
     systemctl --version
+    dpkg-query -W -f='${binary:Package} ${Version}\n' util-linux libpam-modules libpam0g
     for binary in "$initial" "$success" "$updater" "$qualifier" "$negative" "$peer_success" "$peer_negative"; do sha256sum "$binary" | cut -d' ' -f1; done
 } >"$output/input-summary.txt"
 "$qualifier" prepare --success "$success" --negative "$negative" --peer-success "$peer_success" --peer-negative "$peer_negative" --license "$repo/LICENSE" --notices "$repo/THIRD_PARTY_NOTICES.txt" --out "$scratch/fixtures"

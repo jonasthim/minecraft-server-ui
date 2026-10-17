@@ -143,8 +143,8 @@ func (d linuxDriver) ProbeSchema(ctx context.Context, previous bool) (Capability
 }
 
 // The caller constructs the fixed manager-account command above. This helper
-// captures bounded stderr only to recognize exact authored child diagnostics;
-// all other bytes, including the child's existing raw error log, are discarded.
+// captures bounded stderr only to recognize exact child diagnostics and known
+// runuser messages. All other bytes, including raw child errors, are discarded.
 func runLinuxSchemaProbe(ctx context.Context, command *exec.Cmd, diagnostics io.Writer) (Capability, error) {
 	var capability Capability
 	var output, stderr boundedOutput
@@ -152,24 +152,108 @@ func runLinuxSchemaProbe(ctx context.Context, command *exec.Cmd, diagnostics io.
 	command.Stderr = &stderr
 	err := command.Run()
 	if err != nil || output.exceeded {
-		if stderr.exceeded {
-			_, _ = fmt.Fprintln(diagnostics, "native-update-schema-diagnostic:command:stderr_overflow")
-		} else {
-			for _, line := range strings.Split(string(stderr.body), "\n") {
-				if validSchemaProbeDiagnostic(line) {
-					_, _ = fmt.Fprintln(diagnostics, line)
-					break // At most one fixed child boundary per failed probe.
-				}
-			}
-		}
+		relayLinuxSchemaDiagnostics(diagnostics, stderr)
 		writeLinuxSchemaCommandFailure(diagnostics, ctx, err, output.exceeded)
 		return capability, errors.New("manager-account schema probe failed")
 	}
 	if err := strictJSON(output.body, &capability); err != nil {
+		relayLinuxSchemaDiagnostics(diagnostics, stderr)
 		_, _ = fmt.Fprintln(diagnostics, "native-update-schema-diagnostic:command:invalid_json")
 		return capability, errors.New("invalid manager schema probe")
 	}
 	return capability, nil
+}
+
+func relayLinuxSchemaDiagnostics(diagnostics io.Writer, stderr boundedOutput) {
+	if stderr.exceeded {
+		_, _ = fmt.Fprintln(diagnostics, "native-update-schema-diagnostic:command:stderr_overflow")
+	} else {
+		entry, failure := false, false
+		for _, line := range strings.Split(string(stderr.body), "\n") {
+			if line == "native-update-schema-diagnostic:child:entered" {
+				if !entry {
+					_, _ = fmt.Fprintln(diagnostics, line)
+					entry = true
+				}
+				continue
+			}
+			if failure {
+				continue
+			}
+			if validSchemaProbeDiagnostic(line) {
+				_, _ = fmt.Fprintln(diagnostics, line)
+				failure = true
+			} else if marker := classifyRunuserFailure(line); marker != "" {
+				_, _ = fmt.Fprintln(diagnostics, marker)
+				failure = true
+			}
+		}
+	}
+}
+
+// Match only the C-locale strings used by Ubuntu's util-linux/PAM sources.
+// Input is never interpolated into output: both stage and reason come from
+// finite tables. Unknown/localized text and all extra payload are discarded.
+func classifyRunuserFailure(line string) string {
+	body, ok := strings.CutPrefix(line, "runuser: ")
+	if !ok {
+		return ""
+	}
+	operation, detail, separated := strings.Cut(body, ": ")
+	stage, reason := "", ""
+	if !separated {
+		stage, reason = "runuser_auth", runuserPAMReasons[body]
+	} else {
+		switch operation {
+		case "cannot open session":
+			stage, reason = "runuser_session", runuserPAMReasons[detail]
+		case "failed to establish user credentials":
+			stage, reason = "runuser_credentials", runuserPAMReasons[detail]
+		default:
+			stage = map[string]string{
+				"cannot set groups": "runuser_groups", "cannot set group id": "runuser_gid",
+				"cannot set user id": "runuser_uid", "failed to modify environment": "runuser_environment",
+				"failed to set the PATH environment variable": "runuser_environment",
+				"cannot set child signal handler":             "runuser_signal", "cannot create child process": "runuser_fork",
+				"failed to execute /usr/local/bin/minecraft-ui":          "runuser_exec",
+				"failed to execute /usr/local/bin/minecraft-ui.previous": "runuser_exec",
+			}[operation]
+			reason = runuserErrnoReasons[detail]
+		}
+	}
+	if stage == "" || reason == "" {
+		return ""
+	}
+	return "native-update-schema-diagnostic:" + stage + ":" + reason
+}
+
+var runuserErrnoReasons = map[string]string{
+	"Operation not permitted": "eperm", "Permission denied": "eacces", "No such file or directory": "enoent",
+	"Not a directory": "enotdir", "Exec format error": "enoexec", "Text file busy": "etxtbsy",
+	"Argument list too long": "e2big", "Resource temporarily unavailable": "eagain", "Cannot allocate memory": "enomem",
+	"Too many open files": "emfile", "Too many open files in system": "enfile", "Invalid argument": "einval",
+	"Read-only file system": "erofs",
+}
+
+var runuserPAMReasons = map[string]string{
+	"Critical error - immediate abort": "abort", "Failed to load module": "module_load", "Symbol not found": "symbol",
+	"Error in service module": "service", "System error": "system", "Memory buffer error": "memory",
+	"Permission denied": "permission", "Authentication failure": "authentication",
+	"Insufficient credentials to access authentication data":     "credentials_insufficient",
+	"Authentication service cannot retrieve authentication info": "authinfo",
+	"User not known to the underlying authentication module":     "unknown_user",
+	"Have exhausted maximum number of retries for service":       "retries",
+	"Authentication token is no longer valid; new one required":  "new_token", "User account has expired": "expired_account",
+	"Cannot make/remove an entry for the specified session":   "session",
+	"Authentication service cannot retrieve user credentials": "credentials_unavailable",
+	"User credentials expired":                                "credentials_expired", "Failure setting user credentials": "credentials",
+	"No module specific data is present": "module_data", "Bad item passed to pam_*_item()": "bad_item",
+	"Conversation error": "conversation", "Authentication token manipulation error": "token",
+	"Authentication information cannot be recovered": "token_recovery", "Authentication token lock busy": "token_busy",
+	"Authentication token aging disabled": "token_aging", "Failed preliminary check by password service": "retry",
+	"The return value should be ignored by PAM dispatch": "ignored", "Module is unknown": "unknown_module",
+	"Authentication token expired": "expired_token", "Conversation is waiting for event": "conversation_again",
+	"Application needs to call libpam again": "incomplete", "Unknown PAM error": "unknown",
 }
 
 func validSchemaProbeDiagnostic(line string) bool {

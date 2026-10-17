@@ -209,3 +209,110 @@ No local services, accounts, firewalls, games, preview or canonical installation
 paths were changed, and no hosted job was dispatched. Independent review and a
 subsequent exact-commit Ubuntu24 run remain required; the schema-probe root cause
 and a concrete behavior fix are still pending that evidence.
+
+## Hosted run39038823522 — wrapper exit before any retained child boundary
+
+[Run39038823522](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39038823522)
+at `81601740f73c78b83a5dd610443dc875e0801527`, Ubuntu24
+job117414473045, retains `schema_probe: 1` and only
+`native_schema_probe_counts: {"command:exit:1": 1}`. There is no child failure
+boundary, stderr-overflow marker or signal classification. The actual cause
+remains unknown: exit1 alone does not prove a PAM, identity or execution error.
+
+The journal is `aborted` with rollbackfalse; the manager is inactive/dead and
+both worker and recovery are still activating when the harness snapshots them.
+Unlike run39036772847, this snapshot does not establish completed restart of the
+prior manager. The exact artifact copy is under
+`/home/thim/.cache/dilla-tmp/updater-39038823522-ubuntu24/installed-updater-ubuntu-24.04-81601740f73c78b83a5dd610443dc875e0801527`.
+
+Read-only review of the official Ubuntu package sources establishes useful
+diagnostic boundaries:
+
+- The packaged [Noble runuser PAM stack](https://git.launchpad.net/ubuntu/+source/util-linux/plain/debian/util-linux.runuser.pam?h=ubuntu/noble)
+  and [Jammy stack](https://git.launchpad.net/ubuntu/+source/util-linux/plain/debian/util-linux.runuser.pam?h=ubuntu/jammy)
+  are identical: rootok authentication, optional keyinit, and required limits
+  and unix session modules. There is no source basis for assuming a different
+  required PAM stack caused this host's failure.
+- [Noble runuser source](https://git.launchpad.net/ubuntu/+source/util-linux/plain/login-utils/su-common.c?h=ubuntu/noble)
+  has separate exit1 paths for group initialization, PAM credentials/session,
+  identity changes, watcher setup and failed exec before the manager probe can
+  report a substep. Its post-2.38 resource-limit resets precede session opening;
+  their return values are ignored, so those reset calls are not a demonstrated
+  direct exit1 cause.
+- [Noble pam_limits](https://git.launchpad.net/ubuntu/+source/pam/plain/modules/pam_limits/pam_limits.c?h=ubuntu/noble)
+  logs fixed limit names when setrlimit fails and a fixed PRIO_PROCESS message
+  when setpriority fails, then denies the session. The
+  [PAM syslog formatter](https://git.launchpad.net/ubuntu/+source/pam/plain/libpam/pam_syslog.c?h=ubuntu/noble)
+  adds fixed module/service/session prefixes. Exact finite matching can expose
+  a failed module/limit operation without retaining user names or configuration.
+- Official [systemd249 directive source](https://github.com/systemd/systemd/blob/v249/man/systemd.exec.xml)
+  and [systemd255 source](https://github.com/systemd/systemd/blob/v255/man/systemd.exec.xml)
+  describe RestrictSUIDSGID as preventing filesystem SUID/SGID marking and
+  NoNewPrivileges as preventing new privilege gains through exec. The updater
+  explicitly enables NoNewPrivileges on both systems already. Differences in
+  implied settings or mount handling do not establish a cause here, and these
+  directives must not be disabled on the basis of exit1 alone.
+
+These distro branch sources do not establish the exact package builds installed
+on the runner. A fixed read-only package-version capture is needed for that
+binding. No systemd/PAM/runuser security control was changed or bypassed.
+
+The proposed next packet, sent to the integrator before implementation, is:
+add a fixed child-entry marker; preserve entry plus at most one child failure;
+map only exact C-locale runuser messages from the source to fixed wrapper-stage
+categories; classify exact PAM limit-operation syslog messages through finite
+limit/errno allowlists; and record fixed util-linux/libpam-modules/libpam0g
+package versions. Unknown text remains discarded and stderr remains bounded.
+This distinguishes a manager that reached Go code from wrapper failures and
+can identify a PAM limit denial in the same run. The integrator approved this
+exact scope before implementation; a behavioral fix remains unsupported.
+
+## Approved runuser/PAM diagnostic packet
+
+Only the actual `update-schema` branch emits `child:entered`; capability probes,
+other commands and rejected argument counts do not emit it. Typed stdout and
+command results are unchanged. On failed probe execution or JSON rejection,
+the Linux adapter relays at most one exact entry marker and one exact child or
+wrapper failure. It keeps the existing8KiB stderr bound and discards oversized
+stderr completely. Entry is a diagnostic observation and never authorizes
+activation or turns an exit into success.
+
+The wrapper classifier recognizes finite exact C-locale messages from the
+Ubuntu runuser source and
+[PAM string definitions](https://git.launchpad.net/ubuntu/+source/pam/plain/libpam/pam_strerror.c?h=ubuntu/noble).
+PAM authentication/setup, credential and session failures map to fixed reasons;
+group/UID/GID, environment, fork/signal and fixed current/previous executable
+operations map to finite errno labels. No captured source text or path becomes
+an output field. Unknown/localized messages, unknown paths, suffixes and embedded
+payloads are discarded.
+
+The scrubber adds `native_pam_failure_counts`. It matches exact source-authored
+PAM limit messages for finite known resource names, PRIO_PROCESS and the
+NoNewPrivileges prctl operation, with a finite errno vocabulary. It also counts
+fixed initialization/username/service lookup failures. Match generation uses
+only static names and strings; arbitrary journal fragments cannot enter report
+keys. Existing output fields retain their meanings.
+
+The Linux harness adds only read-only `dpkg-query` of fixed util-linux,
+libpam-modules and libpam0g package versions to its existing input summary.
+It changes no service, account, unit, privilege boundary, timeout or assertion.
+
+New child-entry, wrapper classification and JSON-failure pairing tests failed
+before implementation and pass afterwards. Subprocess tests include duplicate
+entry/failure markers, wrapper PAM-session denial, canonical executable denial,
+entry followed by exit1, success with diagnostic decoys, overflow, and invalid
+JSON after entry. The entry-only case still returns the original failed-probe
+error. Separate checks reject suffixes, newlines, unknown paths and messages.
+Five Python scrubber tests include exact wrapper markers and PAM operation
+messages with private-name/error, prefix, suffix and newline decoys; all new
+cases failed before implementation. Final race/vet/compile results are recorded
+below after completion. No local native service/account/game operation or hosted
+dispatch was performed.
+
+Final integrator verification after the worker's quota interruption: focused
+Linux schema diagnostics race checks pass (selfupdate4.130s, manager5.188s);
+Linux vet and Windows manager/selfupdate/qualifier vet pass; Windows selfupdate
+and qualifier test binaries compile. Five actual Python scrubber subprocess
+tests and Bash syntax pass. Two temporary Go overlays independently disable
+only wrapper classification or child-entry emission; each corresponding real
+regression fails. No native runtime correction is claimed by these diagnostics.

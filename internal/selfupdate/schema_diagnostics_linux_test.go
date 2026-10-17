@@ -22,11 +22,26 @@ func TestLinuxSchemaProbeDiagnosticChild(t *testing.T) {
 	}
 	switch mode {
 	case "exit":
+		fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:child:entered")
+		fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:child:entered")
 		fmt.Fprintln(os.Stderr, "private-secret error path actor nonce")
 		fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:schema_read:sqlite:14 private-secret")
 		fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:schema_read:sqlite:14")
+		fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:actor_read:permission")
 		os.Exit(37)
+	case "wrapper_session":
+		fmt.Fprintln(os.Stderr, "runuser: cannot open session: Permission denied private-secret")
+		fmt.Fprintln(os.Stderr, "runuser: cannot open session: Permission denied")
+		os.Exit(1)
+	case "wrapper_exec":
+		fmt.Fprintln(os.Stderr, "runuser: failed to execute /private-secret: Permission denied")
+		fmt.Fprintln(os.Stderr, "runuser: failed to execute /usr/local/bin/minecraft-ui: Permission denied")
+		os.Exit(1)
+	case "entry_only":
+		fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:child:entered")
+		os.Exit(1)
 	case "stderr_overflow":
+		fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:child:entered")
 		fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:schema_read:permission")
 		fmt.Fprint(os.Stderr, strings.Repeat("private-secret", 1000))
 		os.Exit(1)
@@ -34,10 +49,12 @@ func TestLinuxSchemaProbeDiagnosticChild(t *testing.T) {
 		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
 		select {}
 	case "invalid_json":
+		fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:child:entered")
 		fmt.Fprint(os.Stdout, "private-secret")
 	case "overflow":
 		fmt.Fprint(os.Stdout, strings.Repeat("x", 8193))
 	case "success":
+		fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:child:entered")
 		fmt.Fprintln(os.Stderr, "private-secret")
 		fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:schema_read:permission")
 		fmt.Fprint(os.Stdout, `{"format":1,"version":"v1.2.3","schema":20,"actor_authorized":true}`)
@@ -47,10 +64,13 @@ func TestLinuxSchemaProbeDiagnosticChild(t *testing.T) {
 
 func TestLinuxSchemaProbeClassifiesActualProcessOutcomes(t *testing.T) {
 	for _, tc := range []struct{ mode, want, errText string }{
-		{"exit", "schema_read:sqlite:14\ncommand:exit:37\n", "manager-account schema probe failed"},
+		{"exit", "child:entered\nschema_read:sqlite:14\ncommand:exit:37\n", "manager-account schema probe failed"},
+		{"wrapper_session", "runuser_session:permission\ncommand:exit:1\n", "manager-account schema probe failed"},
+		{"wrapper_exec", "runuser_exec:eacces\ncommand:exit:1\n", "manager-account schema probe failed"},
+		{"entry_only", "child:entered\ncommand:exit:1\n", "manager-account schema probe failed"},
 		{"signal", "command:signal:15\n", "manager-account schema probe failed"},
 		{"stderr_overflow", "command:stderr_overflow\ncommand:exit:1\n", "manager-account schema probe failed"},
-		{"invalid_json", "command:invalid_json\n", "invalid manager schema probe"},
+		{"invalid_json", "child:entered\ncommand:invalid_json\n", "invalid manager schema probe"},
 		{"overflow", "command:output_overflow\n", "manager-account schema probe failed"},
 		{"missing", "command:launch_not_exist\n", "manager-account schema probe failed"},
 		{"permission", "command:launch_permission\n", "manager-account schema probe failed"},
@@ -121,6 +141,36 @@ func TestLinuxSchemaProbeChildMarkerRequiresExactBoundedGrammar(t *testing.T) {
 	} {
 		if validSchemaProbeDiagnostic("native-update-schema-diagnostic:" + marker) {
 			t.Error("unsafe child marker accepted", marker)
+		}
+	}
+}
+
+func TestRunuserDiagnosticMatchesOnlyExactSourceMessages(t *testing.T) {
+	for input, suffix := range map[string]string{
+		"runuser: cannot open session: Permission denied":                                            "runuser_session:permission",
+		"runuser: failed to establish user credentials: Failure setting user credentials":            "runuser_credentials:credentials",
+		"runuser: cannot set groups: Operation not permitted":                                        "runuser_groups:eperm",
+		"runuser: cannot set group id: Permission denied":                                            "runuser_gid:eacces",
+		"runuser: cannot set user id: Operation not permitted":                                       "runuser_uid:eperm",
+		"runuser: failed to execute /usr/local/bin/minecraft-ui.previous: No such file or directory": "runuser_exec:enoent",
+		"runuser: System error": "runuser_auth:system",
+	} {
+		if got, want := classifyRunuserFailure(input), "native-update-schema-diagnostic:"+suffix; got != want {
+			t.Errorf("marker = %q, want %q", got, want)
+		}
+	}
+	for _, input := range []string{
+		"runuser: cannot open session: Permission denied private-secret",
+		"runuser: cannot open session: Permission denied\nprivate-secret",
+		"runuser: cannot open session: Permission denied\r",
+		"private-secret runuser: cannot open session: Permission denied",
+		"runuser: private-secret: Permission denied",
+		"runuser: cannot open session: private-secret",
+		"runuser: failed to execute /usr/local/bin/../bin/minecraft-ui: Permission denied",
+		"runuser: failed to execute /private-secret: Permission denied",
+	} {
+		if marker := classifyRunuserFailure(input); marker != "" {
+			t.Error("unknown or extended message produced a marker", marker)
 		}
 	}
 }

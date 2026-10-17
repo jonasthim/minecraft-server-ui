@@ -27,11 +27,58 @@ func TestSchemaProbeDiagnosticChild(t *testing.T) {
 	if mode == "encode" {
 		_ = os.Stdout.Close()
 	}
-	_, err := runSelfUpdateProbe(context.Background(), []string{"update-schema"}, os.Stdout)
+	args := []string{"update-schema"}
+	if mode == "capability" {
+		args = []string{"update-capability"}
+	} else if mode == "bad_arguments" {
+		args = append(args, "private-secret")
+	}
+	_, err := runSelfUpdateProbe(context.Background(), args, os.Stdout)
 	if err != nil {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+func TestSchemaProbeEntryIsSpecificAndDoesNotChangeOutput(t *testing.T) {
+	for _, mode := range []string{"success", "capability", "bad_arguments"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			if mode == "success" {
+				database, err := db.Open(context.Background(), filepath.Join(dir, "manager.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				database.Close()
+			}
+			command := exec.Command(os.Args[0], "-test.run=^TestSchemaProbeDiagnosticChild$")
+			command.Env = append(os.Environ(), "MUI_SCHEMA_DIAGNOSTIC_FIXTURE="+mode, "MINECRAFT_UI_DATA_DIR="+dir,
+				"MINECRAFT_UI_ADDR=127.0.0.1:8080", "MINECRAFT_UI_BASE_URL=http://127.0.0.1:8080", "MINECRAFT_UI_INSECURE_COOKIES=true")
+			var stdout, stderr bytes.Buffer
+			command.Stdout, command.Stderr = &stdout, &stderr
+			err := command.Run()
+			if (err != nil) != (mode == "bad_arguments") {
+				t.Fatal("command outcome changed", mode, err)
+			}
+			want := ""
+			if mode == "success" {
+				want = "native-update-schema-diagnostic:child:entered\n"
+			}
+			if stderr.String() != want {
+				t.Fatalf("entry stream = %q, want %q", stderr.String(), want)
+			}
+			if mode == "bad_arguments" {
+				if stdout.Len() != 0 {
+					t.Fatal("invalid arguments produced output")
+				}
+			} else {
+				var capability selfupdate.Capability
+				if json.Unmarshal(stdout.Bytes(), &capability) != nil || capability.Schema != db.LatestVersion() || capability.Version != "v1.2.3" {
+					t.Fatal("typed probe output changed", stdout.String())
+				}
+			}
+		})
+	}
 }
 
 func TestSchemaProbeReportsOnlyFixedFailureBoundary(t *testing.T) {
@@ -96,7 +143,7 @@ func TestSchemaProbeReportsOnlyFixedFailureBoundary(t *testing.T) {
 			if err == nil {
 				t.Fatal("invalid fixture unexpectedly passed")
 			}
-			want := "native-update-schema-diagnostic:" + tc.marker + "\n"
+			want := "native-update-schema-diagnostic:child:entered\nnative-update-schema-diagnostic:" + tc.marker + "\n"
 			if string(body) != want {
 				t.Fatalf("diagnostic = %q, want %q", body, want)
 			}

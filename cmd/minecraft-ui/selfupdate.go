@@ -29,6 +29,7 @@ func runSelfUpdateProbe(ctx context.Context, args []string, out io.Writer) (bool
 	}
 	capability := selfupdate.Capability{Format: 1, Version: version, Schema: db.LatestVersion()}
 	if args[0] == "update-schema" {
+		_, _ = fmt.Fprintln(os.Stderr, "native-update-schema-diagnostic:child:entered")
 		cfg, err := config.FromEnvironment()
 		if err != nil {
 			return true, schemaProbeFailure("config", err)
