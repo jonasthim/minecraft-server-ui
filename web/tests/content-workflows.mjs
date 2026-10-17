@@ -1,0 +1,198 @@
+// Intercepted shipping UI evidence only; no provider, game or pack qualification.
+// npm --prefix web run dev -- --host 127.0.0.1 --port 15431 --strictPort
+// node web/tests/content-workflows.mjs
+import assert from 'node:assert/strict';
+import { chromium } from 'playwright-core';
+const base = process.env.CONTENT_WORKFLOWS_URL || 'http://127.0.0.1:15431';
+const browser = await chromium.launch({ headless: true });
+const results = [];
+try {
+ const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+ const page = await context.newPage(); page.setDefaultTimeout(5000);
+ const errors = []; page.on('pageerror', error => errors.push(error.message));
+ const calls = []; const mutations = []; const now = '2026-10-17T12:00:00Z'; let role = 'admin';
+ const tuple = { minecraft: '1.21.5', loader: 'fabric', loader_version: '0.16.14' };
+ const compatibility = { minecraft: ['1.21.5'], loaders: ['fabric'], environment: 'server', server_side: 'supported', evidence: 'Fixture', tested: false };
+ const project = (id, source = 'modrinth', kind = 'mod') => ({ source, fetched_at: now, id, slug: id, kind, title: id, description: 'Fixture project', official_url: 'https://modrinth.com/mod/' + id, compatibility });
+ const version = (id, project_id = 'parent', source = 'modrinth') => ({ source, fetched_at: now, id, project_id, name: id, number: id, official_url: 'https://modrinth.com/mod/' + project_id, compatibility, dependencies: [], files: [{ id: id + '-file', filename: id + '.jar', size: 10, hashes: { sha256: 'a'.repeat(64) }, role: 'mod', manual_reason: '', official_url: 'https://modrinth.com' }] });
+ const detail = id => ({ instance: { id, name: id, flavor: 'fabric', minecraft_version: tuple.minecraft, java_major: 21, memory_mib: 2048, game_port: id === 'alpha' ? 25565 : 25566, created_at: now, updated_at: now }, config: {}, eula: { accepted: false }, provisioning: 'not_installed', settings: { desired_runtime: [] } });
+ let installed = false; let hold = false; let release; let held; let previewCount = 0; let packState = 'succeeded'; let packBlock = false; let holdDone; let badExact = false; let dependencyEnabled = true; let emptyReleases = false;
+ await page.route('**/api/v1/**', async route => {
+  const req = route.request(); const url = new URL(req.url()); const path = url.pathname.replace('/api/v1', ''); calls.push(path + url.search);
+  const json = body => route.fulfill({ json: body });
+  if (path === '/auth/status') return json({ needs_setup: false, local_login_enabled: true, oidc_enabled: false });
+  if (path === '/auth/me') return json({ user: { id: 1, username: role, display_name: role, role }, csrf_token: 'fixture' });
+  if (path === '/auth/logout') { role = 'viewer'; return route.fulfill({ status: 204 }); }
+  if (path === '/instances') return json({ instances: [detail('alpha'), detail('beta')] });
+  if (/^\/instances\/(alpha|beta)$/.test(path)) return json({ detail: detail(path.split('/')[2]) });
+  if (path.endsWith('/lifecycle')) return json({ installed: false, process: 'stopped', process_running: false, readiness: 'stopped', autostart_desired: false, autostart_applied: false });
+  if (path === '/jobs') return json({ jobs: [] });
+  if (path.endsWith('/metrics')) return json({ instance_id: path.split('/')[2], resolution: 'raw', interval_seconds: 30, cpu_convention: 'Intercepted JVM fixture', points: [] });
+  if (path.endsWith('/players')) return json({ snapshot: { instance_id: path.split('/')[2], observed_at: now, known: false, complete: false, players: [], gap: true, reason: 'Intercepted fixture: no game telemetry' } });
+  if (path === '/catalog/providers') return json({ providers: ['modrinth', 'curseforge', 'hangar'].map(provider => ({ provider, enabled: true, reason: '' })) });
+  if (path.endsWith('/content/config')) return json({ files: [], truncated: false, unsupported: 0 });
+  if (path.endsWith('/content')) return json({ revision: installed ? '2' : '1', tuple, items: installed ? [{ id: 'dep-installed', name: 'dependency', version: 'dep-release', kind: 'mod', enabled: dependencyEnabled, selection: { provider: 'modrinth', project_id: 'dependency', version_id: 'dep-release', file_id: 'dep-release-file' }, sha256: 'a'.repeat(64), descriptor: {}, dependencies: [] }] : [], automatic_blockers: [] });
+  if (path.endsWith('/modpack')) return json({ baseline: null, blockers: [], customizations: { entries: [], notices: [], complete: true } });
+  if (path.includes('/search')) {
+   const offset = Number(url.searchParams.get('offset') || 0); const kind = url.searchParams.get('kind');
+   if (hold && offset) { hold = false; held?.(); await new Promise(resolve => { release = resolve; }); }
+   const projects = url.searchParams.get('q') === 'empty' ? [] : offset ? [project('last-project', path.split('/')[2], kind)] : [project('parent', path.split('/')[2], kind), project('other', path.split('/')[2], kind)];
+   await json({ source: path.split('/')[2], fetched_at: now, projects, offset, limit: 2, total: projects.length ? 3 : 0 }); if (offset) holdDone?.(); return;
+  }
+  if (/\/versions\//.test(path)) return json({ ...version(decodeURIComponent(path.split('/').at(-1)), path.split('/')[4], path.split('/')[2]), compatibility: badExact ? { ...compatibility, minecraft: ['1.20.1'] } : compatibility });
+  if (path.endsWith('/versions')) {
+   const offset = Number(url.searchParams.get('offset') || 0); const id = path.split('/')[4];
+   return json({ source: path.split('/')[2], fetched_at: now, versions: emptyReleases ? [] : offset ? [version('last-release', id)] : [version('first-release', id), version('second-release', id)], offset, limit: 2, total: emptyReleases ? 0 : 3 });
+  }
+  if (path.includes('/catalog/') && path.includes('/projects/')) return json(project(path.split('/')[4], path.split('/')[2]));
+  if (path.endsWith('/content/previews') && req.method() === 'POST') {
+   const mutation = req.postDataJSON(); mutations.push(mutation); previewCount++;
+   const parent = mutation.selection?.project_id === 'parent';
+   return json({ id: 'preview-' + previewCount, instance_id: 'alpha', tuple, revision: '1', action: mutation.action, changes: [], blockers: parent ? [installed ? 'Publisher identity unresolved' : 'Required dependency missing'] : [], dependencies: parent ? [{ provider: 'modrinth', project_id: 'dependency', version_id: 'dep-release', name: 'dependency', relation: 'required', required: true }, { provider: '', project_id: '', version_id: '', name: 'unknown identity', relation: 'required', required: true }, { provider: 'modrinth', project_id: 'optional', version_id: '', name: 'optional', relation: 'optional', required: false }, { provider: 'modrinth', project_id: 'incompatible', version_id: '', name: 'incompatible', relation: 'incompatible', required: false }, { provider: 'modrinth', project_id: 'parent', version_id: '', name: 'cycle', relation: 'required', required: true }] : [], unknown: false });
+  }
+  if (path.includes('/content/previews/') && req.method() === 'DELETE') return route.fulfill({ status: 204 });
+  if (path.endsWith('/modpack/previews') && req.method() === 'POST') { const input = req.postDataJSON(); mutations.push(input); return json({ id: 'pack-preview', source: { name: 'fixture pack', official_url: 'https://modrinth.com', selection: input.pack }, tuple, selections: {}, summary: 'Fixture strict preview', changes: [], blockers: packBlock ? ['Pack blocked by strict compatibility'] : [], manual: [], excluded: [] }); }
+  if (path.endsWith('/modpack/previews/pack-preview/apply')) return json({ job: { id: 'pack-job', state: 'queued', kind: 'pack', phase: 'queued' } });
+  if (path === '/jobs/pack-job') return json({ job: { id: 'pack-job', state: packState, kind: 'pack', phase: 'terminal', error: packState === 'failed' ? 'Fixture pack failure' : '' } });
+  if (path.endsWith('/apply')) return json({ job: { id: 'content-job', state: 'queued', kind: 'content', phase: 'queued' } });
+  if (path === '/jobs/content-job') { installed = true; if (mutations.at(-1)?.action === 'enable') dependencyEnabled = true; return json({ job: { id: 'content-job', state: 'succeeded', kind: 'content', phase: 'complete' } }); }
+  return route.fulfill({ status: 500, json: { error: { message: 'Unexpected fixture request ' + path } } });
+ });
+ await page.goto(base + '/instances/alpha/content');
+ await page.getByRole('button', { name: 'Search compatible releases', exact: true }).click();
+ await page.getByRole('button', { name: 'Next projects', exact: true }).waitFor();
+ await page.getByRole('button', { name: 'Next projects', exact: true }).click();
+ await page.getByRole('button', { name: 'last-project', exact: true }).waitFor();
+ assert.equal(await page.getByRole('button', { name: 'parent', exact: true }).count(), 0);
+ assert.equal(await page.getByRole('button', { name: 'Next projects', exact: true }).isDisabled(), true);
+ await page.getByRole('button', { name: 'First projects', exact: true }).click();
+ await page.getByRole('button', { name: 'parent', exact: true }).click();
+ await page.getByRole('button', { name: 'Next releases', exact: true }).click();
+ await page.getByText('last-release', { exact: true }).waitFor();
+ assert.equal(await page.getByRole('button', { name: 'Next releases', exact: true }).isDisabled(), true);
+ await page.getByRole('button', { name: 'First releases', exact: true }).click();
+ await page.getByRole('button', { name: 'Preview installation of first-release.jar', exact: true }).click();
+ assert.equal(await page.getByRole('button', { name: 'Apply while stopped', exact: true }).isDisabled(), true);
+ await page.getByText('Publisher project identity is missing.', { exact: false }).waitFor();
+ await page.getByText('Dependency cycle detected.', { exact: false }).waitFor();
+ await page.getByText('Incompatible dependency:', { exact: false }).waitFor();
+ assert.equal(await page.getByRole('button', { name: 'Review dependency unknown identity', exact: true }).count(), 0);
+ assert.equal(await page.getByRole('button', { name: 'Review dependency cycle', exact: true }).count(), 0);
+ await page.getByRole('button', { name: 'Review dependency dependency', exact: true }).focus(); await page.keyboard.press('Enter');
+ await page.getByText('dep-release', { exact: true }).waitFor();
+ await page.getByRole('button', { name: 'Preview installation of dep-release.jar', exact: true }).click();
+ await page.getByRole('button', { name: 'Apply while stopped', exact: true }).click();
+ await page.getByText('Content operation completed and saved files were verified.', { exact: true }).waitFor();
+ await page.getByRole('button', { name: 'Return and re-preview parent', exact: true }).click();
+ await page.getByRole('button', { name: 'Apply while stopped', exact: true }).waitFor();
+ assert.deepEqual(mutations.at(-1), mutations[0], 'parent selection must survive dependency install');
+ assert.equal(await page.getByRole('button', { name: 'Apply while stopped', exact: true }).isDisabled(), true, 'unresolved identity must remain blocked');
+ await page.getByText('Installed identity: dependency', { exact: false }).waitFor();
+ assert.equal(mutations.length, 3, 'no silent dependency or parent installation');
+ assert(calls.some(call => call === '/catalog/modrinth/projects/dependency/versions/dep-release'));
+ results.push('authoritative multipage content search/releases, last page no repeats, explicit exact dependency install and parent re-preview');
+ // Exact dependency compatibility is displayed and cannot be bypassed by choosing
+ // a different release from the unfiltered exact-version endpoint.
+ badExact = true;
+ await page.getByRole('button', { name: 'Review dependency dependency', exact: true }).click();
+ await page.getByText('The exact required release does not declare compatibility', { exact: false }).waitFor();
+ assert.equal(await page.getByRole('button', { name: 'Preview update of dep-release.jar', exact: true }).isDisabled(), true);
+ await page.getByRole('button', { name: 'Return and re-preview parent', exact: true }).click(); badExact = false;
+ await page.getByRole('button', { name: 'Review dependency optional', exact: true }).click();
+ await page.getByRole('button', { name: 'Next releases', exact: true }).click();
+ await page.getByText('last-release', { exact: true }).waitFor();
+ await page.getByRole('button', { name: 'Return and re-preview parent', exact: true }).click();
+ dependencyEnabled = false; await page.getByRole('button', { name: 'Refresh content', exact: true }).click();
+ await page.getByRole('button', { name: 'Preview enabling installed dependency dependency', exact: true }).click();
+ await page.getByRole('heading', { name: 'Review enable', exact: true }).waitFor();
+ assert.deepEqual(mutations.at(-1), { action: 'enable', content_id: 'dep-installed' });
+ await page.getByRole('button', { name: 'Apply while stopped', exact: true }).click();
+ await page.getByText('Content operation completed and saved files were verified.', { exact: true }).waitFor();
+ await page.getByRole('button', { name: 'Return and re-preview parent', exact: true }).click();
+ await page.getByRole('heading', { name: 'Review install', exact: true }).waitFor();
+ assert.deepEqual(mutations.at(-1), mutations[0]);
+ await page.screenshot({ path: '/tmp/task31b-dependency-mobile.png', fullPage: true });
+ results.push('unknown identities/cycles/incompatibilities explained, optional explicit navigation, installed enable preview, exact incompatible release blocked');
+ const navigate = async path => { await page.evaluate(path => { history.pushState(null, '', path); dispatchEvent(new PopStateEvent('popstate')); }, path); };
+ const startHold = () => { hold = true; return new Promise(resolve => { held = resolve; }); };
+ const finishHold = async () => { const done = new Promise(resolve => { holdDone = resolve; }); release(); await done; holdDone = null; };
+ await navigate('/instances/beta/content');
+ await page.getByRole('button', { name: 'Search compatible releases', exact: true }).click();
+ await page.getByRole('textbox', { name: 'Search content', exact: true }).fill('edited after submission');
+ let pending = startHold(); await page.getByRole('button', { name: 'Next projects', exact: true }).click(); await pending;
+ await page.getByRole('combobox', { name: 'Content provider', exact: true }).click(); await page.getByRole('option', { name: 'curseforge', exact: true }).click();
+ await page.getByRole('button', { name: 'Search compatible releases', exact: true }).click();
+ await page.getByRole('button', { name: 'parent', exact: true }).waitFor(); await finishHold();
+ assert.equal(await page.getByRole('button', { name: 'last-project', exact: true }).count(), 0);
+ assert(calls.some(call => call.includes('/catalog/modrinth/search?') && call.includes('offset=2') && call.includes('q=') && !call.includes('edited')));
+ pending = startHold(); await page.getByRole('button', { name: 'Next projects', exact: true }).click(); await pending;
+ tuple.loader = 'paper'; tuple.minecraft = '1.21.6';
+ await page.getByRole('button', { name: 'Refresh content', exact: true }).click();
+ await page.getByRole('heading', { name: 'Browse plugins', exact: true }).waitFor(); await finishHold();
+ assert.equal(await page.getByRole('button', { name: 'last-project', exact: true }).count(), 0);
+ await page.getByRole('combobox', { name: 'Content provider', exact: true }).click(); await page.getByRole('option', { name: 'hangar', exact: true }).click();
+ await page.getByRole('button', { name: 'Search compatible releases', exact: true }).click();
+ await page.getByRole('button', { name: 'parent', exact: true }).waitFor();
+ assert(calls.some(call => call.includes('/catalog/hangar/search?') && call.includes('kind=plugin') && call.includes('minecraft=1.21.6') && call.includes('loader=paper')));
+ pending = startHold(); await page.getByRole('button', { name: 'Next projects', exact: true }).click(); await pending;
+ await navigate('/instances/alpha/content'); await page.getByRole('heading', { name: 'Browse plugins', exact: true }).waitFor(); await finishHold();
+ assert.equal(await page.getByRole('button', { name: 'last-project', exact: true }).count(), 0);
+ await page.getByRole('textbox', { name: 'Search content', exact: true }).fill('empty'); await page.getByRole('button', { name: 'Search compatible releases', exact: true }).click();
+ await page.getByText('No matching projects.', { exact: true }).waitFor(); assert.equal(await page.getByRole('button', { name: 'Next projects', exact: true }).isDisabled(), true);
+ results.push('submitted search preserved across paging, delayed page discarded on provider, tuple and instance change, plugin tuple filters, empty bounds');
+ tuple.loader = 'fabric'; tuple.minecraft = '1.21.5';
+ await page.goto(base + '/instances/alpha/modpack');
+ await page.getByRole('button', { name: 'Search publisher', exact: true }).click();
+ await page.getByRole('button', { name: 'Next projects', exact: true }).click();
+ await page.getByText('last-project', { exact: true }).waitFor();
+ assert.equal(await page.getByRole('button', { name: 'Next projects', exact: true }).isDisabled(), true);
+ await page.getByRole('button', { name: 'Previous projects', exact: true }).click();
+ await page.getByRole('button', { name: 'Browse releases', exact: true }).first().click();
+ await page.getByRole('button', { name: 'Next releases', exact: true }).click();
+ await page.getByRole('combobox', { name: 'Exact publisher release', exact: true }).click(); await page.getByRole('option', { name: 'last-release', exact: true }).click();
+ assert.equal(await page.getByRole('button', { name: 'Next releases', exact: true }).isDisabled(), true);
+ packBlock = true; await page.getByRole('button', { name: 'Preview last-release.jar', exact: true }).click();
+ assert.equal(await page.getByRole('button', { name: 'Apply reviewed pack', exact: true }).isDisabled(), true);
+ packBlock = false; await page.getByRole('button', { name: 'Refresh preview with choices', exact: true }).click();
+ await page.getByRole('button', { name: 'Apply reviewed pack', exact: true }).click();
+ await page.getByText('Pack application completed. Game compatibility remains unqualified.', { exact: true }).waitFor();
+ assert.equal(await page.getByRole('heading', { name: 'Review pack changes', exact: true }).count(), 0);
+ assert.equal(await page.getByRole('link', { name: 'Review job details', exact: true }).getAttribute('href'), '/jobs?job=pack-job');
+ packState = 'failed'; await page.getByRole('button', { name: 'Preview last-release.jar', exact: true }).click();
+ await page.getByRole('button', { name: 'Apply reviewed pack', exact: true }).click();
+ await page.getByText('Pack application did not complete. Review the job and recovery blockers.', { exact: true }).waitFor();
+ assert.equal(await page.getByRole('button', { name: 'Refresh preview with choices', exact: true }).isEnabled(), true);
+ await page.getByRole('alert').filter({ hasText: 'Fixture pack failure' }).waitFor();
+ await page.clock.install(); const terminalReads = calls.filter(call => call === '/jobs/pack-job').length; await page.clock.runFor(6000);
+ assert.equal(calls.filter(call => call === '/jobs/pack-job').length, terminalReads, 'terminal job must stop polling');
+ await page.screenshot({ path: '/tmp/task31b-pack-mobile.png', fullPage: true });
+ await page.getByRole('button', { name: 'Back to results', exact: true }).click();
+ pending = startHold(); await page.getByRole('button', { name: 'Next projects', exact: true }).click(); await pending;
+ await page.getByRole('combobox', { name: 'Pack publisher', exact: true }).click(); await page.getByRole('option', { name: 'CurseForge', exact: true }).click();
+ await page.getByRole('button', { name: 'Search publisher', exact: true }).click();
+ await page.getByText('parent', { exact: true }).waitFor(); await finishHold();
+ assert.equal(await page.getByText('last-project', { exact: true }).count(), 0);
+ emptyReleases = true; await page.getByRole('button', { name: 'Browse releases', exact: true }).first().click();
+ await page.getByText('No matching releases.', { exact: true }).waitFor();
+ assert.equal(await page.getByRole('button', { name: 'Next releases', exact: true }).isDisabled(), true);
+ await page.getByRole('button', { name: 'Back to results', exact: true }).click(); emptyReleases = false;
+ results.push('pack project/release paging, empty releases, strict blockers, {job} queued→success/failure stops polling, exact job link, delayed provider reset');
+ pending = startHold(); await page.getByRole('button', { name: 'Next projects', exact: true }).click(); await pending;
+ await page.getByRole('button', { name: 'Sign out', exact: true, includeHidden: true }).evaluate(button => button.click());
+ await page.getByRole('heading', { name: 'Server modpacks', exact: true }).waitFor(); await finishHold();
+ assert.equal(await page.getByText('last-project', { exact: true }).count(), 0);
+ assert.equal(await page.getByRole('heading', { name: 'Review pack changes', exact: true }).count(), 0);
+ await page.getByRole('button', { name: 'Search publisher', exact: true }).click();
+ await page.getByRole('button', { name: 'Browse releases', exact: true }).first().click();
+ await page.getByRole('combobox', { name: 'Exact publisher release', exact: true }).click(); await page.getByRole('option', { name: 'first-release', exact: true }).click();
+ assert.equal(await page.getByRole('button', { name: 'Preview first-release.jar', exact: true }).isDisabled(), true);
+ await navigate('/instances/alpha/content');
+ await page.getByRole('button', { name: 'Search compatible releases', exact: true }).click();
+ await page.getByRole('button', { name: 'parent', exact: true }).click();
+ assert.equal(await page.getByRole('button', { name: /^Preview installation/ }).count(), 0);
+ assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+ results.push('390px keyboard dependency navigation, role reset discards held pages and clears preview/jobs, viewer browsing cannot mutate');
+ assert.deepEqual(errors, []);
+ console.log(JSON.stringify({ evidence: 'intercepted shipping UI only', results }, null, 2));
+ await context.close();
+} finally { await browser.close(); }
