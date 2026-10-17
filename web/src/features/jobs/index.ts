@@ -1,1 +1,1 @@
-export { JobsPage } from './JobsPage';
+export { JobsPage, JobDetails, JobActivity, jobHref } from './JobsPage';

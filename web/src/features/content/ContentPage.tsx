@@ -1,3 +1,4 @@
+import { jobHref } from '../jobs';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Alert, Anchor, Badge, Button, Checkbox, FileInput, Group, Loader, Paper, Select, SimpleGrid, Stack, Text, Textarea, TextInput, Title } from '@mantine/core';
 import { Link, useParams } from 'react-router-dom';
@@ -130,7 +131,7 @@ export function ContentPanel({ instanceId }: { instanceId: string }) {
     {notice && <Alert color="blue" role="status">{notice}</Alert>}
     {!manifest && !error && <Loader aria-label="Loading content" />}
     <Alert color="yellow">Install, update, enable, disable, uninstall and configuration edits require a stopped server. Stop the server from its controls before applying. Addon settings remain in place when managed JARs change.</Alert>
-    {job && <Paper withBorder p="sm"><Stack gap="xs"><Text style={{ overflowWrap: 'anywhere' }}>Operation: {job.state} · {job.phase || 'waiting'}</Text><Anchor component={Link} to="/jobs">Open jobs and output</Anchor></Stack></Paper>}
+    {job && <Paper withBorder p="sm"><Stack gap="xs"><Text style={{ overflowWrap: 'anywhere' }}>Operation: {job.state} · {job.phase || 'waiting'}</Text><Anchor component={Link} to={jobHref(job.id)}>Open jobs and output</Anchor></Stack></Paper>}
     {manifest && <>
       <Text c="dimmed" size="sm">{manifest.tuple.loader} {manifest.tuple.loader_version} · Minecraft {manifest.tuple.minecraft} · Game compatibility remains unqualified.</Text>
       {!!manifest.automatic_blockers.length && <Alert color="orange" title="Automatic updates blocked"><Stack gap={4}>{manifest.automatic_blockers.map((blocker, i) => <Text size="sm" key={i} style={{ overflowWrap: 'anywhere' }}>{blocker}</Text>)}</Stack></Alert>}

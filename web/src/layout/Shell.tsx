@@ -3,6 +3,7 @@ import { AppShell, Burger, Group, Stack, Text, NavLink, Button, Divider, Select,
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../features/auth/AuthProvider'
 import { api } from '../api/client'
+import { JobActivity } from '../features/jobs'
 import type { components } from '../api/schema'
 import { startMetricsPoll } from '../features/metrics/poll'
 import { notifications } from '@mantine/notifications'
@@ -31,7 +32,7 @@ export function Shell({ children }: { children: ReactNode }) {
       { to: '/settings/auth', label: 'Authentication', icon: IconLock },
       { to: '/settings/notifications', label: 'Notifications', icon: IconBell },
       { to: '/settings/update', label: 'Manager updates', icon: IconRefresh },
-      { to: '/audit', label: 'Activity', icon: IconHistory },
+      { to: '/audit', label: 'Audit log', icon: IconHistory },
     ] : []),
   ]
   return <><a className="app-skip-link" href="#main-content">Skip to content</a><AppShell header={{ height: 64 }} navbar={{ width: 232, breakpoint: 'sm', collapsed: { mobile: !opened } }} padding="xl">
@@ -43,6 +44,7 @@ export function Shell({ children }: { children: ReactNode }) {
     </Group></AppShell.Header>
     <AppShell.Navbar p="md" id="app-navigation" className="app-navigation" aria-label="Main navigation"><Stack gap="xs">
       <Select label="Selected server" placeholder="Choose server" searchable value={currentId ?? null} data={choices.map(({ instance }) => ({ value: instance.id, label: instance.name }))} onChange={value => { if (value) { void navigate('/instances/' + encodeURIComponent(value)); close() } }} />
+      <JobActivity />
       {serverError && <Text size="xs" c="#f2cda7">{serverError}</Text>}
       {links.map(({ to, label, icon: Icon }) => <NavLink key={to} component={Link} to={to}
         label={label} leftSection={<Icon size={20} />} active={pathname === to} aria-current={pathname === to ? "page" : undefined} onClick={close}

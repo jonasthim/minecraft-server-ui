@@ -1,3 +1,4 @@
+import { jobHref } from '../jobs';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Anchor, Badge, Button, Checkbox, Group, Loader, Modal, NumberInput, Paper, Progress, Select, Stack, Text, TextInput, Title } from '@mantine/core';
 import { Link } from 'react-router-dom';
@@ -78,7 +79,7 @@ export function LifecyclePanel({ detail, onChanged }: { detail: Detail; onChange
       {operator && !detail.eula.accepted && <Text size="sm">An administrator must explicitly accept the Minecraft EULA in Edit settings before start or autostart.</Text>}
       {admin && <Group wrap="wrap"><Button disabled={working || !state.installed && !state.autostart_desired || !detail.eula.accepted && !state.autostart_desired} variant="default" onClick={() => void operate({ operation: 'autostart', enabled: !state.autostart_desired })}>{state.autostart_desired ? 'Disable autostart' : 'Enable autostart'}</Button><Button disabled={working || !state.installed || !stopped} color="red" variant="light" onClick={() => open('uninstall')}>Uninstall server files</Button></Group>}
     </>}
-    {job && <Stack gap="xs"><Group wrap="wrap"><Text size="sm" style={{ overflowWrap: 'anywhere' }}>Job {job.id}</Text><Badge color={job.state === 'failed' ? 'red' : job.state === 'succeeded' ? 'green' : 'blue'}>{job.state}</Badge></Group><Text size="sm">{job.phase || 'Waiting to start'}</Text>{active(job) && <Progress value={job.progress} aria-label="Server operation progress" />}{job.error && <Alert color="red" role="alert">{job.error}</Alert>}<Anchor component={Link} to="/jobs">View durable job progress and output</Anchor></Stack>}
+    {job && <Stack gap="xs"><Group wrap="wrap"><Text size="sm" style={{ overflowWrap: 'anywhere' }}>Job {job.id}</Text><Badge color={job.state === 'failed' ? 'red' : job.state === 'succeeded' ? 'green' : 'blue'}>{job.state}</Badge></Group><Text size="sm">{job.phase || 'Waiting to start'}</Text>{active(job) && <Progress value={job.progress} aria-label="Server operation progress" />}{job.error && <Alert color="red" role="alert">{job.error}</Alert>}<Anchor component={Link} to={jobHref(job.id)}>View durable job progress and output</Anchor></Stack>}
     {error && !dialog && <Alert color="red" role="alert">{error}</Alert>}
     <Modal opened={dialog !== null} onClose={() => !busy && setDialog(null)} title={dialog === 'install' ? 'Install exact server selection' : dialog === 'uninstall' ? 'Uninstall active server files' : dialog === 'restart' ? 'Restart server' : 'Stop server'} size="lg" closeOnEscape={!busy} closeOnClickOutside={!busy}>
       <Stack>

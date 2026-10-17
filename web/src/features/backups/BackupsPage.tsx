@@ -1,3 +1,4 @@
+import { jobHref } from '../jobs';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Anchor, Badge, Button, Checkbox, Group, Loader, Modal, Paper, Select, Stack, Text, Title } from '@mantine/core';
 import { Link, useParams } from 'react-router-dom';
@@ -81,7 +82,7 @@ export function BackupsPanel({ instanceId }: { instanceId: string }) {
     <Group justify="space-between" wrap="wrap"><Title order={2}>Backups</Title><Button variant="default" loading={loading} onClick={() => { setError(''); void load(); }}>Refresh backups</Button></Group>
     {error && <Alert color="red" role="alert">{error}</Alert>}
     {notice && <Alert color={activeJob ? 'blue' : 'green'} role="status">{notice}</Alert>}
-    {job && <Text size="sm">Operation: {job.state} · {job.phase.replaceAll('_', ' ')} · <Anchor component={Link} to="/jobs">View jobs and output</Anchor></Text>}
+    {job && <Text size="sm">Operation: {job.state} · {job.phase.replaceAll('_', ' ')} · <Anchor component={Link} to={jobHref(job.id)}>View jobs and output</Anchor></Text>}
     <Alert color="yellow" title="Consistency and scope">Online backups flush native world saves without stopping the server. Player and mod/plugin data may still change. External databases are excluded. Full backups include local addon data and configuration; downloaded archives can contain addon credentials and must be kept private.</Alert>
     <Text size="sm" c="dimmed">Automatic backups retain at most 10 archives for 30 days. Manual and safety backups are protected from automatic retention.</Text>
     {canOperate && <Paper withBorder p="md"><Stack><Select label="Backup scope" value={kind} onChange={value => { if (value === 'world' || value === 'full') setKind(value); }} data={[{ value: 'world', label: 'World and associated dimensions' }, { value: 'full', label: 'Full local server data and addons' }]} /><Button loading={busy} disabled={activeJob} onClick={() => { void create(); }}>Create protected manual backup</Button></Stack></Paper>}

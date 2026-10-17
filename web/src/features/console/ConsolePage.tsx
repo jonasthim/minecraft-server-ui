@@ -1,3 +1,4 @@
+import { jobHref } from '../jobs';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Alert, Anchor, Badge, Button, Code, Group, Paper, Select, SimpleGrid, Stack, Switch, Text, TextInput, Title } from '@mantine/core';
 import { Link, useParams } from 'react-router-dom';
@@ -217,6 +218,6 @@ function CommandPanel({ endpoint, admin }: { endpoint: string; admin: boolean })
     {verb === 'say' && <TextInput label="Announcement" description="Plain text, up to 512 UTF-8 bytes. Player selectors are unavailable." required maxLength={512} value={announcement} onChange={event => setAnnouncement(event.currentTarget.value)} disabled={sending} />}
     {error && <Alert color="red" role="alert">{error}</Alert>}
     <Button type="submit" loading={sending} style={{ alignSelf: 'flex-start' }}>Run command</Button>
-    {job && <Stack gap={4}><Text size="sm" role="status">{job.state === 'succeeded' ? 'Server acknowledged command.' : job.state === 'failed' ? 'Command failed.' : job.state === 'cancelled' ? 'Command cancelled.' : 'Command queued; waiting for server acknowledgement.'}</Text>{job.error && <Alert color="red">{job.error}</Alert>}{output.length > 0 && <Code block style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{output.map(line => line.message).join('\n')}</Code>}<Anchor component={Link} to="/jobs" size="sm">View command job</Anchor></Stack>}
+    {job && <Stack gap={4}><Text size="sm" role="status">{job.state === 'succeeded' ? 'Server acknowledged command.' : job.state === 'failed' ? 'Command failed.' : job.state === 'cancelled' ? 'Command cancelled.' : 'Command queued; waiting for server acknowledgement.'}</Text>{job.error && <Alert color="red">{job.error}</Alert>}{output.length > 0 && <Code block style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{output.map(line => line.message).join('\n')}</Code>}<Anchor component={Link} to={jobHref(job.id)} size="sm">View command job</Anchor></Stack>}
   </Stack></form></Paper>;
 }
