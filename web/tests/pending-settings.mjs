@@ -7,7 +7,7 @@ const base=process.env.TASK31D2_URL??'http://127.0.0.1:15232';
 const shots='/tmp/task31d2-ui';await mkdir(shots,{recursive:true});
 const browser=await chromium.launch({headless:true});
 try{
- const context=await browser.newContext({viewport:{width:390,height:844}});const page=await context.newPage();page.setDefaultTimeout(5000);
+ const context=await browser.newContext({viewport:{width:390,height:844}});const page=await context.newPage();page.setDefaultTimeout(5000);page.setDefaultNavigationTimeout(30000);
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  let role='admin',account=1,conflict=false,fail=false,readFail=false,holdRead=false,holdSave=false,releaseRead,releaseSave,heldRead=false,heldSave=false;
  const writes=[];
@@ -30,16 +30,16 @@ try{
   if(path.endsWith('/pending-settings')){
    const id=path.split('/')[2];
    if(method==='GET'){
-    const captured=structuredClone(pending[id]);
+    const captured=structuredClone(pending[id]), capturedFailure=readFail;
     if(holdRead){holdRead=false;heldRead=true;await new Promise(resolve=>releaseRead=resolve);}
-    if(readFail)return route.fulfill({status:503,json:{error:{code:'unavailable',message:'Fixture read unavailable'}}});
+    if(capturedFailure)return route.fulfill({status:503,json:{error:{code:'unavailable',message:'Fixture read unavailable'}}});
     return json(captured);
    }
    const input=request.postDataJSON();
    if(holdSave){holdSave=false;heldSave=true;await new Promise(resolve=>releaseSave=resolve);}
    if(fail)return route.fulfill({status:503,json:{error:{code:'unavailable',message:'Fixture save failed'}}});
    if(conflict){conflict=false;pending[id].revision++;pending[id].stale=true;return route.fulfill({status:409,json:{error:{code:'conflict',message:'Fixture draft changed'}}});}
-   assert.equal(input.expected_revision,pending[id].revision);
+   if(input.expected_revision!==pending[id].revision)return route.fulfill({status:409,json:{error:{code:'conflict',message:'Fixture revision mismatch'}}});
    if(method==='DELETE'){pending[id]={...pending[id],revision:pending[id].revision+1,draft:null};return json(pending[id]);}
    assert.equal(input.expected_instance_updated_at,details[id].instance.updated_at);
    pending[id]={revision:pending[id].revision+1,draft:{name:input.name,memory_mib:input.memory_mib,config:input.config},stale:false,base_updated_at:input.expected_instance_updated_at,updated_at:'2026-10-17T12:00:00Z',updated_by:account};return json(pending[id]);
@@ -48,6 +48,36 @@ try{
  });
  const button=name=>page.getByRole('button',{name,exact:true});const field=name=>page.getByRole('textbox',{name:new RegExp('^'+name)});
  const navigate=async id=>{await page.evaluate(id=>{history.pushState(null,'','/instances/'+id);dispatchEvent(new PopStateEvent('popstate'));},id);};
+ const probe=process.env.TASK31D2_PROBE;
+ if(probe){
+  await page.goto(base+'/instances/beta');await button('Review / edit saved draft').waitFor();
+  if(probe==='author'){
+   assert.equal(pending.beta.stale,false);
+   await page.getByText(/Current author authorization is checked when applying this draft/).waitFor();
+   assert.equal(await page.getByText(/its author is no longer authorized/).count(),0,'do not claim detected revocation');
+  }else if(probe==='discard'){
+   await button('Discard saved draft').click();
+   pending.beta={...pending.beta,revision:4,draft:{...pending.beta.draft,name:'Replacement by another admin'}};
+   await page.getByText('Replacement by another admin',{exact:true}).waitFor({state:'attached',timeout:12000});
+   await button('Confirm discard draft').click();
+   assert.equal(writes.at(-1).input.expected_revision,3,'confirmation must remain bound to reviewed revision3');
+   await page.getByRole('dialog').getByRole('alert').filter({hasText:'Fixture revision mismatch'}).waitFor();
+   assert.equal(pending.beta.draft.name,'Replacement by another admin','replacement draft must survive stale confirmation');
+   await button('Keep draft').click();await button('Discard saved draft').click();await button('Confirm discard draft').click();
+   await page.getByRole('status').filter({hasText:'discarded'}).waitFor();assert.equal(writes.at(-1).input.expected_revision,4);
+  }else if(probe==='read'||probe==='read-error'){
+   heldRead=false;holdRead=true;readFail=probe==='read-error';
+   for(let i=0;i<120&&!heldRead;i++)await page.waitForTimeout(100);
+   assert(heldRead,'background poll held');readFail=false;
+   pending.beta={...pending.beta,revision:4,draft:null};
+   await button('Refresh saved settings').click();await button('Prepare desired settings').waitFor();
+   releaseRead();await page.waitForTimeout(200);
+   assert.equal(await page.getByText('Beta desired',{exact:true}).count(),0,'older poll must not resurrect consumed draft');
+   assert.equal(await page.getByRole('alert').filter({hasText:'Fixture read unavailable'}).count(),0,'superseded read failure must not replace current success');
+   assert.equal(await button('Edit applied settings (stopped)').isDisabled(),false);
+  }else throw Error('Unknown probe '+probe);
+  assert.deepEqual(errors,[]);console.log('PASS reviewer regression: '+probe+' (intercepted shipping client)');
+ }else{
  await page.goto(base+'/instances/alpha');await button('Prepare desired settings').click();
  assert.equal(await page.getByRole('dialog').getByRole('textbox',{name:/^Game port/}).isDisabled(),true);
  assert.equal(await page.getByRole('dialog').getByText('Minecraft EULA',{exact:true}).count(),0);
@@ -89,5 +119,6 @@ try{
  assert.deepEqual(errors,[]);
  assert(writes.every(write=>write.path.endsWith('/pending-settings')));
  console.log('PASS: running draft save via CSRF, false/unknown properties, active separation, pending/direct edit guard, failure and 409 preserved edits, explicit stale re-save, discard confirmation/CAS, consumed draft active refresh, instance/account/role delayed reads/saves, viewer/operator, read failure, 390px and keyboard. Intercepted fixtures only.');
+ }
  await context.close();
 }finally{await browser.close();}
