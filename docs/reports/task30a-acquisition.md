@@ -6,6 +6,9 @@ with Go 1.27.0 on Linux amd64. No dependency, candidate format, producer, workfl
 native installer, service, account, firewall, game, existing database, or preview
 was changed by this packet. No input executable was run.
 
+Review correction R1 is submitted below against reviewed candidate `72ea5bb`.
+Independent re-review remains required before accepting this packet.
+
 ## Interfaces and command
 
 `release/bootstrap.Prepare(ctx, Options, Acquisition) (Receipt, error)` is the
@@ -153,3 +156,57 @@ public trust, and native install/repair/upgrade/uninstall/rollback handoff. This
 command cannot authenticate its own first download. No production signing key,
 public release, installed lifecycle, game/client/restore, or stable qualification
 is established by this packet.
+
+## Review correction R1: bind the snapshot to its creation identity
+
+The independent review in `docs/reports/review-task30a-acquisition.md` identified
+a real ownership gap in candidate `72ea5bb`. The snapshot reopen checked the
+current pathname against its own opened identity, rather than the identity
+recorded by exclusive creation. The successful path also removed that pathname
+without comparing creation identity.
+
+Reproduction before the fix used the reviewer's retained isolated exact-candidate
+probe:
+
+```sh
+cd /home/thim/.cache/dilla-tmp/task30a-review-72ea5bb
+go test -run '^TestReviewSnapshotSubstitution$' -count=1 ./release/bootstrap
+```
+
+It failed as reported: `Prepare error=<nil>` and the replacement `.bundle` was
+absent. The archive reader's Close callback had replaced the original snapshot
+with a distinct regular file containing the same authenticated archive bytes.
+This demonstrated ownership failure without any signature bypass.
+
+The fix retains the original creation handle until a read handle has been
+compared to the recorded creation identity. `destination.openOwnedRegular`
+checks both the pathname and opened file against that identity; the read handle
+remains open through verification, extraction, and ownership-checked removal.
+`destination.removeOwned` checks the creation identity before deletion and is
+shared by successful snapshot deletion and failure cleanup. An observed foreign
+replacement is refused and preserved. Failure cleanup now reports a bounded
+authored message when replacement or unremovable state remains; it never reports
+full cleanup in that case. This does not add an atomic compare-and-unlink OS
+primitive or change the previously documented caller-controlled-parent boundary.
+
+Two deterministic regressions cover the finding:
+
+- `TestSnapshotSubstitutionOnArchiveCloseRefused` reproduces the exact callback
+  replacement before reopen. Preparation fails, the replacement retains its
+  identity and bytes, no completion receipt appears, and the error reports
+  retained output state.
+- `TestSnapshotReplacementBeforeOwnedRemovalPreserved` verifies and extracts the
+  original archive, then substitutes its pathname immediately before calling the
+  same removal helper used by successful preparation. Removal refuses, cleanup
+  preserves the replacement and removes all still-owned extracted files, and no
+  completion receipt exists. Temporarily bypassing that helper's identity check
+  makes this test fail with `removed a foreign replacement`; the mutation was
+  restored before final verification.
+
+The callback regression passes after the fix. Focused race tests, vet and Windows
+cross-compilation were rerun with the commands above. Windows compilation remains
+compilation evidence only; no local native lifecycle operation was performed.
+The R1 changes are limited to `release/bootstrap/files.go`,
+`release/bootstrap/prepare.go`, `release/bootstrap/prepare_test.go`, and this
+report. No outer installer, native updater, producer, workflow, staging, commit,
+or push is part of this correction.

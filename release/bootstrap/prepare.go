@@ -179,7 +179,9 @@ func Prepare(ctx context.Context, o Options, source Acquisition) (receipt Receip
 	success := false
 	defer func() {
 		if !success {
-			d.cleanup()
+			if cleanupErr := d.cleanup(); cleanupErr != nil {
+				err = errors.Join(err, failure("cleanup incomplete; replaced or unremovable output state retained"))
+			}
 		}
 	}()
 	r, e := source.BootstrapArchive(ctx, version, o.OS)
@@ -192,26 +194,33 @@ func Prepare(ctx context.Context, o Options, source Acquisition) (receipt Receip
 		return receipt, failure("private archive snapshot")
 	}
 	n, e := io.Copy(f, io.LimitReader(contextReader{ctx, r}, a.Size+1))
-	e = errors.Join(e, r.Close(), f.Sync(), f.Close())
+	e = errors.Join(e, r.Close(), f.Sync())
 	if e != nil || n != a.Size {
+		_ = f.Close()
 		return receipt, failure("archive snapshot size or read")
 	}
-	snapshot, e := openRegular(d.root, ".bundle", candidate.MaxBundleBytes)
+	// Keep the creation handle alive until the read handle is bound to the same
+	// identity, preventing an unlinked original's identity from being reused.
+	snapshot, e := d.openOwnedRegular(".bundle", candidate.MaxBundleBytes)
 	if e != nil {
+		_ = f.Close()
 		return receipt, failure("archive snapshot binding")
 	}
 	defer snapshot.Close()
+	if e = f.Close(); e != nil {
+		return receipt, failure("archive snapshot writer close")
+	}
 	if e = candidate.VerifyBundle(ctx, a, io.NewSectionReader(snapshot, 0, a.Size)); e != nil {
 		return receipt, failure("archive authentication")
 	}
 	if e = extract(ctx, d, a, snapshot); e != nil {
 		return receipt, failure("verified member extraction")
 	}
+	if e = d.removeOwned(".bundle"); e != nil {
+		return receipt, failure("archive snapshot cleanup")
+	}
 	if e = snapshot.Close(); e != nil {
 		return receipt, failure("archive snapshot close")
-	}
-	if e = d.root.Remove(".bundle"); e != nil {
-		return receipt, failure("archive snapshot cleanup")
 	}
 	if ctx.Err() != nil {
 		return receipt, failure("cancelled")

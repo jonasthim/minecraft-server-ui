@@ -38,6 +38,135 @@ type fixture struct {
 	latestErr error
 }
 
+type snapshotCloseReader struct {
+	io.Reader
+	close func() error
+}
+
+func (r snapshotCloseReader) Close() error { return r.close() }
+
+type snapshotSubstitutionSource struct {
+	*fixture
+	t           *testing.T
+	replacement os.FileInfo
+}
+
+func (s *snapshotSubstitutionSource) BootstrapArchive(_ context.Context, _, platform string) (io.ReadCloser, error) {
+	return snapshotCloseReader{Reader: bytes.NewReader(s.archives[platform]), close: func() error {
+		path := filepath.Join(s.o.Output, ".bundle")
+		if err := os.Remove(path); err != nil {
+			s.t.Fatal(err)
+		}
+		if err := os.WriteFile(path, s.archives[platform], 0600); err != nil {
+			s.t.Fatal(err)
+		}
+		var err error
+		s.replacement, err = os.Lstat(path)
+		if err != nil {
+			s.t.Fatal(err)
+		}
+		return nil
+	}}, nil
+}
+
+func TestSnapshotSubstitutionOnArchiveCloseRefused(t *testing.T) {
+	f := newFixture(t)
+	source := &snapshotSubstitutionSource{fixture: f, t: t}
+	_, err := Prepare(context.Background(), f.o, source)
+	path := filepath.Join(f.o.Output, ".bundle")
+	now, statErr := os.Lstat(path)
+	if err == nil || statErr != nil {
+		t.Fatalf("Prepare error=%v; replacement stat=%v (want refusal and preserved replacement)", err, statErr)
+	}
+	if !strings.Contains(err.Error(), "cleanup incomplete; replaced or unremovable output state retained") {
+		t.Fatal("retained replacement was not reported", err)
+	}
+	if !os.SameFile(now, source.replacement) {
+		t.Fatal("replacement identity changed")
+	}
+	body, readErr := os.ReadFile(path)
+	if readErr != nil || !bytes.Equal(body, f.archives["linux"]) {
+		t.Fatal("replacement bytes changed", readErr)
+	}
+	assertAbsent(t, filepath.Join(f.o.Output, ReceiptName))
+	entries, readErr := os.ReadDir(f.o.Output)
+	if readErr != nil || len(entries) != 1 || entries[0].Name() != ".bundle" {
+		t.Fatal("unexpected retained state", entries, readErr)
+	}
+}
+
+func TestSnapshotReplacementBeforeOwnedRemovalPreserved(t *testing.T) {
+	f := newFixture(t)
+	d, err := newDestination(f.o.Output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	writer, err := d.create(".bundle", 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = writer.Write(f.archives["linux"]); err != nil {
+		writer.Close()
+		t.Fatal(err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := d.openOwnedRegular(".bundle", candidate.MaxBundleBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+	if err = candidate.VerifyBundle(context.Background(), f.m.Artifacts[0], snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err = extract(context.Background(), d, f.m.Artifacts[0], snapshot); err != nil {
+		t.Fatal(err)
+	}
+	// Verification and extraction already consumed the created snapshot. Replace
+	// its pathname with a distinct, identically authenticated file before the
+	// same ownership-aware removal that successful Prepare uses.
+	if err = d.root.Remove(".bundle"); err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := d.root.OpenFile(".bundle", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = foreign.Write(f.archives["linux"]); err != nil {
+		foreign.Close()
+		t.Fatal(err)
+	}
+	foreignInfo, err := foreign.Stat()
+	if err != nil {
+		foreign.Close()
+		t.Fatal(err)
+	}
+	if err = foreign.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = d.removeOwned(".bundle"); err == nil {
+		t.Fatal("removed a foreign replacement")
+	}
+	if err = d.cleanup(); err == nil {
+		t.Fatal("retained replacement cleanup reported success")
+	}
+	now, err := d.root.Lstat(".bundle")
+	if err != nil || !os.SameFile(now, foreignInfo) {
+		t.Fatal("replacement was removed or changed", err)
+	}
+	body, err := d.root.ReadFile(".bundle")
+	if err != nil || !bytes.Equal(body, f.archives["linux"]) {
+		t.Fatal("replacement content changed", err)
+	}
+	entries, err := os.ReadDir(f.o.Output)
+	if err != nil || len(entries) != 1 || entries[0].Name() != ".bundle" {
+		t.Fatal("still-owned extracted state was not cleaned", entries, err)
+	}
+	assertAbsent(t, filepath.Join(f.o.Output, ReceiptName))
+}
+
 func hash(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 func wire(v any) []byte {
 	b, e := json.Marshal(v)

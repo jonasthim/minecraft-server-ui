@@ -124,6 +124,18 @@ type ownedFile struct {
 	name string
 	info os.FileInfo
 }
+
+func (f ownedFile) check(root *os.Root) error {
+	now, err := root.Lstat(f.name)
+	if err != nil {
+		return err
+	}
+	if unsafeInfo(now) || !os.SameFile(now, f.info) {
+		return errors.New("owned file binding changed")
+	}
+	return nil
+}
+
 type destination struct {
 	parent *checkedRoot
 	root   *os.Root
@@ -193,21 +205,69 @@ func (d *destination) create(name string, mode os.FileMode) (*os.File, error) {
 	}
 	return f, nil
 }
-func (d *destination) cleanup() {
+func (d *destination) owned(name string) (ownedFile, error) {
+	for _, f := range d.files {
+		if f.name == name {
+			return f, nil
+		}
+	}
+	return ownedFile{}, errors.New("file was not created by this operation")
+}
+
+func (d *destination) openOwnedRegular(name string, limit int64) (*os.File, error) {
+	owned, err := d.owned(name)
+	if err != nil {
+		return nil, err
+	}
+	if err = owned.check(d.root); err != nil {
+		return nil, err
+	}
+	f, err := openRegular(d.root, name, limit)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := f.Stat()
+	if err != nil || !os.SameFile(opened, owned.info) || owned.check(d.root) != nil {
+		f.Close()
+		return nil, errors.New("opened file differs from created identity")
+	}
+	return f, nil
+}
+
+func (d *destination) removeOwned(name string) error {
+	owned, err := d.owned(name)
+	if err != nil {
+		return err
+	}
+	if err = owned.check(d.root); err != nil {
+		return err
+	}
+	return d.root.Remove(name)
+}
+
+func (d *destination) cleanup() error {
 	// Remove only identities created by this operation, through the retained
 	// destination handle. A substituted destination pathname is never traversed.
+	incomplete := false
 	if d.root != nil {
 		for i := len(d.files) - 1; i >= 0; i-- {
 			f := d.files[i]
-			now, e := d.root.Lstat(f.name)
-			if e == nil && !unsafeInfo(now) && os.SameFile(now, f.info) {
-				_ = d.root.Remove(f.name)
+			if err := d.removeOwned(f.name); err != nil && !errors.Is(err, os.ErrNotExist) {
+				incomplete = true
 			}
 		}
 	}
-	if now, e := d.parent.root.Lstat(d.name); e == nil && !unsafeInfo(now) && os.SameFile(now, d.info) {
-		_ = d.parent.root.Remove(d.name)
+	if now, e := d.parent.root.Lstat(d.name); e == nil {
+		if unsafeInfo(now) || !os.SameFile(now, d.info) || d.parent.root.Remove(d.name) != nil {
+			incomplete = true
+		}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		incomplete = true
 	}
+	if incomplete {
+		return errors.New("owned output cleanup incomplete")
+	}
+	return nil
 }
 func (d *destination) close() {
 	if d.root != nil {
