@@ -127,6 +127,21 @@ func TestRecoverPendingUpdaterReconciliationMarker(t *testing.T) {
 func TestRollbackAssetRestoreAcceptsNewInodeWithCapturedContent(t *testing.T) {
 	snapshot, target, operation := linuxAssetFixture(t, linuxAssetManager, true)
 	before := snapshot.State()
+	// Keep the original inode allocated after the driver replaces its snapshot
+	// with the candidate. Without this pin, unlinking the candidate can allow
+	// immediate reuse of the preimage inode number on some filesystems.
+	preimagePin, err := os.Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer preimagePin.Close()
+	preimageInfo, err := preimagePin.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uint64(preimageInfo.Sys().(*syscall.Stat_t).Ino) != before.Inode {
+		t.Fatal("preimage pin does not refer to captured asset inode")
+	}
 	if err := captureLinuxAsset(context.Background(), snapshot, operation); err != nil {
 		t.Fatal(err)
 	}

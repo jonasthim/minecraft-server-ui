@@ -255,6 +255,18 @@ func TestLinuxInstallerLaunchRejectsWrongPhaseImageExecutorAndReusedPID(t *testi
 		fixture := newLinuxLaunchFlowFixture(t)
 		defer fixture.release()
 		path := filepath.Join(fixture.operationPath, launchLinuxExecutorName)
+		// Keep the original inode allocated while replacing its directory entry.
+		// Otherwise a filesystem may immediately reuse the inode number, making
+		// this identity test nondeterministic even though the file was recreated.
+		original, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer original.Close()
+		originalInfo, err := original.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
 		body, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -267,6 +279,13 @@ func TestLinuxInstallerLaunchRejectsWrongPhaseImageExecutorAndReusedPID(t *testi
 		}
 		if err := os.Chmod(path, 0755); err != nil {
 			t.Fatal(err)
+		}
+		replacementInfo, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if os.SameFile(originalInfo, replacementInfo) {
+			t.Fatal("test filesystem reused the still-open executor inode")
 		}
 		if err := grantLinuxInstallerLaunch(withLaunchLinuxConfig(context.Background(), fixture.config), fixture.tx, fixture.image); !errors.Is(err, errLinuxInstallerRecoveryRequired) {
 			t.Fatalf("same-byte executor replacement was accepted: %v", err)

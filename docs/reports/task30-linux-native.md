@@ -22,6 +22,8 @@ Network-free fixtures cover strict maintenance proof handling and paired cleanup
 
 These fixtures do not establish native Linux acceptance. No local service account, manager service, firewall, game process, or external service was used. Real `useradd`, `runuser`, systemd behavior, a signed release bundle, active updater supersession, and readiness against a disposable Ubuntu host remain for the integrator's hosted qualification workflow.
 
+The hosted CI inode assertions were made deterministic by retaining an open descriptor to the original executor/preimage while replacing the path, then checking the replacement is a distinct file before exercising launch rejection or rollback restoration. This prevents filesystem inode-number reuse from invalidating either fixture. Both focused tests passed 30 consecutive runs; the install package test, race test, and vet checks passed locally.
+
 ## Integration dependencies
 
 Active-manager quiescence uses the exact challenge/drain proof and the narrow maintenance updater reconciliation bridge. Launch permit grant/revoke and startup checks are owned by `launch_linux.go`; the native driver calls those APIs for verification and rollback. Linux CLI, executor dispatch, qualification, workflow, and ledger integration remain outside this package report. Do not mark Task 30 accepted until the integrator reviews the code and the approved Ubuntu workflow passes.
