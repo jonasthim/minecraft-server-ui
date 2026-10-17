@@ -37,6 +37,15 @@ class Response(io.BytesIO):
         self.headers["Content-Type"] = content
 
 
+def launcher_identity():
+    return {"instance_id": game.INSTANCE, "pid": 1234, "launcher_pid": 5678,
+            "start_identity": "00000000-0000-0000-0000-000000000001:12345",
+            "executable": "/var/lib/minecraft-ui/runtimes/java", "working_dir": "/var/lib/minecraft-ui/instances/game-acceptance/server",
+            "java_runtime_id": "temurin-21-linux-x64-" + "a" * 64,
+            "java_checksum": {"algorithm": "sha256", "value": "a" * 64},
+            "started_at": "2026-10-17T12:00:00Z"}
+
+
 class Helpers(unittest.TestCase):
     def test_windows_npm_arguments_survive_shim_reparse_scope(self):
         pwsh = os.environ.get("MINECRAFT_UI_TEST_PWSH") or shutil.which("pwsh")
@@ -84,6 +93,52 @@ Invoke-Expression ("& '" + $capture + "' " + $argumentsText)
         # not a replacement for executing the catch path in native PowerShell.
         source = (game.HERE / "windows-game.ps1").read_text()
         self.assertNotIn("[Management.Automation.ParameterBindingValidationException]", source)
+
+    def test_windows_cim_diagnostics_keep_only_bounded_numeric_allowlist(self):
+        pwsh = os.environ.get("MINECRAFT_UI_TEST_PWSH") or shutil.which("pwsh")
+        source = (game.HERE / "windows-game.ps1").read_text()
+        function = source[source.index("function Get-BoundedCimNumericCodes"):source.index("$account = ")]
+        self.assertIn("$exceptionTypeName -eq 'CimException'", source)
+        self.assertNotIn(".Message", source)
+        self.assertNotIn("RawErrorData", source)
+        self.assertIn("@('NativeErrorCode','StatusCode','HResult')", function)
+        if not pwsh:
+            self.skipTest("PowerShell unavailable; numeric fixture requires explicit development tool or native CI pwsh")
+        fixture = function + r'''
+$sample = [pscustomobject]@{NativeErrorCode=[int]58;StatusCode=[System.DayOfWeek]::Monday;HResult=[int]-2147467259;Message='private'}
+$sample | Add-Member -NotePropertyName Secret -NotePropertyValue 999
+$result = Get-BoundedCimNumericCodes $sample
+$result | ConvertTo-Json -Compress
+'''
+        with tempfile.TemporaryDirectory(prefix="game-cim-numbers-") as tmp:
+            script = Path(tmp) / "fixture.ps1"
+            script.write_text(fixture)
+            result = subprocess.run([pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(script)],
+                                    capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"NativeErrorCode": 58, "StatusCode": 1, "HResult": -2147467259})
+        negative = function + r'''
+$bad = [pscustomobject]@{NativeErrorCode='58';StatusCode=$true;HResult=[uint64]::MaxValue;Secret=[int]999}
+Get-BoundedCimNumericCodes $bad | ConvertTo-Json -Compress
+'''
+        with tempfile.TemporaryDirectory(prefix="game-cim-negative-") as tmp:
+            script = Path(tmp) / "fixture.ps1"
+            script.write_text(negative)
+            result = subprocess.run([pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(script)],
+                                    capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {})
+        boundary = function + r'''
+$ok = [pscustomobject]@{NativeErrorCode=[uint32]::MaxValue}
+Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
+'''
+        with tempfile.TemporaryDirectory(prefix="game-cim-boundary-") as tmp:
+            script = Path(tmp) / "fixture.ps1"
+            script.write_text(boundary)
+            result = subprocess.run([pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(script)],
+                                    capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"NativeErrorCode": 4294967295})
 
     def test_windows_identity_preserves_submicrosecond_creation_ticks(self):
         # Native FILETIME may end in any 100 ns tick; CIM roundtrips lose the
@@ -212,6 +267,17 @@ Invoke-Expression ("& '" + $capture + "' " + $argumentsText)
             self.assertEqual(failure.exception.evidence, {"job_state": "failed", "job_phase": "verifying_backup", "job_diagnostics": ["unclassified"],
                                                          "console_diagnostics": {"diagnostic_available": False, "reason_code": "status_malformed"}})
 
+    def test_stopping_job_adds_bounded_launcher_record_and_keeps_failure(self):
+        api = game.API()
+        response = {"job": {"id": "abc", "state": "failed", "phase": "stopping_process", "error": "private"}}
+        diagnostic = {"diagnostic_available": False, "reason_code": "state_missing"}
+        with mock.patch.object(api, "request", return_value=response), mock.patch.object(api, "job_diagnostics", return_value=["native_stop_unclean"]), mock.patch.object(api, "console_diagnostics", return_value={"diagnostic_available": False, "reason_code": "status_unavailable"}), mock.patch.object(game, "launcher_diagnostics", return_value=diagnostic), self.assertRaises(game.Failure) as failure:
+            api.job({"job": {"id": "abc"}})
+        self.assertEqual(failure.exception.evidence["job_state"], "failed")
+        self.assertEqual(failure.exception.evidence["job_phase"], "stopping_process")
+        self.assertEqual(failure.exception.evidence["launcher_diagnostics"], diagnostic)
+        self.assertNotIn("private", json.dumps(failure.exception.evidence))
+
     def test_console_diagnostics_allow_only_known_reason_enums_and_actual_booleans(self):
         api = game.API()
         state = {"status": "settings_unverified", "reason": "native readiness status method is unavailable", "process_running": True,
@@ -248,6 +314,9 @@ Invoke-Expression ("& '" + $capture + "' " + $argumentsText)
             ([{"message": "install preview expired or instance changed; resolve again secret"}], ["unclassified"]),
             ([{"message": 42}], ["unclassified"]),
             ([{"message": "Lifecycle managed java verification failed; inspect job phase and current process state before retrying."}], ["managed_java_verification_failed"]),
+            ([{"message": "Lifecycle process identity failed; inspect job phase and current process state before retrying."}], ["process_identity_failed"]),
+            ([{"message": "Native stop did not complete cleanly; inspect current process state and launcher recovery details."}], ["native_stop_unclean"]),
+            ([{"message": "Native stop did not complete cleanly; inspect current process state and launcher recovery details. private"}], ["unclassified"]),
         ]
         for logs, expected in cases:
             with self.subTest(logs=logs), mock.patch.object(api, "request", return_value={"logs": logs}) as request:
@@ -259,6 +328,125 @@ Invoke-Expression ("& '" + $capture + "' " + $argumentsText)
         with mock.patch.object(api, "request", return_value={"logs": [{"message": "ignored"}] * 501}):
             self.assertEqual(api.job_diagnostics("abc"), ["diagnostics_bound"])
 
+    def test_launcher_diagnostics_match_fixed_identity_and_report_exit_or_unavailable(self):
+        with tempfile.TemporaryDirectory(prefix="game-launcher-evidence-") as tmp:
+            data = Path(tmp)
+            state = data / "instances" / game.INSTANCE / "state"
+            state.mkdir(parents=True)
+            identity = launcher_identity()
+            (state / "identity.json").write_text(json.dumps(identity))
+            stop = {"identity": identity, "exited_at": "0001-01-01T00:00:00Z", "exit_code": 0,
+                    "deliberate": True, "forced": False, "reason": "operator"}
+            (state / "stop.json").write_text(json.dumps(stop))
+            with mock.patch.object(game, "DATA", data):
+                evidence = game.launcher_diagnostics()
+                self.assertEqual(evidence, {"diagnostic_available": True, "identity_match": True,
+                                            "exit_present": False,
+                                            "exited_at_present": False, "deliberate": True, "forced": False,
+                                            "watchdog_present": False, "watchdog_diagnostics": [],
+                                            "exit_code": None, "reason_code": "operator"})
+                exited = {"identity": identity, "exited_at": "2026-10-17T12:00:00Z", "exit_code": 0,
+                          "deliberate": True, "forced": True, "reason": "operator", "watchdog_error": "secret"}
+                (state / "exit.json").write_text(json.dumps(exited))
+                evidence = game.launcher_diagnostics()
+                self.assertTrue(evidence["identity_match"])
+                self.assertTrue(evidence["exit_present"])
+                self.assertTrue(evidence["exited_at_present"])
+                self.assertTrue(evidence["forced"])
+                self.assertTrue(evidence["watchdog_present"])
+                self.assertEqual(evidence["exit_code"], 0)
+                self.assertNotIn("secret", json.dumps(evidence))
+                exited["identity"] = {**identity, "pid": 99}
+                (state / "exit.json").write_text(json.dumps(exited))
+                self.assertFalse(game.launcher_diagnostics()["identity_match"])
+                exited["identity"] = identity
+                exited["exited_at"] = "0001-01-01T00:00:00Z"
+                (state / "exit.json").write_text(json.dumps(exited))
+                evidence = game.launcher_diagnostics()
+                self.assertTrue(evidence["exit_present"])
+                self.assertFalse(evidence["exited_at_present"])
+                (state / "exit.json").write_text("{malformed")
+                unavailable = game.launcher_diagnostics()
+                self.assertEqual(unavailable, {"diagnostic_available": False, "reason_code": "state_unavailable"})
+
+    def test_launcher_diagnostics_reject_missing_typed_identity_fields_and_booleans(self):
+        with tempfile.TemporaryDirectory(prefix="game-launcher-invalid-") as tmp:
+            data = Path(tmp)
+            state = data / "instances" / game.INSTANCE / "state"
+            state.mkdir(parents=True)
+            good = launcher_identity()
+            (state / "identity.json").write_text(json.dumps(good))
+            stop = {"identity": good, "exited_at": "0001-01-01T00:00:00Z", "exit_code": 0,
+                    "deliberate": True, "forced": False, "reason": "manager_eof"}
+            (state / "stop.json").write_text(json.dumps(stop))
+            with mock.patch.object(game, "DATA", data):
+                for identity in ({}, {**good, "instance_id": "other"}, {**good, "pid": 0},
+                                 {**good, "pid": True}, {**good, "start_identity": ""},
+                                 {**good, "start_identity": "bad:tick"}):
+                    with self.subTest(identity=identity):
+                        (state / "identity.json").write_text(json.dumps(identity))
+                        self.assertFalse(game.launcher_diagnostics()["diagnostic_available"])
+                (state / "identity.json").write_text(json.dumps(good))
+                for record, filename in (({"identity": good, "exited_at": "0001-01-01T00:00:00Z", "exit_code": 0,
+                                            "forced": False, "reason": "operator"}, "stop.json"),
+                                         ({"identity": good, "exited_at": "0001-01-01T00:00:00Z", "exit_code": 0,
+                                           "deliberate": "false", "forced": False}, "stop.json"),
+                                         ({"identity": good, "exited_at": "0001-01-01T00:00:00Z", "exit_code": 0,
+                                           "deliberate": True, "forced": 0}, "stop.json"),
+                                         ({"identity": good, "exited_at": "0001-01-01T00:00:00Z", "exit_code": 0,
+                                           "deliberate": True, "forced": False, "watchdog_error": None}, "stop.json"),
+                                         ({"identity": good, "exited_at": "2026-10-17T12:00:00Z", "exit_code": 0,
+                                           "deliberate": True}, "exit.json")):
+                    (state / filename).write_text(json.dumps(record))
+                    self.assertFalse(game.launcher_diagnostics()["diagnostic_available"])
+                (state / "exit.json").write_text("{}")
+                (state / "stop.json").write_text(json.dumps(stop))
+                self.assertFalse(game.launcher_diagnostics()["diagnostic_available"])
+                (state / "exit.json").write_bytes(b"x" * 32769)
+                self.assertFalse(game.launcher_diagnostics()["diagnostic_available"])
+
+    def test_launcher_watchdog_and_reason_categories_are_finite_and_exact(self):
+        identity = launcher_identity()
+        stop = {"identity": identity, "exited_at": "0001-01-01T00:00:00Z", "exit_code": 0,
+                "deliberate": True, "forced": False, "reason": "manager_eof"}
+        cases = (("stop delivery failed", ["stop_delivery_failed"]),
+                 ("persist stop intention failed", ["stop_intention_persist_failed"]),
+                 ("forced termination failed", ["forced_termination_failed"]),
+                 ("stop delivery failed; forced termination failed", ["forced_termination_failed", "stop_delivery_failed"]),
+                 ("stop delivery failed; unknown secret", ["unclassified"]),
+                 ("stop delivery failed;forced termination failed", ["unclassified"]))
+        for raw, expected in cases:
+            with self.subTest(raw=raw), tempfile.TemporaryDirectory(prefix="game-launcher-watchdog-") as tmp:
+                data = Path(tmp)
+                state = data / "instances" / game.INSTANCE / "state"
+                state.mkdir(parents=True)
+                (state / "identity.json").write_text(json.dumps(identity))
+                (state / "stop.json").write_text(json.dumps({**stop, "watchdog_error": raw}))
+                with mock.patch.object(game, "DATA", data):
+                    evidence = game.launcher_diagnostics()
+                self.assertTrue(evidence["diagnostic_available"])
+                self.assertEqual(evidence["reason_code"], "manager_eof")
+                self.assertTrue(evidence["watchdog_present"])
+                self.assertEqual(evidence["watchdog_diagnostics"], expected)
+                self.assertNotIn("secret", json.dumps(evidence))
+
+    def test_launcher_diagnostic_file_failure_does_not_replace_original_job_failure(self):
+        api = game.API()
+        response = {"job": {"id": "abc", "state": "failed", "phase": "stopping_process", "error": "private"}}
+        with tempfile.TemporaryDirectory(prefix="game-launcher-oversize-") as tmp:
+            data = Path(tmp)
+            state = data / "instances" / game.INSTANCE / "state"
+            state.mkdir(parents=True)
+            (state / "identity.json").write_bytes(b"{}" + b" " * 32767)
+            (state / "stop.json").write_text("{}")
+            with mock.patch.object(game, "DATA", data), mock.patch.object(api, "request", return_value=response), \
+                 mock.patch.object(api, "job_diagnostics", return_value=["unclassified"]), \
+                 mock.patch.object(api, "console_diagnostics", return_value={"diagnostic_available": False, "reason_code": "status_unavailable"}), \
+                 self.assertRaises(game.Failure) as failure:
+                api.job({"job": {"id": "abc"}})
+        self.assertEqual(failure.exception.code, "job_terminal_failure")
+        self.assertEqual(failure.exception.evidence["job_phase"], "stopping_process")
+        self.assertEqual(failure.exception.evidence["launcher_diagnostics"]["diagnostic_available"], False)
     def test_archive_checks_hashes_player_marker_and_unsafe_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "archive.zip"

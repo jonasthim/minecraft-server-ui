@@ -221,3 +221,68 @@ PASS (exit0)
 ```
 
 The portable Linux PowerShell fixture is language/argument evidence, **not Windows OS qualification**. Temporary fixture callers, outputs and JS stand-ins were removed. No service/account/firewall/LSA/native Windows function, Minecraft process or user preview was used locally. The native Windows hosted workflow must still execute the corrected path and all remaining game assertions. Source review and the independently owned observation-admission fix are required before root dispatches the next exact-source game run. Online backup/restore/restart and Task33 completion remain open.
+
+## Fourth hosted attempt — run39039284671
+
+[Installed Minecraft acceptance39039284671](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39039284671) ran exact source `a37cf153240e4ae9a4397910fe62be04da1da87d` for Vanilla1.21.9 on Ubuntu24.04 and WindowsServer2022. Both jobs ended **failure**. The supplied artifact reports were inspected from the task cache; no dispatch or service interaction was performed for this diagnostic packet.
+
+Ubuntu manager SHA256 was `5fc80542c089e7e44ef8089e4ac328eb3b7a3704ec4a9850889b8f252bb5bdbd`. This run passed installed readiness and real headless loopback gameplay far enough to establish four PLAY client connections. Marker A yaw31.25 survived reconnect; marker B yaw121.25 was sent and survived a second reconnect. Each connection received49 world chunks, one teleport and one keepalive. The online full backup succeeded with the same native PID, released its save lease before the deadline, acknowledged save-off/save-on, verified82 files and read playerdata marker A yaw31.25.
+
+The run then failed at `deliberate_stop_restore`, job phase `stopping_process`, with `unclassified`. The console status said the process was stopped. This is evidence that the process stopped, but without launcher records it does not establish whether stop was deliberate, forced, tied to the expected process identity, or accompanied by a watchdog error. Restore, safety-backup verification, manager restart and post-restart reconnect were not reached. The report records `not_qualified` as Microsoft-authenticated client, graphical client, other tuples, full-map/addons and crash-retry injection.
+
+Windows reached the firewall stage after the corrected npm dependency command passed, then failed at `New-NetFirewallRule` on source line58 with exception type `CimException`. The retained result did not include a numeric CIM code, so the specific range rejection cause is unknown. The existing `RemoteAddress` value is unchanged in this packet; no range was guessed or edited. Windows did not reach account creation, installer, game API or gameplay.
+
+## Bounded stop and Windows firewall diagnostics
+
+The harness now maps only the exact authored lifecycle messages for process identity failure and an unclean native stop to `process_identity_failed` and `native_stop_unclean`. A failed `stopping_process` job reads only fixed `identity.json`, `stop.json` and optional `exit.json` below the fixed accepted instance state directory. Reads reject symlinked directories/files and files over32KiB. The output has an explicit availability/reason code; available records report identity match, whether an exit timestamp exists, deliberate/forced flags, watchdog presence, an optional signed32-bit exit code, and one finite reason enum. Unknown reasons are `unclassified`; private text is never emitted. The original failed job phase and terminal state remain failures, with no retries or success waiver.
+
+The Windows catch now detects `CimException` by its already captured runtime type name and checks only actual `NativeErrorCode`, `StatusCode` and `HResult` properties. It retains numeric integral values within a signed/unsigned32-bit bound, omits absent or nonnumeric properties, and emits no message or raw error data. The firewall rule expression remains unchanged.
+
+Deterministic evidence:
+
+```text
+MINECRAFT_UI_TEST_PWSH=/home/thim/.cache/dilla-tmp/task33a-powershell-7.6.7/runtime/pwsh python3 -B -m unittest discover -s deploy/qualification -p game_api_test.py -v
+Ran24 tests; OK (0.900s).
+
+Coverage includes exact and near-match authored lifecycle messages, failed stopping-job preservation, fixed identity matching, absent exit record, present/mismatched/malformed exit records, watchdog redaction, and an executed harmless PowerShell numeric-property fixture that accepts numeric allowlisted values and rejects strings and unlisted fields.
+
+python3 -m py_compile deploy/qualification/game_api.py deploy/qualification/game_api_test.py
+PASS
+
+PowerShell Parser.ParseFile on windows-game.ps1 and windows-updater-support.ps1
+PASS (0 parse errors; files parsed, not executed).
+
+git diff --check -- deploy/qualification/game_api.py deploy/qualification/game_api_test.py deploy/qualification/windows-game.ps1 docs/reports/task33a.md
+PASS
+```
+
+The portable PowerShell check exercises language/property filtering only, not Windows CIM or firewall behavior. No hosted rerun, firewall change, local service/account operation, game launch, or user preview occurred. The next root-owned exact-source run can now distinguish launcher stop evidence and retain numeric Windows CIM properties when available. Task33 gameplay acceptance remains open.
+
+## Diagnostic fix round1
+
+The root review identified four gaps in the prior diagnostic patch; all are corrected in the owned harness files:
+
+- Launcher `identity.json`, `stop.json`, and optional `exit.json` now validate the actual process identity shape: exact accepted instance ID, positive non-boolean PID, valid boot/start identity, typed launch/runtime/checksum/time fields, and required Boolean `deliberate` and `forced` values. Missing or malformed required state yields `diagnostic_available:false` with a fixed reason code. A missing exit file is reported explicitly as `exit_present:false`; a present zero Go `ExitedAt` timestamp reports `exit_present:true` and `exited_at_present:false`.
+- Watchdog errors map only exact source strings to finite categories: `stop_delivery_failed`, `stop_intention_persist_failed`, and `forced_termination_failed`. Exact `; `-separated combinations are accepted only when every token is known; otherwise diagnostics contain only `unclassified`. The authored launcher reason `manager_eof` is now allowlisted.
+- Launcher diagnostics use a fixed-file reader that opens ordinary files and reads at most32769bytes. File validation, missing-file, malformed JSON, and filesystem failures are converted to explicit unavailable diagnostics so they cannot replace the original failed lifecycle job.
+- The PowerShell numeric fixture now includes negative cases for string, Boolean, out-of-range uint64, and unlisted fields, plus the uint32 maximum boundary. The allowlisted CIM enum status is converted to a bounded integer; absent, invalid, and unlisted properties do not produce null entries.
+
+The added negative tests failed against the prior implementation on absent Boolean defaults, incomplete identity acceptance, year0001 exit time, missing reason codes, and failure propagation; they pass after the correction.
+
+Verification:
+
+```text
+MINECRAFT_UI_TEST_PWSH=/home/thim/.cache/dilla-tmp/task33a-powershell-7.6.7/runtime/pwsh python3 -B -m unittest discover -s deploy/qualification -p game_api_test.py -v
+Ran27 tests; OK (1.695s).
+
+python3 -m py_compile deploy/qualification/game_api.py deploy/qualification/game_api_test.py
+PASS
+
+PowerShell Parser.ParseFile on windows-game.ps1 and windows-updater-support.ps1
+PASS (0 parse errors; files parsed, not executed).
+
+git diff --check -- deploy/qualification/game_api.py deploy/qualification/game_api_test.py deploy/qualification/windows-game.ps1 docs/reports/task33a.md
+PASS
+```
+
+The hosted game workflow was not rerun. No local services, accounts, firewall rules, game processes, or previews were used. Native Windows CIM and the firewall failure cause remain unqualified; the `RemoteAddress` rule is unchanged. Task33 gameplay acceptance remains open.

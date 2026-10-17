@@ -24,6 +24,20 @@ foreach ($entry in @(Get-ChildItem -LiteralPath $OutputDirectory -Force)) {
 if ($OutputDirectory.StartsWith('C:\ProgramData\MinecraftUI',[StringComparison]::OrdinalIgnoreCase) -or $OutputDirectory.StartsWith('C:\Program Files\MinecraftUI',[StringComparison]::OrdinalIgnoreCase)) { throw 'unsafe_output_path' }
 $target = 'C:\Program Files\MinecraftUI'
 $data = 'C:\ProgramData\MinecraftUI'
+function Get-BoundedCimNumericCodes($Exception) {
+ $codes = @{}
+ foreach ($name in @('NativeErrorCode','StatusCode','HResult')) {
+  $property = $Exception.PSObject.Properties[$name]
+  if ($null -eq $property -or $null -eq $property.Value) { continue }
+  $value = $property.Value
+  if ($value -isnot [byte] -and $value -isnot [sbyte] -and $value -isnot [int16] -and $value -isnot [uint16] -and
+      $value -isnot [int32] -and $value -isnot [uint32] -and $value -isnot [int64] -and $value -isnot [uint64] -and $value -isnot [enum]) { continue }
+  try { $number = [Convert]::ToInt64($value) } catch { continue }
+  if ($number -lt -4294967295 -or $number -gt 4294967295) { continue }
+  $codes[$name] = $number
+ }
+ return $codes
+}
 if ((Get-Service MinecraftUI -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $target) -or (Test-Path -LiteralPath $data)) { throw 'existing_installation' }
 # Existing reviewed helper defines LSA/SID/ACL functions only; no updater install.
 . (Join-Path $PSScriptRoot 'windows-updater-support.ps1')
@@ -94,6 +108,9 @@ try {
  $failureCode = 'unclassified'
  if ($exceptionTypeName -eq 'ParameterBindingValidationException') { $failureCode = 'parameter_binding_validation' }
  $failureDiagnostic = @{code=$failureCode;source_line=$failureLine}
+ if ($exceptionTypeName -eq 'CimException') {
+  $failureDiagnostic.cim_codes = Get-BoundedCimNumericCodes $_.Exception
+ }
  # Fixed stage/type only: exception messages may contain arbitrary native data.
  Write-Output ('FAIL game acceptance stage=' + $stage + ' type=' + $exceptionTypeName)
 } finally {

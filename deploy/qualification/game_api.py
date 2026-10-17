@@ -42,6 +42,7 @@ DATA = Path(r"C:\ProgramData\MinecraftUI" if os.name == "nt" else "/var/lib/mine
 HERE = Path(__file__).resolve().parent
 IDENTIFIER = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
+PROCESS_START_ID = re.compile(r"^[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}:[a-fA-F0-9]{1,20}$")
 PERMISSION_PATHS = (
     "/", "/usr", "/usr/local", "/usr/local/bin", "/usr/local/bin/minecraft-ui",
     "/usr/local/lib", "/usr/local/lib/minecraft-ui", "/usr/local/lib/minecraft-ui/unitctl",
@@ -138,6 +139,144 @@ def bounded_json(path, limit=1 << 20):
     return json.loads(path.read_bytes())
 
 
+def _read_bounded_launcher_json(path, limit=32768):
+    """Read at most limit+1 bytes from one ordinary fixed launcher state file."""
+    before = os.lstat(path)
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+        raise ValueError("launcher file is not a bounded ordinary file")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd, "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(before, opened):
+            raise ValueError("launcher file binding changed")
+        raw = stream.read(limit + 1)
+        after = os.fstat(stream.fileno())
+    current = os.lstat(path)
+    if len(raw) > limit or not os.path.samestat(opened, after) or not os.path.samestat(after, current) or \
+       opened.st_size != after.st_size or opened.st_mtime_ns != after.st_mtime_ns:
+        raise ValueError("launcher file changed while reading")
+    return json.loads(raw)
+
+
+def _valid_process_identity(value):
+    if not isinstance(value, dict):
+        return False
+    if value.get("instance_id") != INSTANCE or not isinstance(value.get("instance_id"), str):
+        return False
+    if type(value.get("pid")) is not int or value["pid"] <= 0:
+        return False
+    if "launcher_pid" in value and (type(value["launcher_pid"]) is not int or value["launcher_pid"] <= 0):
+        return False
+    if not isinstance(value.get("start_identity"), str) or not PROCESS_START_ID.fullmatch(value["start_identity"]):
+        return False
+    for field in ("executable", "working_dir", "java_runtime_id"):
+        if not isinstance(value.get(field), str) or not value[field]:
+            return False
+    checksum = value.get("java_checksum")
+    if not isinstance(checksum, dict) or checksum.get("algorithm") != "sha256" or \
+       not isinstance(checksum.get("value"), str) or not SHA256.fullmatch(checksum["value"]):
+        return False
+    started = value.get("started_at")
+    if not isinstance(started, str):
+        return False
+    try:
+        parsed = datetime.datetime.fromisoformat(started.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.year > 1 or parsed.month > 1 or parsed.day > 1 or parsed.hour > 0 or parsed.minute > 0 or parsed.second > 0 or parsed.microsecond > 0
+
+
+def _timestamp_present(value):
+    if not isinstance(value, str):
+        raise ValueError("timestamp missing or malformed")
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("timestamp malformed") from error
+    return parsed.year > 1 or parsed.month > 1 or parsed.day > 1 or parsed.hour > 0 or parsed.minute > 0 or parsed.second > 0 or parsed.microsecond > 0
+
+
+def _watchdog_codes(value):
+    if value == "":
+        return []
+    if not isinstance(value, str):
+        raise ValueError("watchdog field malformed")
+    categories = {"stop delivery failed": "stop_delivery_failed",
+                  "persist stop intention failed": "stop_intention_persist_failed",
+                  "forced termination failed": "forced_termination_failed"}
+    parts = value.split("; ")
+    if any(part not in categories for part in parts):
+        return ["unclassified"]
+    return sorted({categories[part] for part in parts})
+
+
+def launcher_diagnostics():
+    """Read only bounded launcher state below the accepted instance."""
+    unavailable = {"diagnostic_available": False, "reason_code": "unavailable"}
+    try:
+        for directory in (DATA, DATA / "instances", DATA / "instances" / INSTANCE,
+                          DATA / "instances" / INSTANCE / "state"):
+            info = os.lstat(directory)
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                return {**unavailable, "reason_code": "unsafe_path"}
+        state = DATA / "instances" / INSTANCE / "state"
+        identity = _read_bounded_launcher_json(state / "identity.json")
+        stop = _read_bounded_launcher_json(state / "stop.json")
+        if not isinstance(identity, dict) or not _valid_process_identity(identity):
+            return {**unavailable, "reason_code": "identity_malformed"}
+        if not isinstance(stop, dict) or not _valid_process_identity(stop.get("identity")):
+            return {**unavailable, "reason_code": "identity_malformed"}
+        for record in (stop,):
+            if type(record.get("deliberate")) is not bool or type(record.get("forced")) is not bool:
+                return {**unavailable, "reason_code": "state_malformed"}
+        if not isinstance(stop.get("identity"), dict):
+            return {**unavailable, "reason_code": "identity_malformed"}
+        exit_path = state / "exit.json"
+        exit_present = os.path.lexists(exit_path)
+        exit_record = None
+        if exit_present:
+            exit_record = _read_bounded_launcher_json(exit_path)
+            if not isinstance(exit_record, dict) or not _valid_process_identity(exit_record.get("identity")):
+                return {**unavailable, "reason_code": "identity_malformed"}
+            if type(exit_record.get("deliberate")) is not bool or type(exit_record.get("forced")) is not bool:
+                return {**unavailable, "reason_code": "state_malformed"}
+        identity_match = identity == stop["identity"] and (exit_record is None or identity == exit_record["identity"])
+        records = (stop,) if exit_record is None else (stop, exit_record)
+        watchdog_diagnostics = sorted({code for record in records for code in _watchdog_codes(record.get("watchdog_error", ""))})
+        stop_reason = stop.get("reason", "")
+        if not isinstance(stop_reason, str):
+            return {**unavailable, "reason_code": "state_malformed"}
+        reason = stop_reason
+        if exit_record is not None:
+            exit_reason = exit_record.get("reason", "")
+            if not isinstance(exit_reason, str):
+                return {**unavailable, "reason_code": "exit_malformed"}
+            if exit_reason:
+                reason = exit_reason
+        if type(stop.get("exit_code")) is not int or not -(1 << 31) <= stop["exit_code"] < (1 << 31):
+            return {**unavailable, "reason_code": "state_malformed"}
+        _timestamp_present(stop.get("exited_at"))
+        exited_at_present = False
+        exit_code = None
+        if exit_record is not None:
+            if type(exit_record.get("exit_code")) is not int or not -(1 << 31) <= exit_record["exit_code"] < (1 << 31):
+                return {**unavailable, "reason_code": "exit_malformed"}
+            exit_code = exit_record["exit_code"]
+            exited_at_present = _timestamp_present(exit_record.get("exited_at"))
+        reason_codes = {"operator": "operator", "manager_eof": "manager_eof",
+                        "launcher_shutdown": "launcher_shutdown", "control_failed": "control_failed"}
+        return {"diagnostic_available": True, "identity_match": identity_match,
+                "exit_present": exit_present, "exited_at_present": exited_at_present,
+                "deliberate": stop["deliberate"] or (exit_record is not None and exit_record["deliberate"]),
+                "forced": stop["forced"] or (exit_record is not None and exit_record["forced"]),
+                "watchdog_present": bool(watchdog_diagnostics), "watchdog_diagnostics": watchdog_diagnostics,
+                "exit_code": exit_code, "reason_code": reason_codes.get(reason, "unclassified")}
+    except Exception:
+        # Diagnostics cannot replace or mask the primary failed lifecycle job.
+        return {**unavailable, "reason_code": "state_unavailable"}
+
+
 class API:
     def __init__(self):
         self.jar = http.cookiejar.CookieJar()
@@ -190,9 +329,12 @@ class API:
                 phase = job.get("phase", "unknown")
                 phase = phase if isinstance(phase, str) and re.fullmatch(r"[a-z_]{1,64}", phase) else "unclassified"
                 if state != "succeeded":
-                    raise Failure("job_terminal_failure", job_state=state, job_phase=phase,
-                                  job_diagnostics=self.job_diagnostics(identifier),
-                                  console_diagnostics=self.console_diagnostics())
+                    evidence = {"job_state": state, "job_phase": phase,
+                                "job_diagnostics": self.job_diagnostics(identifier),
+                                "console_diagnostics": self.console_diagnostics()}
+                    if phase == "stopping_process":
+                        evidence["launcher_diagnostics"] = launcher_diagnostics()
+                    raise Failure("job_terminal_failure", **evidence)
                 return job
             time.sleep(1)
         raise Failure("job_timeout")
@@ -216,6 +358,8 @@ class API:
             "Lifecycle materialization failed; inspect job phase and current process state before retrying.": "materialization_failed",
             "Lifecycle verified distribution install failed; inspect job phase and current process state before retrying.": "verified_distribution_install_failed",
             "Lifecycle activation failed; inspect job phase and current process state before retrying.": "activation_failed",
+            "Lifecycle process identity failed; inspect job phase and current process state before retrying.": "process_identity_failed",
+            "Native stop did not complete cleanly; inspect current process state and launcher recovery details.": "native_stop_unclean",
         }
         try:
             page = self.request("/api/v1/jobs/" + safe_id(identifier) + "/logs?after=0&limit=500")
