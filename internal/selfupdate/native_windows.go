@@ -634,15 +634,10 @@ func (d windowsDriver) probe(ctx context.Context, source string, expectedImage I
 		logWindowsProbeFailure("account_sid", e)
 		return result, e
 	}
-	configuredSID, _, _, e := windows.LookupSID("", configuration.ServiceStartName)
-	if e != nil {
+	// The helper retains the exact configuredSID.String() != accountSID rejection.
+	if e := verifyConfiguredServiceSID(configuration.ServiceStartName, accountSID, windows.ComputerName, windows.LookupSID); e != nil {
 		logWindowsProbeFailure("configured_sid", e)
 		return result, errors.New("schema probe must run as the configured unprivileged manager account")
-	}
-	if configuredSID.String() != accountSID {
-		failure := errors.New("schema probe must run as the configured unprivileged manager account")
-		logWindowsProbeFailure("configured_sid", failure)
-		return result, failure
 	}
 	actions, e := service.RecoveryActions()
 	if e != nil {
