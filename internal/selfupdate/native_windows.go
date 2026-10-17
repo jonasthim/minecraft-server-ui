@@ -804,8 +804,30 @@ func (s *windowsUpdater) prepareProcessQuery(ctx context.Context) error {
 }
 
 func managerProcessQuerySID(value string) (*windows.SID, error) {
+	// Parse the textual boundary before handing it to x/sys. Its StringToSid
+	// implementation copies the returned SID into Go-owned memory, so the
+	// SubAuthority accessors (which dereference pointers returned by Win32) are
+	// unsafe under checkptr for that value. The exact shape and canonical
+	// decimal fields below prove the same account boundary without those
+	// accessors; StringToSid and String still validate the Windows SID itself.
+	parts := strings.Split(value, "-")
+	if len(parts) != 8 || parts[0] != "S" || parts[1] != "1" || parts[2] != "5" || parts[3] != "21" {
+		return nil, errors.New("conventional unprivileged manager account SID is required")
+	}
+	var fields [4]uint32
+	for i, part := range parts[4:] {
+		parsed, err := strconv.ParseUint(part, 10, 32)
+		if err != nil || strconv.FormatUint(parsed, 10) != part {
+			return nil, errors.New("conventional unprivileged manager account SID is required")
+		}
+		fields[i] = uint32(parsed)
+	}
+	if fields[3] < 1000 {
+		return nil, errors.New("conventional unprivileged manager account SID is required")
+	}
+
 	sid, err := windows.StringToSid(value)
-	if err != nil || sid == nil || !sid.IsValid() || sid.String() != value || !strings.HasPrefix(value, "S-1-5-21-") || sid.SubAuthorityCount() != 5 || sid.SubAuthority(4) < 1000 {
+	if err != nil || sid == nil || !sid.IsValid() || sid.String() != value {
 		return nil, errors.New("conventional unprivileged manager account SID is required")
 	}
 	return sid, nil

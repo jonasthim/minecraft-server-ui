@@ -146,9 +146,22 @@ func TestUpdaterProcessQueryRejectsUnsafeDescriptors(t *testing.T) {
 }
 
 func TestUpdaterProcessQueryRejectsNonAccountSIDs(t *testing.T) {
-	for _, value := range []string{"", "not-a-sid", "S-1-1-0", "S-1-5-11", "S-1-5-18", "S-1-5-19", "S-1-5-32-544", "S-1-5-32-545", "S-1-5-80-1-2-3-4-5", "S-1-5-21-1-2-3-500", "S-1-5-21-1-2-3-512", "S-1-5-21-1-2-3-999", "S-1-5-21-1-2-1001", " S-1-5-21-1-2-3-1001"} {
+	for _, value := range []string{
+		"", "not-a-sid", "S-1-1-0", "S-1-5-11", "S-1-5-18", "S-1-5-19",
+		"S-1-5-32-544", "S-1-5-32-545", "S-1-5-80-1-2-3-4-5",
+		"S-1-5-21-1-2-3-500", "S-1-5-21-1-2-3-512", "S-1-5-21-1-2-3-999",
+		"S-1-5-21-1-2-1001", " S-1-5-21-1-2-3-1001", "S-1-5-21-01-2-3-1001",
+		"S-1-5-21-1-2-3-01001", "S-1-5-21-1-2-3-4294967296",
+		"S-1-5-21-4294967296-2-3-1001", "S-1-5-21-+1-2-3-1001",
+		"S-1-5-21--2-3-1001", "s-1-5-21-1-2-3-1001",
+	} {
 		if _, err := managerProcessQuerySID(value); err == nil {
 			t.Fatal("nonconventional or privileged SID accepted")
+		}
+	}
+	for _, value := range []string{"S-1-5-21-0-0-0-1000", "S-1-5-21-4294967295-2-3-4294967295"} {
+		if _, err := managerProcessQuerySID(value); err != nil {
+			t.Fatalf("canonical unprivileged account SID %q rejected: %v", value, err)
 		}
 	}
 	if _, err := mergeUpdaterProcessQuery(processQueryTestDescriptor(t, privateProcessFixture), nil); err == nil {
