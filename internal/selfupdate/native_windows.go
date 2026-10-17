@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/jonasthim/minecraft-server-ui/internal/launcher"
 	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
 	"golang.org/x/sys/windows"
@@ -17,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -157,18 +159,18 @@ func openSCMService(name string) (*mgr.Mgr, *mgr.Service, error) {
 func openSCMQuery(name string) (*mgr.Mgr, *mgr.Service, error) {
 	h, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, windowsAvailabilityError(windowsAvailabilitySCMConnect, err)
 	}
 	m := &mgr.Mgr{Handle: h}
 	n, err := windows.UTF16PtrFromString(name)
 	if err != nil {
 		m.Disconnect()
-		return nil, nil, err
+		return nil, nil, windowsAvailabilityError(windowsAvailabilityServiceOpen, err)
 	}
 	service, err := windows.OpenService(h, n, windows.SERVICE_QUERY_STATUS)
 	if err != nil {
 		m.Disconnect()
-		return nil, nil, err
+		return nil, nil, windowsAvailabilityError(windowsAvailabilityServiceOpen, err)
 	}
 	return m, &mgr.Service{Name: name, Handle: service}, nil
 }
@@ -180,36 +182,49 @@ func verifiedServicePID(name, path string) (uint32, error) {
 	defer m.Disconnect()
 	defer service.Close()
 	status, err := service.Query()
-	if err != nil || status.State != svc.Running || status.ProcessId < 1 {
-		return 0, errors.New("native service is not running")
+	if err != nil {
+		return 0, windowsAvailabilityError(windowsAvailabilityServiceQuery, err)
+	}
+	if status.State != svc.Running || status.ProcessId < 1 {
+		return 0, windowsAvailabilityError(windowsAvailabilityServiceState, nil)
 	}
 	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, status.ProcessId)
 	if err != nil {
-		return 0, err
+		return 0, windowsAvailabilityError(windowsAvailabilityProcessOpen, err)
 	}
 	defer windows.CloseHandle(process)
-	var length uint32 = 32768
-	buffer := make([]uint16, length)
-	if err := windows.QueryFullProcessImageName(process, 0, &buffer[0], &length); err != nil {
+	if err := verifiedWindowsProcessImage(process, path); err != nil {
 		return 0, err
-	}
-	image := windows.UTF16ToString(buffer[:length])
-	if !strings.EqualFold(image, path) {
-		return 0, errors.New("native service executable identity mismatch")
-	}
-	actual, err := os.Stat(image)
-	if err != nil {
-		return 0, err
-	}
-	expected, err := os.Stat(path)
-	if err != nil || !os.SameFile(actual, expected) {
-		return 0, errors.New("native service image binding mismatch")
 	}
 	return status.ProcessId, nil
 }
+
+func verifiedWindowsProcessImage(process windows.Handle, path string) error {
+	var length uint32 = 32768
+	buffer := make([]uint16, length)
+	if err := windows.QueryFullProcessImageName(process, 0, &buffer[0], &length); err != nil {
+		return windowsAvailabilityError(windowsAvailabilityProcessImage, err)
+	}
+	image := windows.UTF16ToString(buffer[:length])
+	if !strings.EqualFold(image, path) {
+		return windowsAvailabilityError(windowsAvailabilityImagePath, nil)
+	}
+	actual, err := os.Stat(image)
+	if err != nil {
+		return windowsAvailabilityError(windowsAvailabilityImageStat, err)
+	}
+	expected, err := os.Stat(path)
+	if err != nil {
+		return windowsAvailabilityError(windowsAvailabilityExpectedStat, err)
+	}
+	if !os.SameFile(actual, expected) {
+		return windowsAvailabilityError(windowsAvailabilityImageBinding, nil)
+	}
+	return nil
+}
 func brokerAvailable(ctx context.Context, paths nativePaths) bool {
-	reply, err := pipeCall(ctx, "status")
-	return err == nil && reply == "ready"
+	available, _ := windowsBrokerAvailability(ctx)
+	return available
 }
 func brokerRequest(ctx context.Context, _ nativePaths, id string) error {
 	reply, err := pipeCall(ctx, "activate "+id)
@@ -234,26 +249,24 @@ func pipeCall(ctx context.Context, command string) (string, error) {
 		}
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", windowsAvailabilityError(windowsAvailabilityPipeOpen, errors.Join(ctx.Err(), err))
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 	defer windows.CloseHandle(handle)
-	var serverPID uint32
-	if err := windows.GetNamedPipeServerProcessId(handle, &serverPID); err != nil {
+	if err := verifiedWindowsUpdaterPipe(handle); err != nil {
 		return "", err
-	}
-	expected, err := verifiedServicePID(updaterService, platformPaths().Updater)
-	if err != nil || serverPID != expected {
-		return "", errors.New("untrusted Windows update pipe server")
 	}
 	mode := uint32(windows.PIPE_NOWAIT | windows.PIPE_READMODE_MESSAGE)
 	if err := windows.SetNamedPipeHandleState(handle, &mode, nil, nil); err != nil {
-		return "", err
+		return "", windowsAvailabilityError(windowsAvailabilityPipeMode, err)
 	}
 	var written uint32
-	if err := windows.WriteFile(handle, []byte(command), &written, nil); err != nil || written != uint32(len(command)) {
-		return "", errors.New("Windows update pipe write failed")
+	if err := windows.WriteFile(handle, []byte(command), &written, nil); err != nil {
+		return "", windowsAvailabilityError(windowsAvailabilityPipeWrite, err)
+	}
+	if written != uint32(len(command)) {
+		return "", windowsAvailabilityError(windowsAvailabilityPipeWriteCount, nil)
 	}
 	buffer := make([]byte, 128)
 	for {
@@ -263,14 +276,157 @@ func pipeCall(ctx context.Context, command string) (string, error) {
 			return string(buffer[:count]), nil
 		}
 		if err != nil && err != windows.ERROR_NO_DATA && err != windows.ERROR_PIPE_LISTENING {
-			return "", errors.New("Windows update pipe read failed")
+			return "", windowsAvailabilityError(windowsAvailabilityPipeRead, err)
 		}
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", windowsAvailabilityError(windowsAvailabilityPipeReadWait, errors.Join(ctx.Err(), err))
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+func verifiedWindowsUpdaterPipe(handle windows.Handle) error {
+	var serverPID uint32
+	if err := windows.GetNamedPipeServerProcessId(handle, &serverPID); err != nil {
+		return windowsAvailabilityError(windowsAvailabilityPipeServerPID, err)
+	}
+	expected, err := verifiedServicePID(updaterService, platformPaths().Updater)
+	if err != nil {
+		return err
+	}
+	if serverPID != expected {
+		return windowsAvailabilityError(windowsAvailabilityServerBinding, nil)
+	}
+	return nil
+}
+
+// Availability diagnostics are read-only and fixed-field. They distinguish the
+// failed check without exposing error text, paths, PIDs, SIDs or pipe payloads.
+type windowsAvailabilityStage uint8
+
+const (
+	windowsAvailabilityTrust windowsAvailabilityStage = iota + 1
+	windowsAvailabilityPipeOpen
+	windowsAvailabilityPipeServerPID
+	windowsAvailabilitySCMConnect
+	windowsAvailabilityServiceOpen
+	windowsAvailabilityServiceQuery
+	windowsAvailabilityServiceState
+	windowsAvailabilityProcessOpen
+	windowsAvailabilityProcessImage
+	windowsAvailabilityImagePath
+	windowsAvailabilityImageStat
+	windowsAvailabilityExpectedStat
+	windowsAvailabilityImageBinding
+	windowsAvailabilityServerBinding
+	windowsAvailabilityPipeMode
+	windowsAvailabilityPipeWrite
+	windowsAvailabilityPipeWriteCount
+	windowsAvailabilityPipeRead
+	windowsAvailabilityPipeReadWait
+	windowsAvailabilityServerRefused
+	windowsAvailabilityUnexpectedReply
+	windowsAvailabilityServerTrust
+	windowsAvailabilityServerState
+	windowsAvailabilityServerInstalled
+	windowsAvailabilityServerPending
+	windowsAvailabilityLegacyDisabled
+	windowsAvailabilityLegacyBusy
+	windowsAvailabilityInternal
+)
+
+type windowsAvailabilityFailure struct {
+	stage windowsAvailabilityStage
+	cause error
+}
+
+func (e *windowsAvailabilityFailure) code() uint32 {
+	stage := e.stage
+	if stage < windowsAvailabilityTrust || stage > windowsAvailabilityInternal {
+		stage = windowsAvailabilityInternal
+	}
+	var native windows.Errno
+	var code uint32
+	if errors.As(e.cause, &native) && native <= 0xffff {
+		code = uint32(native)
+	}
+	return 0x4e000000 | uint32(stage)<<16 | code
+}
+func (e *windowsAvailabilityFailure) Error() string {
+	return fmt.Sprintf("Native updater unavailable (Windows code=0x%08x).", e.code())
+}
+func (e *windowsAvailabilityFailure) Unwrap() error { return e.cause }
+
+func windowsAvailabilityError(stage windowsAvailabilityStage, cause error) error {
+	return &windowsAvailabilityFailure{stage, cause}
+}
+
+// AvailabilityStatus is the optional single-probe interface used by the
+// authenticated status composition. It retains the legacy canonical/trust
+// prerequisites and never caches a last error across requests.
+func (b *nativeBroker) AvailabilityStatus(ctx context.Context) (bool, string) {
+	if !b.matches {
+		return false, b.UnavailableReason()
+	}
+	if _, err := LoadNativeTrust(ctx); err != nil {
+		return false, windowsAvailabilityError(windowsAvailabilityTrust, err).Error()
+	}
+	return windowsBrokerAvailability(ctx)
+}
+
+func windowsBrokerAvailability(ctx context.Context) (bool, string) {
+	reply, err := pipeCall(ctx, "status")
+	return windowsAvailabilityResult(reply, err)
+}
+
+func windowsAvailabilityResult(reply string, err error) (bool, string) {
+	if err != nil {
+		var failure *windowsAvailabilityFailure
+		if errors.As(err, &failure) {
+			return false, failure.Error()
+		}
+		return false, windowsAvailabilityError(windowsAvailabilityInternal, err).Error()
+	}
+	var stage windowsAvailabilityStage
+	switch reply {
+	case "ready":
+		return true, ""
+	case "refused":
+		stage = windowsAvailabilityServerRefused
+	case "disabled":
+		stage = windowsAvailabilityLegacyDisabled
+	case "busy":
+		stage = windowsAvailabilityLegacyBusy
+	default:
+		if failure, ok := parseWindowsStatusFailure(reply); ok {
+			return false, failure.Error()
+		}
+		stage = windowsAvailabilityUnexpectedReply
+	}
+	return false, windowsAvailabilityError(stage, nil).Error()
+}
+
+func windowsStatusFailure(stage windowsAvailabilityStage, cause error) string {
+	return fmt.Sprintf("unavailable:%08x", (&windowsAvailabilityFailure{stage, cause}).code())
+}
+
+func parseWindowsStatusFailure(reply string) (*windowsAvailabilityFailure, bool) {
+	const prefix = "unavailable:"
+	if len(reply) != len(prefix)+8 || !strings.HasPrefix(reply, prefix) {
+		return nil, false
+	}
+	code, err := strconv.ParseUint(reply[len(prefix):], 16, 32)
+	if err != nil || code>>24 != 0x4e || fmt.Sprintf("%s%08x", prefix, code) != reply {
+		return nil, false
+	}
+	stage := windowsAvailabilityStage(code >> 16)
+	// Only the four status-only server checks can author these replies. A
+	// forged local stage, arbitrary text or another protocol reply is refused.
+	if stage < windowsAvailabilityServerTrust || stage > windowsAvailabilityServerPending {
+		return nil, false
+	}
+	return &windowsAvailabilityFailure{stage, windows.Errno(code & 0xffff)}, true
 }
 
 type windowsDriver struct {
@@ -777,18 +933,18 @@ func connectWindowsUpdaterPipe(ctx context.Context, handle windows.Handle) error
 func (s *windowsUpdater) accept(ctx context.Context, command string) string {
 	if command == "status" {
 		if _, err := LoadNativeTrust(ctx); err != nil {
-			return "disabled"
+			return windowsStatusFailure(windowsAvailabilityServerTrust, err)
 		}
 		state, err := openProtectedRoot(ctx, s.paths.State)
 		if err != nil {
-			return "disabled"
+			return windowsStatusFailure(windowsAvailabilityServerState, err)
 		}
 		defer state.Close()
 		if _, err := readInstalled(ctx, state); err != nil {
-			return "disabled"
+			return windowsStatusFailure(windowsAvailabilityServerInstalled, err)
 		}
-		if checkPendingNative(ctx, state) != nil {
-			return "busy"
+		if err := checkPendingNative(ctx, state); err != nil {
+			return windowsStatusFailure(windowsAvailabilityServerPending, err)
 		}
 		return "ready"
 	}

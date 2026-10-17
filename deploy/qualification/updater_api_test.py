@@ -113,6 +113,31 @@ class UpdaterClientTests(unittest.TestCase):
 
 
 class UpdaterDiagnosticTests(unittest.TestCase):
+    def test_authored_windows_availability_reason_is_retained_without_raw_text(self):
+        evidence = updater.safe_initial_status({"disabled_reason": "Native updater unavailable (Windows code=0x4e080005)."})
+        self.assertEqual(evidence["disabled_reason"], "windows_native_unavailable")
+        self.assertEqual(evidence["windows_availability"], {"stage": "process_open", "win32_code": 5})
+
+    def test_availability_diagnostics_reject_unknown_or_arbitrary_reason_values(self):
+        for reason in ("private", None, ["private"], "Native updater unavailable (Windows code=0x4e000005).",
+                       "Native updater unavailable (Windows code=0x4e1d0005).",
+                       "Native updater unavailable (Windows code=0x4eff0005).",
+                       "Native updater unavailable (Windows code=0x4d080005).",
+                       "Native updater unavailable (Windows code=0x4E080005).",
+                       "Native updater unavailable (Windows code=0x4e080005).private",
+                       "Native updater unavailable (Windows code=0x4e080005).\n",
+                       "Native updater unavailable (Windows code=0x4e0800005)."):
+            evidence = updater.safe_initial_status({"disabled_reason": reason})
+            self.assertEqual(evidence["disabled_reason"], "unrecognized")
+            self.assertNotIn("windows_availability", evidence)
+            self.assertNotIn("private", json.dumps(evidence))
+        for code, expected in (("4e020005", {"stage": "pipe_open", "win32_code": 5}),
+                               ("4e160002", {"stage": "server_trust", "win32_code": 2}),
+                               ("4e19ffff", {"stage": "server_pending", "win32_code": 65535}),
+                               ("4e1c0000", {"stage": "internal", "win32_code": 0})):
+            evidence = updater.safe_initial_status({"disabled_reason": "Native updater unavailable (Windows code=0x" + code + ")."})
+            self.assertEqual(evidence["windows_availability"], expected)
+
     def test_unexpected_terminal_is_reported_without_waiting_for_timeout(self):
         with tempfile.TemporaryDirectory() as temp:
             state = Path(temp)

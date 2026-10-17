@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import subprocess
 import sys
@@ -115,13 +116,33 @@ def safe_initial_status(value):
         "Manager activation requires the canonical native data directory and 127.0.0.1:8080; custom deployments require manual maintenance.": "noncanonical_install",
     }
     reason = value.get("disabled_reason")
-    return {
+    evidence = {
         "current_version": safe_fixture_version(value.get("current_version")),
         "schema": safe_schema(value.get("schema")),
         "trust_configured": safe_boolean(value.get("trust_configured")),
         "activation_available": safe_boolean(value.get("activation_available")),
         "disabled_reason": reasons.get(reason, "unrecognized") if isinstance(reason, str) else "unrecognized",
     }
+    # This is the exact authored status reason, never a copy of arbitrary API
+    # text. Keep the stage enum and 16-bit numeric code only.
+    if isinstance(reason, str):
+        match = re.fullmatch(r"Native updater unavailable \(Windows code=0x(4e[0-9a-f]{6})\)\.", reason)
+        if match:
+            code = int(match[1], 16)
+            stages = {
+                1: "trust", 2: "pipe_open", 3: "pipe_server_pid", 4: "scm_connect",
+                5: "service_open", 6: "service_query", 7: "service_state", 8: "process_open",
+                9: "process_image", 10: "image_path", 11: "image_stat", 12: "expected_stat",
+                13: "image_binding", 14: "server_binding", 15: "pipe_mode", 16: "pipe_write",
+                17: "pipe_write_count", 18: "pipe_read", 19: "pipe_read_wait", 20: "server_refused",
+                21: "unexpected_reply", 22: "server_trust", 23: "server_state", 24: "server_installed",
+                25: "server_pending", 26: "legacy_disabled", 27: "legacy_busy", 28: "internal",
+            }
+            stage = stages.get((code >> 16) & 255)
+            if stage is not None:
+                evidence["disabled_reason"] = "windows_native_unavailable"
+                evidence["windows_availability"] = {"stage": stage, "win32_code": code & 65535}
+    return evidence
 
 
 def safe_fixture_version(value):

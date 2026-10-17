@@ -75,13 +75,8 @@ func (s *Service) Status(ctx context.Context) Status {
 		out.DisabledReason = "Release source and verification keys have not been configured."
 	case s.cfg.CurrentVersion == "0.0.0-dev":
 		out.DisabledReason = "Development builds require a reviewed native installation before manager activation."
-	case s.cfg.Native == nil || !s.cfg.Native.Available(ctx):
-		out.DisabledReason = "The native update and recovery service is not installed or ready."
-		if reason, ok := s.cfg.Native.(interface{ UnavailableReason() string }); ok && reason.UnavailableReason() != "" {
-			out.DisabledReason = reason.UnavailableReason()
-		}
 	default:
-		out.ActivationAvailable = true
+		out.ActivationAvailable, out.DisabledReason = nativeAvailability(ctx, s.cfg.Native)
 	}
 	if s.source != nil {
 		discovery, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -95,6 +90,37 @@ func (s *Service) Status(ctx context.Context) Status {
 	}
 	return out
 }
+
+func nativeAvailability(ctx context.Context, native Native) (bool, string) {
+	const unavailable = "The native update and recovery service is not installed or ready."
+	if native == nil {
+		return false, unavailable
+	}
+	var available bool
+	var reason string
+	if detailed, ok := native.(interface {
+		AvailabilityStatus(context.Context) (bool, string)
+	}); ok {
+		// Availability and its fixed diagnostic come from one observation; a
+		// second pipe call could see a different state or consume its deadline.
+		available, reason = detailed.AvailabilityStatus(ctx)
+	} else {
+		available = native.Available(ctx)
+		if !available {
+			if legacy, ok := native.(interface{ UnavailableReason() string }); ok {
+				reason = legacy.UnavailableReason()
+			}
+		}
+	}
+	if available {
+		return true, ""
+	}
+	if reason == "" {
+		reason = unavailable
+	}
+	return false, reason
+}
+
 func (s *Service) stager(before func(context.Context) error) *Stager {
 	return &Stager{BeforePublish: before, Dir: s.cfg.StageDir, Trust: s.cfg.Trust, CurrentVersion: s.cfg.CurrentVersion, Schema: s.cfg.Schema, OS: runtime.GOOS, Arch: runtime.GOARCH, Now: s.now}
 }
