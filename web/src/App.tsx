@@ -17,6 +17,7 @@ const NotificationsPage = lazy(() => import('./features/notifications/Notificati
 const SelfUpdatePage = lazy(() => import('./features/selfupdate/SelfUpdatePage').then(m => ({ default: m.SelfUpdatePage })))
 const ContentPage = lazy(() => import('./features/content').then(m => ({ default: m.ContentPage })))
 const ModpacksPage = lazy(() => import('./features/modpacks').then(m => ({ default: m.ModpacksPage })))
+const UpdatesPage = lazy(() => import('./features/updates/UpdatesPage').then(m => ({ default: m.UpdatesPage })))
 const SchedulesPage = lazy(() => import('./features/schedules').then(m => ({ default: m.SchedulesPage })))
 const BackupsPage = lazy(() => import('./features/backups').then(m => ({ default: m.BackupsPage })))
 const CatalogPage = lazy(() => import('./features/catalog/CatalogPage').then(m => ({ default: m.CatalogPage })))
@@ -42,6 +43,7 @@ export default function App() {
     <Route path="/instances/:instanceId/backups" element={<BackupsPage />} />
     <Route path="/instances/:instanceId/content" element={<ContentPage />} />
     <Route path="/instances/:instanceId/modpack" element={<ModpacksPage />} />
+    <Route path="/instances/:instanceId/updates" element={<UpdatesPage />} />
     <Route path="/instances/:instanceId/schedules" element={<SchedulesPage />} />
     <Route path="/catalog" element={<CatalogPage />} />
     <Route path="/jobs" element={<JobsPage />} />
