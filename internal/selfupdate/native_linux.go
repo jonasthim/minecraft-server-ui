@@ -108,6 +108,11 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 
 type linuxDriver struct{ paths nativePaths }
 
+func (d linuxDriver) ActivationFailure(stage string) {
+	// The worker supplies an allowlisted fixed stage, never raw error text.
+	_, _ = fmt.Fprintln(os.Stderr, "native-update-failure:"+stage)
+}
+
 func (d linuxDriver) Fence(ctx context.Context, root *os.Root) error {
 	return syncPrivilegedRoot(ctx, root)
 }

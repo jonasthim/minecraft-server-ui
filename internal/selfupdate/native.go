@@ -142,6 +142,22 @@ type activationWorker struct {
 	driver     nativeDriver
 }
 
+// failActivation reports only a fixed stage, before any deferred recovery can
+// block or be interrupted. The original error and activation behavior are kept;
+// neither error text nor journal/request data is passed to the diagnostic sink.
+func (w *activationWorker) failActivation(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch stage {
+	case "candidate_fence", "journal_absence", "prior_hash", "prepared_journal", "challenge_publish", "manager_stop", "manager_lock", "drain_read", "drain_validate", "schema_probe", "schema_validate", "stopped_journal", "scratch_check", "previous_copy", "candidate_copy", "executable_fence", "candidate_probe", "candidate_validate", "candidate_hash":
+		if sink, ok := w.driver.(interface{ ActivationFailure(string) }); ok {
+			sink.ActivationFailure(stage)
+		}
+	}
+	return err
+}
+
 func (w *activationWorker) save(ctx context.Context, j activationJournal) error {
 	body, err := json.Marshal(j)
 	if err != nil {
@@ -229,28 +245,28 @@ func copyVerified(ctx context.Context, source *os.Root, from string, destination
 // executable is copied, never renamed away, before atomic replacement.
 func (w *activationWorker) activate(ctx context.Context, j activationJournal, candidateRoot *os.Root) (retErr error) {
 	if err := w.fence(ctx, candidateRoot); err != nil {
-		return err
+		return w.failActivation("candidate_fence", err)
 	}
 	if _, err := w.state.Lstat("activation.json"); err == nil {
-		return errors.New("native activation journal already exists")
+		return w.failActivation("journal_absence", errors.New("native activation journal already exists"))
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return w.failActivation("journal_absence", err)
 	}
 	currentHash, err := hashFile(ctx, w.bin, w.binary)
 	if err != nil || currentHash != j.Prior.SHA256 {
-		return errors.New("current manager does not match bootstrap receipt")
+		return w.failActivation("prior_hash", errors.New("current manager does not match bootstrap receipt"))
 	}
 	j.Format = 1
 	j.Phase = "prepared"
 	if err := w.save(ctx, j); err != nil {
-		return err
+		return w.failActivation("prepared_journal", err)
 	}
 	challenge := Challenge{Format: 1, Nonce: j.Nonce, FromVersion: j.Prior.Version, ToVersion: j.Candidate.Version, ActorID: j.Request.ActorID, ExpiresAt: time.Now().UTC().Add(9 * time.Minute)}
 	if err := w.driver.WriteChallenge(ctx, challenge); err != nil {
-		return err
+		return w.failActivation("challenge_publish", err)
 	}
 	if err := w.driver.Stop(ctx); err != nil {
-		cause := fmt.Errorf("stop manager before activation: %w", err)
+		cause := w.failActivation("manager_stop", fmt.Errorf("stop manager before activation: %w", err))
 		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		release, e := w.driver.LockManager(cleanup)
@@ -300,47 +316,56 @@ func (w *activationWorker) activate(ctx context.Context, j activationJournal, ca
 	}()
 	release, err = w.driver.LockManager(ctx)
 	if err != nil {
-		return err
+		return w.failActivation("manager_lock", err)
 	}
 	locked = true
 	receipt, err := w.driver.ReadDrain(ctx)
-	if err != nil || !receipt.Drained || receipt.Nonce != j.Nonce || receipt.Version != j.Prior.Version || receipt.Schema != j.Prior.Schema || receipt.ExecutableSHA256 != j.Prior.SHA256 {
-		return errors.New("manager did not prove a complete safe drain")
+	if err != nil {
+		return w.failActivation("drain_read", errors.New("manager did not prove a complete safe drain"))
+	}
+	if !receipt.Drained || receipt.Nonce != j.Nonce || receipt.Version != j.Prior.Version || receipt.Schema != j.Prior.Schema || receipt.ExecutableSHA256 != j.Prior.SHA256 {
+		return w.failActivation("drain_validate", errors.New("manager did not prove a complete safe drain"))
 	}
 	capability, err := w.driver.ProbeSchema(ctx, false)
-	if err != nil || capability.Format != 1 || capability.Version != j.Prior.Version || capability.Schema != j.Prior.Schema || capability.ActorAuthorized == nil || !*capability.ActorAuthorized {
-		return errors.New("live schema or current administrator authorization does not permit activation")
+	if err != nil {
+		return w.failActivation("schema_probe", errors.New("live schema or current administrator authorization does not permit activation"))
+	}
+	if capability.Format != 1 || capability.Version != j.Prior.Version || capability.Schema != j.Prior.Schema || capability.ActorAuthorized == nil || !*capability.ActorAuthorized {
+		return w.failActivation("schema_validate", errors.New("live schema or current administrator authorization does not permit activation"))
 	}
 	j.Phase = "stopped"
 	if err := w.save(ctx, j); err != nil {
-		return err
+		return w.failActivation("stopped_journal", err)
 	}
 	// No pre-existing executable scratch file is reused or overwritten.
 	for _, name := range []string{w.binary + ".next", w.binary + ".previous"} {
 		if _, e := w.bin.Lstat(name); e == nil {
-			return errors.New("native executable scratch requires administrator reconciliation")
+			return w.failActivation("scratch_check", errors.New("native executable scratch requires administrator reconciliation"))
 		} else if !errors.Is(e, os.ErrNotExist) {
-			return e
+			return w.failActivation("scratch_check", e)
 		}
 	}
 	if err := copyVerified(ctx, w.bin, w.binary, w.bin, w.binary+".previous", j.Prior); err != nil {
-		return err
+		return w.failActivation("previous_copy", err)
 	}
 	if err := copyVerified(ctx, candidateRoot, w.binary, w.bin, w.binary+".next", j.Candidate); err != nil {
-		return err
+		return w.failActivation("candidate_copy", err)
 	}
 	if err := w.fence(ctx, w.bin); err != nil {
-		return err
+		return w.failActivation("executable_fence", err)
 	}
 	// A signature authenticates bytes, not packaging consistency. Refuse a
 	// candidate whose own no-DB capability differs before any normal startup.
 	capability, err = w.driver.ProbeCandidate(ctx, j.Candidate)
-	if err != nil || capability.Format != 1 || capability.Version != j.Candidate.Version || capability.Schema != j.Candidate.Schema || capability.Schema != j.Prior.Schema {
-		return errors.New("candidate embedded version or schema does not match verified release; manual maintenance required")
+	if err != nil {
+		return w.failActivation("candidate_probe", errors.New("candidate embedded version or schema does not match verified release; manual maintenance required"))
+	}
+	if capability.Format != 1 || capability.Version != j.Candidate.Version || capability.Schema != j.Candidate.Schema || capability.Schema != j.Prior.Schema {
+		return w.failActivation("candidate_validate", errors.New("candidate embedded version or schema does not match verified release; manual maintenance required"))
 	}
 	candidateHash, err := hashFile(ctx, w.bin, w.binary+".next")
 	if err != nil || candidateHash != j.Candidate.SHA256 {
-		return errors.New("candidate changed during capability probe")
+		return w.failActivation("candidate_hash", errors.New("candidate changed during capability probe"))
 	}
 	j.Phase = "replacing"
 	if err := w.save(ctx, j); err != nil {
