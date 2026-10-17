@@ -537,18 +537,98 @@ class Qualification:
             "interruption-boundary.json": "updater-interruption-boundary.json",
             "api-assertions.txt": "updater-api-assertions.txt",
         }
+        failed = False
         for original, published in names.items():
             path = source / original
-            if not path.exists() and not path.is_symlink():
-                continue
-            info = path.lstat()
-            if not stat.S_ISREG(info.st_mode) or path.is_symlink() or info.st_nlink != 1 or info.st_size > 65536:
-                raise RuntimeError("updater helper evidence file is unsafe or oversized")
             target = self.output / published
-            if target.exists() or target.is_symlink():
-                raise RuntimeError("updater helper evidence target already exists")
-            os.replace(path, target)
-            os.chmod(target, 0o644)
+            try:
+                self._copy_bounded_evidence(path, target)
+            except RuntimeError:
+                failed = True
+        if failed:
+            raise RuntimeError("updater helper evidence could not be published safely")
+
+    @staticmethod
+    def _copy_bounded_evidence(source, target):
+        """Copy a pinned, single-link report into output without rename or overwrite."""
+        source_fd = -1
+        output_fd = -1
+        target_fd = -1
+        target_created = False
+        target_name = target.name
+        source_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+        def remove_partial_target():
+            if not target_created or output_fd < 0 or target_fd < 0:
+                return
+            try:
+                opened = os.fstat(target_fd)
+                entry = os.stat(target_name, dir_fd=output_fd, follow_symlinks=False)
+                if (stat.S_ISREG(entry.st_mode) and entry.st_nlink == 1
+                        and opened.st_dev == entry.st_dev and opened.st_ino == entry.st_ino):
+                    os.unlink(target_name, dir_fd=output_fd)
+            except OSError:
+                pass
+
+        try:
+            try:
+                source_fd = os.open(source, source_flags)
+            except FileNotFoundError:
+                return False
+            source_before = os.fstat(source_fd)
+            if (not stat.S_ISREG(source_before.st_mode) or source_before.st_nlink != 1
+                    or source_before.st_size < 0 or source_before.st_size > 65536):
+                raise RuntimeError("updater helper evidence file is unsafe or oversized")
+            output_fd = os.open(target.parent, directory_flags)
+            target_fd = os.open(target_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                                getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=output_fd)
+            target_created = True
+            target_before = os.fstat(target_fd)
+            total = 0
+            while True:
+                chunk = os.read(source_fd, min(16384, 65537 - total))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > 65536:
+                    raise RuntimeError("updater helper evidence file is unsafe or oversized")
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(target_fd, view)
+                    if written <= 0:
+                        raise OSError("short evidence write")
+                    view = view[written:]
+            source_after = os.fstat(source_fd)
+            target_after = os.fstat(target_fd)
+            if (source_before.st_dev != source_after.st_dev or source_before.st_ino != source_after.st_ino
+                    or not stat.S_ISREG(source_after.st_mode) or source_after.st_nlink != 1
+                    or source_after.st_size != source_before.st_size or total != source_before.st_size
+                    or target_before.st_dev != target_after.st_dev or target_before.st_ino != target_after.st_ino
+                    or target_after.st_nlink != 1 or target_after.st_size != total):
+                raise RuntimeError("updater helper evidence identity changed while copying")
+            os.fchmod(target_fd, 0o644)
+            os.fsync(target_fd)
+            target_entry = _updater_evidence_target_entry(output_fd, target_name)
+            if (not stat.S_ISREG(target_entry.st_mode) or target_entry.st_nlink != 1
+                    or target_entry.st_dev != target_after.st_dev or target_entry.st_ino != target_after.st_ino
+                    or target_entry.st_size != total):
+                raise RuntimeError("updater helper evidence target identity changed while copying")
+            os.fsync(output_fd)
+        except RuntimeError:
+            remove_partial_target()
+            raise
+        except OSError:
+            remove_partial_target()
+            raise RuntimeError("updater helper evidence could not be published safely") from None
+        finally:
+            for descriptor in (target_fd, source_fd, output_fd):
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+        return True
 
     def updater_coexistence(self):
         self.prepare_install("v0.0.1")
@@ -820,6 +900,10 @@ def install_qualification_helper(source, destination, owner_uid=0, owner_gid=0):
     if target_digest.digest() != digest.digest():
         raise RuntimeError("staged qualification helper bytes differ from source")
     return destination
+
+
+def _updater_evidence_target_entry(output_fd, name):
+    return os.stat(name, dir_fd=output_fd, follow_symlinks=False)
 
 
 def ordinary_file_identity(path):

@@ -10,8 +10,16 @@ import subprocess
 import sys
 
 
-UNIT = re.compile(r"(?:minecraft-ui\.service|minecraft-ui-update-recovery\.service|minecraft-ui-install-[0-9a-f]{64}\.service)\Z")
+UNIT = re.compile(r"(?:minecraft-ui\.service|minecraft-ui-update-recovery\.service|minecraft-ui-update@[0-9a-f]{64}\.service|minecraft-ui-install-[0-9a-f]{64}\.service)\Z")
 INSTALL_UNIT = re.compile(r"minecraft-ui-install-([0-9a-f]{64})\.service\Z")
+UPDATER_UNIT = re.compile(r"minecraft-ui-update@([0-9a-f]{64})\.service\Z")
+NATIVE_UPDATE_FAILURE_STAGES = frozenset({
+    "candidate_fence", "journal_absence", "prior_hash", "prepared_journal",
+    "challenge_publish", "manager_stop", "manager_lock", "drain_read", "drain_validate",
+    "schema_probe", "schema_validate", "stopped_journal", "scratch_check", "previous_copy",
+    "candidate_copy", "executable_fence", "candidate_probe", "candidate_validate", "candidate_hash",
+})
+NATIVE_UPDATE_FAILURE = re.compile(r"native-update-failure:([a-z_]+)\Z")
 STAGES = ("prepared", "quiescing", "stopped", "replacing", "published", "verifying",
           "rolling_back", "rolled_back", "committed", "manual_repair", "startup_gate",
           "preflight", "prepare", "record_prepared", "quiesce", "record_quiescing",
@@ -51,7 +59,7 @@ UPDATE_STATE_SLOTS = (
     "installation-launch.json", "installation-launch.pending",
     "installation.json", "installation.json.pending",
     "activation.json", "activation.pending", "installed.json", "installed.pending",
-    "launch.json", "launch.pending", "installation-receipt.pending", "request.json",
+    "launch.json", "launch.pending", "installation-receipt.pending", "request.json", "stages",
 )
 OPERATION_SLOTS = (
     "intent.json", "executor", "effects.json", "effects.pending", "result.json",
@@ -71,7 +79,8 @@ def run(argv, timeout=20):
 
 def unit_summaries():
     listed = run(["systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager",
-                  "minecraft-ui.service", "minecraft-ui-update-recovery.service", "minecraft-ui-install-*.service"])
+                  "minecraft-ui.service", "minecraft-ui-update-recovery.service",
+                  "minecraft-ui-update@*.service", "minecraft-ui-install-*.service"])
     units = {"minecraft-ui.service", "minecraft-ui-update-recovery.service"}
     for line in listed.stdout.decode("utf-8", "replace").splitlines():
         name = line.split(maxsplit=1)[0] if line.split() else ""
@@ -93,9 +102,11 @@ def unit_summaries():
 
 def journal_stages():
     completed = run(["journalctl", "--lines=300", "-u", "minecraft-ui.service", "-u", "minecraft-ui-update-recovery.service",
-                     "-u", "minecraft-ui-install-*.service", "--no-pager", "-o", "json"], timeout=30)
+                     "-u", "minecraft-ui-update@*.service", "-u", "minecraft-ui-install-*.service",
+                     "--no-pager", "-o", "json"], timeout=30)
     if len(completed.stdout) > MAX_JOURNAL_BYTES:
-        return {"bounded": False, "events": [], "worker_results": [], "entry_failures": []}
+        return {"bounded": False, "events": [], "worker_results": [], "entry_failures": [],
+                "native_update_failures": []}
     return summarize_journal(completed.stdout.splitlines())
 
 
@@ -103,6 +114,7 @@ def summarize_journal(lines):
     events = {}
     worker_results = {}
     entry_failures = {}
+    native_update_failures = {}
     for line in lines:
         try:
             item = json.loads(line)
@@ -121,6 +133,8 @@ def summarize_journal(lines):
             message = ""
         lower = message.lower()
         result = safe_installer_result(message)
+        update_unit = UPDATER_UNIT.fullmatch(unit)
+        native_update_failure = safe_native_update_failure(message) if update_unit is not None else None
         install_unit = INSTALL_UNIT.fullmatch(unit)
         if (result is not None and (install_unit is None
                                     or result.get("operation_id") != install_unit.group(1))):
@@ -134,12 +148,17 @@ def summarize_journal(lines):
             worker_results[result_key] = min(worker_results.get(result_key, 0) + 1, 999)
         elif entry_failure is not None:
             _, stage = entry_failure
+        elif native_update_failure is not None:
+            stage = native_update_failure
         else:
             stage = next((name for name in STAGES if name in lower), "other")
         if entry_failure is not None:
             category, failed_stage = entry_failure
             key = (unit, category, failed_stage)
             entry_failures[key] = min(entry_failures.get(key, 0) + 1, 999)
+        if native_update_failure is not None:
+            key = (unit, native_update_failure)
+            native_update_failures[key] = min(native_update_failures.get(key, 0) + 1, 999)
         key = (unit, priority, stage)
         events[key] = min(events.get(key, 0) + 1, 999)
     return {"bounded": True, "events": [
@@ -159,7 +178,18 @@ def summarize_journal(lines):
     ], "entry_failures": [
         {"unit": unit, "category": category, "stage": stage, "count": count}
         for (unit, category, stage), count in sorted(entry_failures.items())[:MAX_WORKER_RESULTS]
+    ], "native_update_failures": [
+        {"unit": unit, "stage": stage, "count": count}
+        for (unit, stage), count in sorted(native_update_failures.items())[:MAX_WORKER_RESULTS]
     ]}
+
+
+def safe_native_update_failure(message):
+    """Return an existing native updater failure stage only for exact known markers."""
+    match = NATIVE_UPDATE_FAILURE.fullmatch(message)
+    if match is None or match.group(1) not in NATIVE_UPDATE_FAILURE_STAGES:
+        return None
+    return match.group(1)
 
 
 def _unique_json_object(pairs):
@@ -425,7 +455,8 @@ def _bounded_payload(payload):
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     if len(encoded.encode("utf-8")) > MAX_PAYLOAD_BYTES:
         payload["units"] = payload.get("units", [])[:16]
-        payload["journal"] = {"bounded": False, "events": [], "worker_results": [], "entry_failures": []}
+        payload["journal"] = {"bounded": False, "events": [], "worker_results": [], "entry_failures": [],
+                              "native_update_failures": []}
         payload.pop("protected_state", None)
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     if len(encoded.encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -433,7 +464,8 @@ def _bounded_payload(payload):
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     if len(encoded.encode("utf-8")) > MAX_PAYLOAD_BYTES:
         payload = {"format": 1, "scope": "bounded-diagnostics-omitted", "units": [],
-                   "journal": {"bounded": False, "events": [], "worker_results": [], "entry_failures": []}}
+                   "journal": {"bounded": False, "events": [], "worker_results": [], "entry_failures": [],
+                               "native_update_failures": []}}
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     return encoded
 

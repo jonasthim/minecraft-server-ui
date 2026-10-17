@@ -653,6 +653,11 @@ func RunNativeUpdater(ctx context.Context, args []string, out io.Writer) error {
 		}
 		defer archive.Close()
 		stagesPath := filepath.Join(paths.State, "stages")
+		stagesRoot, err := ensureLinuxUpdaterStagesRoot(ctx, state, paths.State)
+		if err != nil {
+			return err
+		}
+		defer stagesRoot.Close()
 		stager := Stager{Dir: stagesPath, Trust: trust, CurrentVersion: installed.Version, Schema: installed.Schema, OS: "linux", Arch: "amd64"}
 		staged, err := stager.Stage(ctx, manifest.Version, metadata, sig, archive)
 		if err != nil {

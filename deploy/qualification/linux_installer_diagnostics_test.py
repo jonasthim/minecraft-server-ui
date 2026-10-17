@@ -25,6 +25,9 @@ class InstallerDiagnosticTests(unittest.TestCase):
             state.chmod(0o700)
             install.chmod(0o700)
             operation.chmod(0o700)
+            stages = state / "stages"
+            stages.mkdir(mode=0o700)
+            (stages / "private-stage-name").write_text("private-stage-content")
             binary.mkdir()
             data = base / "data"
             control = data / "selfupdate" / "control"
@@ -46,6 +49,9 @@ class InstallerDiagnosticTests(unittest.TestCase):
             encoded = json.dumps(snapshot, sort_keys=True)
 
             self.assertEqual(snapshot["state"]["slots"]["installation-transaction.pending"]["kind"], "file")
+            self.assertEqual(snapshot["state"]["slots"]["stages"]["state"], "present")
+            self.assertEqual(snapshot["state"]["slots"]["stages"]["kind"], "directory")
+            self.assertEqual(snapshot["state"]["slots"]["stages"]["mode"], 0o700)
             self.assertEqual(snapshot["state"]["slots"]["installation-launch.json"]["kind"], "symlink")
             self.assertEqual(snapshot["install"]["operations"][0]["slots"]["result.json.pending"]["state"], "present")
             self.assertEqual(snapshot["install"]["operations"][0]["slots"]["inputs"]["kind"], "directory")
@@ -55,8 +61,73 @@ class InstallerDiagnosticTests(unittest.TestCase):
             self.assertEqual(snapshot["operation_scratch"][0]["metadata"]["kind"], "file")
             self.assertEqual(snapshot["control_presence"]["slots"]["maintenance-challenge.json"], "present")
             self.assertEqual(snapshot["control_presence"]["slots"]["challenge.json"], "absent")
-            for forbidden in (secret, "private-member-name", "unexpected-secret-filename", "minecraft-ui.secret-suffix"):
+            for forbidden in (secret, "private-member-name", "private-stage-name", "private-stage-content",
+                              "unexpected-secret-filename", "minecraft-ui.secret-suffix"):
                 self.assertNotIn(forbidden, encoded)
+
+    def test_ordinary_updater_units_are_collected_and_queried(self):
+        operation_id = "a" * 64
+        updater = "minecraft-ui-update@" + operation_id + ".service"
+        calls = []
+
+        class Completed:
+            def __init__(self, stdout):
+                self.stdout = stdout
+
+        def fake_run(argv, timeout=20):
+            calls.append((argv, timeout))
+            if argv[1] == "list-units":
+                return Completed((updater + " loaded active running update\n"
+                                  "minecraft-ui-update@not-an-id.service loaded active running unknown\n").encode())
+            if argv[0] == "journalctl":
+                return Completed((MODULE.json.dumps({
+                    "_SYSTEMD_UNIT": updater, "PRIORITY": "3", "MESSAGE": "native-update-failure:drain_read",
+                }) + "\n").encode())
+            return Completed(b"Id=minecraft-ui-update@" + operation_id.encode() + b".service\nActiveState=active\n")
+
+        with patch.object(MODULE, "run", side_effect=fake_run):
+            units = MODULE.unit_summaries()
+            journal = MODULE.journal_stages()
+
+        self.assertIn(updater, [item["unit"] for item in units])
+        self.assertNotIn("minecraft-ui-update@not-an-id.service", [item["unit"] for item in units])
+        listing = calls[0][0]
+        self.assertIn("minecraft-ui-update@*.service", listing)
+        journal_args = calls[-1][0]
+        self.assertIn("minecraft-ui-update@*.service", journal_args)
+        self.assertEqual(journal["native_update_failures"], [
+            {"unit": updater, "stage": "drain_read", "count": 1},
+        ])
+
+    def test_updater_failure_markers_are_exact_and_allowlisted(self):
+        operation_id = "b" * 64
+        updater = "minecraft-ui-update@" + operation_id + ".service"
+        stages = (
+            "candidate_fence", "journal_absence", "prior_hash", "prepared_journal",
+            "challenge_publish", "manager_stop", "manager_lock", "drain_read", "drain_validate",
+            "schema_probe", "schema_validate", "stopped_journal", "scratch_check", "previous_copy",
+            "candidate_copy", "executable_fence", "candidate_probe", "candidate_validate", "candidate_hash",
+        )
+        lines = [MODULE.json.dumps({
+            "_SYSTEMD_UNIT": updater, "PRIORITY": "3", "MESSAGE": "native-update-failure:" + stage,
+        }) for stage in stages]
+        lines += [
+            MODULE.json.dumps({"_SYSTEMD_UNIT": updater, "PRIORITY": "3",
+                               "MESSAGE": "native-update-failure:private-secret"}),
+            MODULE.json.dumps({"_SYSTEMD_UNIT": updater, "PRIORITY": "3",
+                               "MESSAGE": "native-update-failure:drain_read /private/path token=secret"}),
+            MODULE.json.dumps({"_SYSTEMD_UNIT": "minecraft-ui.service", "PRIORITY": "3",
+                               "MESSAGE": "native-update-failure:drain_read"}),
+        ]
+
+        summary = MODULE.summarize_journal(lines)
+
+        self.assertEqual(summary["native_update_failures"], [
+            {"unit": updater, "stage": stage, "count": 1} for stage in sorted(stages)
+        ])
+        self.assertNotIn("private-secret", repr(summary))
+        self.assertNotIn("/private/path", repr(summary))
+        self.assertNotIn("token=secret", repr(summary))
 
     def test_snapshot_refuses_symlink_directories_without_traversing_them(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -136,7 +207,8 @@ class InstallerDiagnosticTests(unittest.TestCase):
 
     def test_payload_cap_omits_snapshot_after_adding_diagnostics(self):
         payload = {"format": 1, "scope": "fixed", "units": [],
-                   "journal": {"bounded": True, "events": [], "worker_results": [], "entry_failures": []},
+                   "journal": {"bounded": True, "events": [], "worker_results": [], "entry_failures": [],
+                               "native_update_failures": []},
                    "protected_state": {"fixture": "x" * (MODULE.MAX_PAYLOAD_BYTES * 2)}}
 
         encoded = MODULE._bounded_payload(payload)
@@ -296,7 +368,8 @@ class InstallerDiagnosticTests(unittest.TestCase):
     def test_journal_scrubber_ignores_non_object_json(self):
         summary = MODULE.summarize_journal(["null", "[]", '"message"'])
 
-        self.assertEqual(summary, {"bounded": True, "events": [], "worker_results": [], "entry_failures": []})
+        self.assertEqual(summary, {"bounded": True, "events": [], "worker_results": [], "entry_failures": [],
+                                   "native_update_failures": []})
 
 
 if __name__ == "__main__":

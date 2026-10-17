@@ -1,4 +1,5 @@
 import importlib.util
+import errno
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,95 @@ SPEC.loader.exec_module(MODULE)
 
 
 class InstallerHarnessFixtureTests(unittest.TestCase):
+    def test_updater_evidence_publication_copies_across_exdev_and_retains_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "out"
+            source = root / "scratch" / "updater-evidence"
+            output.mkdir()
+            source.mkdir(parents=True)
+            qualification = MODULE.Qualification(root / "bootstrap", root / "candidates", output,
+                                                 "updater-coexistence")
+            names = {
+                "acceptance-summary.json": "updater-acceptance-summary.json",
+                "activation-state-summary.json": "updater-activation-state-summary.json",
+                "initial-update-status.json": "updater-initial-update-status.json",
+                "interruption-boundary.json": "updater-interruption-boundary.json",
+                "api-assertions.txt": "updater-api-assertions.txt",
+            }
+            contents = {}
+            for name in names:
+                contents[name] = ("bounded report: " + name + "\n").encode()
+                (source / name).write_bytes(contents[name])
+
+            with mock.patch.object(MODULE.os, "replace",
+                                   side_effect=OSError(errno.EXDEV, "cross-device link")) as replace:
+                qualification.publish_updater_evidence(source)
+
+            replace.assert_not_called()
+            for original, published in names.items():
+                self.assertEqual((output / published).read_bytes(), contents[original])
+                self.assertEqual((output / published).stat().st_mode & 0o777, 0o644)
+                self.assertTrue((source / original).is_file())
+
+    def test_updater_evidence_publication_rejects_symlink_but_copies_remaining_reports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "out"
+            source = root / "scratch" / "updater-evidence"
+            output.mkdir()
+            source.mkdir(parents=True)
+            qualification = MODULE.Qualification(root / "bootstrap", root / "candidates", output,
+                                                 "updater-coexistence")
+            outside = root / "outside-report"
+            outside.write_text("PRIVATE-CANARY")
+            (source / "acceptance-summary.json").symlink_to(outside)
+            (source / "api-assertions.txt").write_text("bounded safe report\n")
+
+            with self.assertRaisesRegex(RuntimeError, "could not be published safely"):
+                qualification.publish_updater_evidence(source)
+
+            self.assertEqual((output / "updater-api-assertions.txt").read_text(), "bounded safe report\n")
+            self.assertFalse((output / "updater-acceptance-summary.json").exists())
+            self.assertNotIn("PRIVATE-CANARY", str(output))
+
+    def test_updater_evidence_rejects_fifo_without_blocking(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "out"
+            output.mkdir()
+            source = root / "report.fifo"
+            os.mkfifo(source)
+
+            with self.assertRaisesRegex(RuntimeError, "unsafe or oversized"):
+                MODULE.Qualification._copy_bounded_evidence(source, output / "report.txt")
+
+            self.assertFalse((output / "report.txt").exists())
+
+    def test_updater_evidence_does_not_remove_replaced_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "out"
+            output.mkdir()
+            source = root / "report.txt"
+            source.write_text("safe report")
+            replaced = []
+            original_info = MODULE._updater_evidence_target_entry
+
+            def replace_before_check(output_fd, name):
+                path = output / name
+                path.unlink()
+                path.write_text("replacement owned by another writer")
+                replaced.append(path)
+                return original_info(output_fd, name)
+
+            with mock.patch.object(MODULE, "_updater_evidence_target_entry", side_effect=replace_before_check):
+                with self.assertRaisesRegex(RuntimeError, "target identity changed"):
+                    MODULE.Qualification._copy_bounded_evidence(source, output / "published.txt")
+
+            self.assertEqual(len(replaced), 1)
+            self.assertEqual(replaced[0].read_text(), "replacement owned by another writer")
+
     def test_command_failure_keeps_only_validated_result_fields(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
