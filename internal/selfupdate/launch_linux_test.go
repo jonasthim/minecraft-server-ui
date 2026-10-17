@@ -28,6 +28,14 @@ func TestLinuxRecoveryGraphRetainsEveryStartCheck(t *testing.T) {
 	if !strings.Contains(string(unit), "Type=oneshot") || strings.Contains(string(unit), "RemainAfterExit=yes") || !strings.Contains(string(drop), "Requires=minecraft-ui-update-recovery.service") || !strings.Contains(string(drop), "After=minecraft-ui-update-recovery.service") {
 		t.Fatal("every ordinary start must check recovery first")
 	}
+	unitText, e := os.ReadFile("../../deploy/linux/minecraft-ui.service")
+	if e != nil {
+		t.Fatal(e)
+	}
+	unitSections := strings.SplitN(string(unit), "[Service]", 2)
+	if len(unitSections) != 2 || !strings.Contains(unitSections[0], "\nStartLimitIntervalSec=0\n") || !strings.Contains(string(unitText), "Restart=on-failure") {
+		t.Fatal("recovery must run on every manager activation while manager restart limiting remains enabled")
+	}
 	source, e := os.ReadFile("native_linux.go")
 	if e != nil {
 		t.Fatal(e)

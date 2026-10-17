@@ -125,7 +125,7 @@ func (d *linuxInstallDriver) Prepare(ctx context.Context, operation mode, option
 			if !d.assetsMatchInventory(priorInventory) {
 				return nil, nil, errors.New("retained failed-install deployment assets differ from protected evidence")
 			}
-			return nil, &Result{Outcome: OutcomeUnchanged, Image: imagePointer(priorInventory.Image)}, nil
+			return nil, &Result{Outcome: OutcomeUnchanged}, nil
 		}
 		if inventoryPresent && priorInventory.Status == "uninstalled" {
 			if !d.assetsMatchInventory(priorInventory) || d.anyDeploymentAssetPresent() || service.LoadState == "loaded" || serviceActive(service) {
@@ -136,7 +136,7 @@ func (d *linuxInstallDriver) Prepare(ctx context.Context, operation mode, option
 					return nil, nil, errors.New("operator-controlled update trust is invalid")
 				}
 			}
-			return nil, &Result{Outcome: OutcomeUnchanged, Image: imagePointer(priorInventory.Image)}, nil
+			return nil, &Result{Outcome: OutcomeUnchanged}, nil
 		}
 		if d.anyDeploymentAssetPresent() || service.LoadState == "loaded" || serviceActive(service) {
 			return nil, nil, errors.New("unmanaged or inconsistent Linux deployment paths require review")

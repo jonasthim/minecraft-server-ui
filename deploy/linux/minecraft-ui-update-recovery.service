@@ -1,6 +1,9 @@
 [Unit]
 Description=Recover interrupted Minecraft UI executable activation
 Before=minecraft-ui.service
+# This required oneshot must be eligible on every manager activation. The
+# manager service retains its own restart rate limit.
+StartLimitIntervalSec=0
 
 [Service]
 # Intentionally not RemainAfterExit: every ordinary start rechecks recovery,
