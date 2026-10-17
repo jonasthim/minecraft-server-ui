@@ -43,6 +43,10 @@ func (s *Service) WithPausedInstance(ctx context.Context, instanceID string, fn 
 		s.mu.Unlock()
 		return domain.E(domain.CodeInstanceBusy, "instance is being changed")
 	}
+	if _, reserved := s.observing[instanceID]; reserved {
+		s.mu.Unlock()
+		return domain.E(domain.CodeInstanceBusy, "instance is being observed")
+	}
 	var busy bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE instance_id=? AND state='running')`, instanceID).Scan(&busy)
 	if err != nil {

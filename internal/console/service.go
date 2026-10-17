@@ -161,13 +161,13 @@ func (s *Service) store(id domain.ProcessIdentity, state State) {
 	s.mu.Unlock()
 }
 
-// Refresh is an idle, read-only native probe; it never applies desired settings.
+// Refresh is a read-only native observation; it never applies desired settings.
 // A lifecycle job calls Session.VerifyReady to apply/read back required rules.
 func (s *Service) Refresh(ctx context.Context, id string) error {
 	if s.queue == nil {
 		return domain.E(domain.CodeUnavailable, "console command queue is unavailable")
 	}
-	err := s.queue.WithIdle(ctx, id, func() error {
+	err := s.queue.WithObservation(ctx, id, func() error {
 		return s.withSession(ctx, id, func(session *Session) error { _, err := session.verify(ctx, false); return err })
 	})
 	if err != nil && domain.AsError(err).Code != domain.CodeInstanceBusy {

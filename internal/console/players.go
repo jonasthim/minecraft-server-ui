@@ -112,7 +112,7 @@ func (s *Service) PlayerSnapshot(ctx context.Context, id string) (PlayerSnapshot
 	if s.queue == nil {
 		return out, domain.E(domain.CodeUnavailable, "player observation admission is unavailable")
 	}
-	err := s.queue.WithIdle(ctx, id, func() error {
+	err := s.queue.WithObservation(ctx, id, func() error {
 		return s.withSession(ctx, id, func(session *Session) error { var e error; out, e = session.PlayerSnapshot(ctx); return e })
 	})
 	return out, err
@@ -215,7 +215,7 @@ func (s *Service) NativePlayerList(ctx context.Context, id, kind string) (Player
 	if s.queue == nil {
 		return out, domain.E(domain.CodeUnavailable, "player list admission unavailable")
 	}
-	err := s.queue.WithIdle(ctx, id, func() error {
+	err := s.queue.WithObservation(ctx, id, func() error {
 		return s.withSession(ctx, id, func(session *Session) error { var e error; out, e = session.PlayerList(ctx, kind); return e })
 	})
 	return out, err

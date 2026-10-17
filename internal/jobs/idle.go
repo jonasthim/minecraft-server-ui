@@ -40,6 +40,10 @@ func (s *Service) WithIdle(ctx context.Context, instanceID string, fn func() err
 		s.mu.Unlock()
 		return domain.E(domain.CodeInstanceBusy, "instance is being changed")
 	}
+	if _, reserved := s.observing[instanceID]; reserved {
+		s.mu.Unlock()
+		return domain.E(domain.CodeInstanceBusy, "instance is being observed")
+	}
 	var busy bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE instance_id=? AND state IN ('queued','running'))`, instanceID).Scan(&busy)
 	if err != nil {

@@ -147,7 +147,7 @@ func (s *Service) PlayerPositions(ctx context.Context, id string) (MapPlayers, e
 	}
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	e := s.queue.WithIdle(ctx, id, func() error {
+	e := s.queue.WithObservation(ctx, id, func() error {
 		return s.withSession(ctx, id, func(session *Session) error {
 			snap, e := session.PlayerSnapshot(ctx)
 			if e != nil {

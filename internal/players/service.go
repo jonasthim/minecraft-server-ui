@@ -249,7 +249,7 @@ func (s *Service) Lists(ctx context.Context, id, kind string) (console.PlayerLis
 		}
 	}
 	var list console.PlayerList
-	err := s.queue.WithIdle(ctx, id, func() error {
+	err := s.queue.WithObservation(ctx, id, func() error {
 		dirs, err := s.paths.For(id)
 		if err != nil {
 			return err

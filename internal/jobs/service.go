@@ -49,6 +49,7 @@ type Service struct {
 	handlers          map[string]Handler
 	running           map[string]active
 	idle              map[string]struct{}
+	observing         map[string]struct{}
 	started, stopping bool
 	paused            bool
 	recovering        int
@@ -63,7 +64,7 @@ func New(database *sql.DB, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{db: database, log: log, hub: events.NewHub(32), handlers: make(map[string]Handler), running: make(map[string]active), idle: make(map[string]struct{}), wake: make(chan struct{}, 1), done: make(chan struct{})}
+	return &Service{db: database, log: log, hub: events.NewHub(32), handlers: make(map[string]Handler), running: make(map[string]active), idle: make(map[string]struct{}), observing: make(map[string]struct{}), wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
 // Register freezes a worker kind before startup. Unknown queued kinds fail
@@ -247,6 +248,9 @@ func (s *Service) dispatch() {
 			return
 		}
 		if _, reserved := s.idle[j.InstanceID]; reserved {
+			continue
+		}
+		if _, reserved := s.observing[j.InstanceID]; reserved {
 			continue
 		}
 		busy := false
