@@ -3,9 +3,14 @@ html { scroll-padding-top: 80px; }
 body { min-width: 320px; }
 :root {
   --app-sidebar: #253b32;
-  --app-canvas: light-dark(#f3f5f1, #202722);
-  --app-ink: light-dark(#223029, #edf3ed);
-  --app-edge: light-dark(#d8dfd5, #46544a);
+  --app-canvas: #f3f5f1;
+  --app-ink: #223029;
+  --app-edge: #d8dfd5;
+}
+:root[data-mantine-color-scheme='dark'] {
+  --app-canvas: #202722;
+  --app-ink: #edf3ed;
+  --app-edge: #46544a;
 }
 body { background: var(--app-canvas); color: var(--app-ink); }
 .mantine-AppShell-header { border-bottom: 3px solid #795438; }
@@ -47,4 +52,5 @@ body { background: var(--app-canvas); color: var(--app-ink); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
-:root[data-mantine-color-scheme] { --mantine-color-dimmed: light-dark(#5c6b60, #b3bfb5); }
+:root[data-mantine-color-scheme='light'] { --mantine-color-dimmed: #5c6b60; }
+:root[data-mantine-color-scheme='dark'] { --mantine-color-dimmed: #b3bfb5; }

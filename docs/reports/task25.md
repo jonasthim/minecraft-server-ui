@@ -1,6 +1,6 @@
 # Task 25 — theme, accessibility and integration evidence
 
-Status: original checkpoint fix I1 and final Updates UI submission ready for integrator review. Owned files are frozen; full Task25 acceptance remains pending independent review, Tasks18/24 composition and native/release evidence. No ledger completion is claimed.
+Status: I1 independently closed; continuation fixes U1/U2 and separate INT1 integration correction ready for review. Owned files are frozen; full Task25 acceptance remains pending independent review, Tasks18/24 composition and native/release evidence. No ledger completion is claimed.
 
 ## Design plan, recorded before implementation
 
@@ -162,8 +162,65 @@ On the exact `b863ecf6…22e7cdbe` binary, isolated 390 px browser contexts meas
 | Source-gap badge | `#000000` / `#f59f00` | 9.84:1 | `#000000` / `#ffd43b` | 14.73:1 |
 | Source-gap text | `#7a4b00` / `#ffffff` | 7.41:1 | `#ffd43b` / `#242424` | 10.89:1 |
 
-`contrast.mjs` / `contrast-results.json` records computed colors, relative-luminance calculations and assertions at or above 4.5:1. Screenshots: `evidence/contrast-actual-events-light390.png` and `contrast-actual-events-dark390.png`. Early supplemental source-gap screenshots are retained separately; final measured records existed in the shipping DB and needed no interception. Focused typecheck/lint passed after the fix. Independent acceptance of I1 remains with root/reviewer.
+`contrast.mjs` / `contrast-results.json` records computed colors, relative-luminance calculations and assertions at or above 4.5:1. Screenshots: `evidence/contrast-actual-events-light390.png` and `contrast-actual-events-dark390.png`. Early supplemental source-gap screenshots are retained separately; final measured records existed in the shipping DB and needed no interception. Focused typecheck/lint passed after the fix. I1 was subsequently independently accepted at `1715f45`; the new continuation/integration findings are handled separately below.
 
 ## Final handback boundary
 
 Owned code/report is frozen for integrator review; the isolated 12825 manager is stopped. The UI-only deferred navigation, conflict/manual-file, long-label and confirmation checks are now recorded above. Full Task25 acceptance still requires independent review of this Updates submission, final Task18/24 backend composition/safety review, successful real content/config/backup/restore/game/client workflows, actual Linux service/Windows execution and the release version/layout matrix. The report makes no native or stable-release qualification claim. No commits, staging, deployments, host units, game launches, EULA acceptance, vault writes or external messages were performed by this worker.
+
+## Continuation review fix round 1 — U1 / U2 and separate INT1
+
+Original warning contrast I1 is independently **ADDRESSED / spec PASS / quality APPROVE** at `1715f45`; it remains closed. The following changes address the new Updates continuation findings and separately assigned dark-page integration issue. Owned changes in this round are only `web/src/features/updates/UpdatesPage.tsx`, `web/src/index.css` and this report. No backend, API/schema, routes, main/provider, theme or I1 event-color changes were made.
+
+### U1 — terminal result independent of secondary reads
+
+Reproduced the submitted behavior in isolated browser contexts on the prior `b863ecf6…22e7cdbe` shipping binary. GET job returned `failed` with `Exact target is incompatible`; final metadata 503 or saved-log 503 left the rendered badge `queued`, hid the authoritative error, disabled Prepare and exposed no final-detail retry. The successful-read comparison rendered the failed state correctly.
+
+The poll now publishes terminal state and its own error immediately, then stops the job timer. Metadata and logs are best-effort independent reads. Their controller lifetime follows the job ID, not its active state: rendering terminal state no longer cleans up and aborts the remaining final reads, while a replacement job or unmount still cancels them. Missing secondary details are reported separately with **Retry final details**. Retry does not enqueue another operation, and a terminal job does not keep mutation controls in a running state. Successful preview results retain the existing typed selection/request restoration flow.
+
+| Focused intercepted case | Before | After |
+|---|---|---|
+| Final metadata unavailable | Queued; own error hidden; Prepare disabled; logs never read | Failed; own error shown; Prepare enabled; logs independently read; explicit detail retry recovers |
+| Final logs unavailable | Queued; own error hidden; Prepare disabled | Failed; own error shown; Prepare enabled; explicit detail retry recovers |
+| Both final reads succeed for failed job | Failed and own error visible | Preserved; no unnecessary detail-retry control |
+| Successful prepare job | Existing success path reviewed previously | Terminal succeeded and newly prepared preview displayed without its reads being aborted |
+
+### U2 — expiry disposition: fixed alongside U1
+
+The page schedules a render at the next update/rollback preview deadline. Expired previews immediately disable confirmation and display the expired state. Both apply handlers freshly compare the current deadline before sending a request, even if timer delivery is delayed; malformed deadlines also fail closed. The backend remains the authority.
+
+Two intercepted browser checks cover an idle checked dialog crossing its deadline and a deliberately stale rendered dialog whose `Date.now()` advances without delivering the timer. The old code submitted one expired Apply request in each case. The fixed UI submits zero, disables Confirm and shows the expired message. Interception keeps every confirmation inert; no backend update is invoked.
+
+### INT1 — actual source and dark/light correction
+
+Actual shipping reproduction established that the root data attribute and computed `color-scheme` were both `dark`, and Mantine's text token was `#c9c9c9`, while app root tokens still resolved to light ink `#223029` and light canvas `#f3f5f1`. The compiled CSS established the cause: `postcss-preset-mantine` transformed root-level `light-dark()` declarations into impossible descendant selectors such as `[data-mantine-color-scheme=dark] :root`. The same pattern affected the custom dimmed token. It was not an incorrect media preference or a forced provider scheme.
+
+`index.css` now defines light values directly and overrides app ink/canvas/edge and dimmed values with explicit `:root[data-mantine-color-scheme='dark']` / light selectors. The provider stays `defaultColorScheme="auto"`; I1 badge and source-gap colors are unchanged.
+
+Actual shipping event data at 390 px now renders dark canvas `#202722`, ordinary ink `#edf3ed` and dimmed ink `#b3bfb5` in dark mode. Light values remain `#f3f5f1`, `#223029`, `#5c6b60`. A live emulated system-preference change also switches the app without a reload. Computed foreground/effective-background ratios:
+
+| Sample | Light | Dark |
+|---|---:|---:|
+| Main heading on canvas | 12.57:1 | 13.56:1 |
+| Dimmed description on canvas | 5.14:1 | 8.03:1 |
+| Panel heading / ordinary body / disclosure | 13.79:1 | 13.78:1 |
+| I1 warning badge (unchanged) | 9.84:1 | 14.73:1 |
+| I1 source-gap text (unchanged) | 7.41:1 | 10.89:1 |
+
+Visual inspection of the corrected actual light/dark mobile screenshots confirms readable panel/heading/disclosure text and coherent surfaces. These are scoped samples, not a full accessibility certification.
+
+### Exact verification and artifacts
+
+Combined final binary: `/home/thim/.cache/dilla-tmp/minecraft-ui-task25-review-fix`, SHA-256 `7a317d58326325ae6e1609bc66f569a6514c5d33e55628fa79e20e5095581d47`. Root reported production frontend build and CGO-disabled manager build PASS. Its backend work remains independently reviewed; these UI checks do not qualify backend/native behavior.
+
+`npm --prefix web run typecheck`, `npm --prefix web run lint`, and scoped `git diff --check` PASS. No broad Go suite was run. Browser scripts use the existing repository Playwright and isolated contexts with earlier UI-created accounts/data at loopback 12825; final endpoint/expiry cases are explicitly intercepted, theme evidence is actual shipping data with no response interception.
+
+Evidence directory `/home/thim/.cache/dilla-tmp/task25-fix2/`:
+
+- `terminal-results.mjs --before` / `terminal-before.json`, then `terminal-results.mjs` / `terminal-after.json`: metadata failure, log failure, successful final reads, authoritative state/error and retry without another POST; `evidence/terminal-{metadata,logs,none}390.png`.
+- `terminal-success.mjs` / `terminal-success.json`: successful prepare terminal state and visible prepared preview.
+- `expiry.mjs --before` / `expiry-before.json`, then `expiry.mjs` / `expiry-after.json`: idle timer and fresh-handler deadline checks; `evidence/expiry-{timer,fresh-handler}390.png`.
+- `scheme-before.mjs` / `scheme-before.json`: actual computed scheme/tokens plus compiled selector source; `evidence/before-{light,dark}390.png`.
+- `scheme-after.mjs` / `scheme-after.json`: actual computed scheme, colors, effective backgrounds, ratios, 390 px width and live auto-preference switching; `evidence/after-{light,dark}390.png`.
+
+The isolated manager is stopped and owned files are frozen for independent review. Full Task25/native/release acceptance remains with the integrator and required real-host evidence. No fixture Apply reached the backend; no game, EULA, host, deployment, staging, commit, vault or external-message action was performed.

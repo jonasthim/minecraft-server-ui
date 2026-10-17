@@ -15,6 +15,7 @@ type Job = components['schemas']['Job'];
 type Rollback = components['schemas']['UpdateRollbackPreview'];
 type Detail = components['schemas']['InstanceDetail'];
 const message = (error: unknown) => error instanceof Error ? error.message : 'Request failed. Try again.';
+const deadlinePassed = (deadline: string) => !Number.isFinite(Date.parse(deadline)) || Date.parse(deadline) <= Date.now();
 const active = (job: Job | null) => !!job && (job.state === 'queued' || job.state === 'running');
 const selection = (value: components['schemas']['VersionSelection']) => [value.minecraft_version, value.flavor, value.loader_version].filter(Boolean).join(' / ');
 const historyLabel = (state: string) => ({ rolled_back: 'Previous executable restored', boot_attempted: 'New version attempted start', blocked: 'Recovery required', superseded: 'Continued by confirmed rollback', complete: 'Completed', prepared: 'Safety backup ready', publishing: 'Applying files', committed: 'Selection committed' })[state] ?? state;
@@ -57,6 +58,16 @@ export function UpdatesPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [finalDetailsError, setFinalDetailsError] = useState('');
+  const [finalDetailsLoading, setFinalDetailsLoading] = useState(false);
+  const [finalAttempt, setFinalAttempt] = useState(0);
+  const [deadlineTick, tickDeadline] = useState(0);
+  useEffect(() => {
+    const remaining = [preview?.expires_at, rollback?.expires_at].filter((deadline): deadline is string => !!deadline).map(deadline => Date.parse(deadline) - Date.now()).filter(delay => Number.isFinite(delay) && delay > 0);
+    if (!remaining.length) return;
+    const timer = window.setTimeout(() => tickDeadline(value => value + 1), Math.min(...remaining, 2147483646) + 1);
+    return () => window.clearTimeout(timer);
+  }, [preview?.expires_at, rollback?.expires_at, deadlineTick]);
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const [info, current, plans, manifest] = await Promise.all([
       api<operations['instancesGet']['responses'][200]['content']['application/json']>(root, { signal }),
@@ -80,40 +91,75 @@ export function UpdatesPage() {
   }, [detail?.instance.id]);
   const activeJob = active(job);
   useEffect(() => {
-    if (!activeJob || !job) return;
-    const controller = new AbortController(); let polling = false;
+    if (!job) return;
+    const controller = new AbortController();
+    let polling = false;
+    let timer: number | undefined;
+    const publishTerminal = (terminal: Job) => {
+      // These facts are authoritative even when secondary endpoints are down.
+      setJob(terminal);
+      if (terminal.state === 'succeeded') {
+        setError('');
+        setNotice(terminal.kind === 'instance_update_prepare' ? 'Preparation completed. Loading final preview details.' : terminal.kind === 'instance_rollback' ? 'Confirmed rollback completed. The server remains stopped.' : 'Update completed. The full safety backup is retained.');
+      } else {
+        setNotice('');
+        setError(terminal.error || (terminal.state === 'cancelled' ? 'The operation was cancelled.' : 'The operation did not complete. Inspect job output before retrying.'));
+      }
+    };
+    const readFinalDetails = async (terminal: Job) => {
+      setFinalDetailsLoading(true);
+      const [metadata, output] = await Promise.allSettled([
+        refresh(controller.signal),
+        terminal.state === 'succeeded' ? Promise.resolve(null) : api<{ logs: components['schemas']['JobLog'][] }>('/jobs/' + encodeURIComponent(terminal.id) + '/logs', { signal: controller.signal }),
+      ]);
+      if (controller.signal.aborted) return;
+      const failures: string[] = [];
+      if (metadata.status === 'rejected') failures.push('Update details could not be refreshed: ' + message(metadata.reason));
+      else if (terminal.state === 'succeeded' && terminal.kind === 'instance_update_prepare') {
+        const plans = metadata.value;
+        if (pending.current) {
+          const candidates = plans.filter(plan => !pending.current?.existing.has(plan.id));
+          const next = candidates.length === 1 ? candidates[0] : null;
+          if (next) {
+            drafts.current.set(next.id, pending.current.request);
+            if (next.pack && pending.current.request.pack) setPackRequest({ ...pending.current.request.pack, selections: { ...next.pack.selections, ...pending.current.request.pack.selections } });
+          }
+          setPreview(next); setDirty(false); setConfirmed(false); pending.current = null;
+          setNotice(next ? 'Preview ready. Inspect the exact changes and blockers below.' : 'Preparation completed. Choose the prepared preview to inspect its exact changes.');
+        }
+      } else if (terminal.state === 'succeeded') setPreview(null);
+      if (output.status === 'rejected') failures.push('Saved job output could not be loaded: ' + message(output.reason));
+      else if (output.value) {
+        const lastLine = output.value.logs.at(-1)?.message;
+        if (lastLine) setError(terminal.error && lastLine !== terminal.error ? terminal.error + ' ' + lastLine : lastLine);
+      }
+      setFinalDetailsError(failures.join(' ')); setFinalDetailsLoading(false);
+    };
     const poll = async () => {
       if (polling) return; polling = true;
       try {
         const response = await api<{ job: Job }>('/jobs/' + encodeURIComponent(job.id), { signal: controller.signal });
         if (controller.signal.aborted) return;
-        if (!active(response.job)) {
-          const plans = await refresh(controller.signal);
-          if (controller.signal.aborted) return;
-          if (response.job.state === 'succeeded') {
-            if (response.job.kind === 'instance_update_prepare') {
-              const candidates = plans.filter(plan => !pending.current?.existing.has(plan.id));
-              const next = candidates.length === 1 ? candidates[0] : null;
-              if (next && pending.current) {
-                drafts.current.set(next.id, pending.current.request);
-                if (next.pack && pending.current.request.pack) setPackRequest({ ...pending.current.request.pack, selections: { ...next.pack.selections, ...pending.current.request.pack.selections } });
-              }
-              setPreview(next); setDirty(false); setConfirmed(false); pending.current = null;
-              setNotice(next ? 'Preview ready. Inspect the exact changes and blockers below.' : 'Preparation completed. Choose the prepared preview to inspect its exact changes.');
-            }
-            else { setPreview(null); setNotice(response.job.kind === 'instance_rollback' ? 'Confirmed rollback completed. The server remains stopped.' : 'Update completed. The full safety backup is retained.'); }
-          } else {
-            const logs = await api<{ logs: components['schemas']['JobLog'][] }>('/jobs/' + encodeURIComponent(job.id) + '/logs', { signal: controller.signal });
-            if (!controller.signal.aborted) { setNotice(''); setError(logs.logs.at(-1)?.message || response.job.error || 'The operation did not complete. Inspect recovery status and job output before retrying.'); }
-          }
+        if (active(response.job)) { setJob(response.job); setError(''); }
+        else {
+          window.clearInterval(timer);
+          publishTerminal(response.job);
+          await readFinalDetails(response.job);
         }
-        if (!controller.signal.aborted) setJob(response.job);
       } catch (error) { if (!controller.signal.aborted) setError(message(error)); }
       finally { polling = false; }
     };
-    const timer = window.setInterval(() => { void poll(); }, 1000);
+    if (active(job)) {
+      setFinalDetailsError(''); setFinalDetailsLoading(false);
+      timer = window.setInterval(() => { void poll(); }, 1000);
+    } else {
+      publishTerminal(job);
+      void readFinalDetails(job);
+    }
+    // Own reads by job ID, not active state: publishing a terminal result must
+    // not abort its own best-effort final reads. A new job/unmount still aborts.
     return () => { controller.abort(); window.clearInterval(timer); };
-  }, [activeJob, job?.id, refresh]);
+  }, [job?.id, finalAttempt, refresh]);
   function invalidate() { setDirty(true); setConfirmed(false); setApplyDialog(false); }
   function choosePreview(plan: Plan | null) {
     setPreview(plan); setDirty(false); setConfirmed(false); setMemberFiles({}); setArchiveFile(null); setVerifiedFiles({});
@@ -174,6 +220,7 @@ export function UpdatesPage() {
     setVerifiedFiles(current => { const next = { ...current }; delete next['content:' + id]; return next; });
   }
   async function apply() {
+    if (preview && deadlinePassed(preview.expires_at)) { tickDeadline(value => value + 1); setConfirmed(false); setError('This preview expired. Prepare another preview before applying.'); return; }
     if (!canApply || !preview || !confirmed) return; setBusy(true); setError(''); setNotice('');
     try { const result = await api<components['schemas']['UpdateJobResponse']>(endpoint + '/previews/' + encodeURIComponent(preview.id) + '/apply', { method: 'POST', body: JSON.stringify({ confirmed: true } satisfies components['schemas']['UpdateApplyRequest']) }); setJob(result.job); setApplyDialog(false); setNotice('Update queued. A successful full safety backup is required before any stop or activation.'); }
     catch (error) { setError(message(error)); } finally { setBusy(false); }
@@ -184,13 +231,16 @@ export function UpdatesPage() {
     catch (error) { setError(message(error)); } finally { setBusy(false); }
   }
   async function applyRollback() {
-    if (!rollback || !admin || !rewindAcknowledged || rollbackConfirmation !== instanceId) return; setBusy(true); setError(''); setNotice('');
+    if (!rollback || !admin || !rewindAcknowledged || rollbackConfirmation !== instanceId) return;
+    if (deadlinePassed(rollback.expires_at)) { tickDeadline(value => value + 1); setError('This rollback preview expired. Close the dialog and review rollback again.'); return; }
+    setBusy(true); setError(''); setNotice('');
     try { const result = await api<components['schemas']['UpdateJobResponse']>(endpoint + '/rollbacks/' + encodeURIComponent(rollback.id) + '/apply', { method: 'POST', body: JSON.stringify({ confirmation: rollbackConfirmation, acknowledge_world_rewind: true } satisfies components['schemas']['UpdateRollbackApplyRequest']) }); setJob(result.job); setRollback(null); setNotice('Confirmed instance rollback queued. Current data must first pass a new full safety backup.'); }
     catch (error) { setError(message(error)); } finally { setBusy(false); }
   }
   const working = busy || activeJob;
   const blocked = !!status?.blockers.length;
-  const expired = !!preview && Date.parse(preview.expires_at) <= Date.now();
+  const expired = !!preview && deadlinePassed(preview.expires_at);
+  const rollbackExpired = !!rollback && deadlinePassed(rollback.expires_at);
   const packIncomplete = mode === 'manual' && replacePack && (!packRequest.pack.project_id.trim() || !packRequest.pack.version_id.trim() || !packRequest.pack.file_id.trim());
   const contentIncomplete = Object.values(replacements).some(item => !item.project_id.trim() || !item.version_id.trim() || !item.file_id.trim());
   const packBlocked = !!preview?.pack && (!!preview.pack.archive_manual || preview.pack.manual.length > 0 || preview.pack.blockers.length > 0 || preview.pack.changes.some(change => change.action === 'conflict'));
@@ -232,7 +282,7 @@ export function UpdatesPage() {
         {!!previews.length && <Select label="Prepared previews" placeholder="Choose an unexpired preview" value={preview?.id ?? null} data={previews.map(plan => ({ value: plan.id, label: selection(plan.target) + ' · ' + new Date(plan.expires_at).toLocaleTimeString() }))} disabled={working} onChange={value => choosePreview(previews.find(plan => plan.id === value) ?? null)} />}
       </> : <Text>Operator access is required to prepare or apply updates.</Text>}
     </Stack></Paper>}
-    {job && <Paper withBorder p="lg"><Stack gap="xs"><Group><Badge color={job.state === 'failed' ? 'red' : job.state === 'succeeded' ? 'forest' : 'blue'}>{job.state}</Badge><Text>{job.phase || 'Waiting to start'}</Text></Group>{activeJob && <Progress value={job.progress} aria-label="Update progress" />}{job.error && <Text c="red">{job.error}</Text>}<Anchor component={Link} to="/jobs">View job output</Anchor></Stack></Paper>}
+    {job && <Paper withBorder p="lg"><Stack gap="xs"><Group><Badge color={job.state === 'failed' ? 'red' : job.state === 'succeeded' ? 'forest' : 'blue'}>{job.state}</Badge><Text>{job.phase || 'Waiting to start'}</Text></Group>{activeJob && <Progress value={job.progress} aria-label="Update progress" />}{job.error && <Text c="red">{job.error}</Text>}{finalDetailsError && <Alert color="yellow" title="Final details incomplete" role="alert">{finalDetailsError}<Button mt="sm" variant="light" loading={finalDetailsLoading} onClick={() => setFinalAttempt(value => value + 1)}>Retry final details</Button></Alert>}<Anchor component={Link} to="/jobs">View job output</Anchor></Stack></Paper>}
     {preview && <Paper withBorder p="lg"><Stack><Group justify="space-between"><Title order={3} size="h4">Review exact changes</Title><Badge color={dirty || expired || preview.blockers.length || packBlocked || Object.keys(preview.content_manual_required ?? {}).length ? 'orange' : 'forest'}>{dirty ? 'Prepare changes again' : expired ? 'Expired' : preview.blockers.length || packBlocked || Object.keys(preview.content_manual_required ?? {}).length ? 'Blocked' : 'Ready for confirmation'}</Badge></Group><Text>{selection(preview.from)} to {selection(preview.target)}</Text><Text size="sm">Managed Java {preview.runtime.major}, {preview.runtime.version}. Preview expires {new Date(preview.expires_at).toLocaleString()}.</Text>
       {dirty && <Alert color="yellow" role="status">Choices have changed. Prepare a new preview before applying. The displayed plan is the previous verified preview.</Alert>}
       {preview.blockers.map((blocker, index) => <Alert key={index} color="yellow">{blocker.message}</Alert>)}{expired && <Alert color="yellow">This preview expired. Prepare another preview before applying.</Alert>}
@@ -246,7 +296,7 @@ export function UpdatesPage() {
       <Button w="fit-content" disabled={!canApply} onClick={() => { setConfirmed(false); setApplyDialog(true); }}>Review and apply update</Button>
     </Stack></Paper>}
     {status && <><Stack><Title order={3}>Update history</Title>{!status.history.length && <Text c="dimmed">No update has been applied to this server.</Text>}{status.history.map(item => <Paper key={item.id} withBorder p="md"><Stack gap="sm"><Group justify="space-between"><Text fw={600}>{item.kind === 'instance_rollback' ? 'Confirmed instance rollback' : 'Server update'}</Text><Badge color={item.state === 'blocked' || item.state === 'boot_attempted' ? 'orange' : 'gray'}>{historyLabel(item.state)}</Badge></Group><Text size="sm">{selection(item.from)} to {selection(item.target)}</Text><Text size="sm" c="dimmed">{new Date(item.updated_at).toLocaleString()}</Text>{item.boot_attempted && item.state !== 'complete' && item.state !== 'superseded' && <Text size="sm">The new version may have migrated world data. Choosing an older executable requires a separately confirmed instance rollback.</Text>}<Group wrap="wrap"><Anchor component={Link} to="/jobs">View jobs</Anchor>{admin && item.kind === 'update' && item.boot_attempted && (item.state === 'blocked' || item.state === 'boot_attempted') && <Button color="red" variant="light" disabled={working} onClick={() => void previewRollback(item.id)}>Review instance rollback</Button>}</Group></Stack></Paper>)}</Stack><Text size="sm" c="dimmed">{status.qualification}</Text></>}
-    <Modal opened={applyDialog} onClose={() => !busy && setApplyDialog(false)} title="Apply reviewed update" closeButtonProps={{ 'aria-label': 'Close update confirmation' }} size="lg" closeOnEscape={!busy} closeOnClickOutside={!busy}><Stack><Text>{preview ? selection(preview.target) : ''}</Text><Text>A full safety backup must succeed first. Running servers then warn players, stop, commit the reviewed selection and content, and verify the new start. Failed starts retain the new version behind a recovery blocker.</Text><Text size="sm" style={{ overflowWrap: 'anywhere' }}>{preview?.pack ? 'Pack: ' + preview.pack.source.name + ' · release ' + preview.pack.source.selection.version_id + ' · file ' + preview.pack.source.selection.file_id : 'No pack replacement'}</Text><Text size="sm">Warning countdown: {preview?.countdown_seconds} seconds.</Text><Checkbox data-autofocus label="I confirm these exact changes and the warning countdown." checked={confirmed} onChange={event => setConfirmed(event.currentTarget.checked)} /><Button loading={busy} disabled={!confirmed || !canApply} onClick={() => void apply()}>Confirm update</Button><Button variant="default" disabled={busy} onClick={() => setApplyDialog(false)}>Cancel</Button>{error && <Alert color="red" role="alert">{error}</Alert>}</Stack></Modal>
-    <Modal opened={rollback !== null} onClose={() => !busy && setRollback(null)} title="Restore instance and world data" closeButtonProps={{ 'aria-label': 'Close instance rollback confirmation' }} size="lg" closeOnEscape={!busy} closeOnClickOutside={!busy}><Stack><Alert color="red">This explicitly rewinds world data to the update’s full safety backup. Progress since that backup is replaced. A new full backup of the current stopped instance must succeed first.</Alert>{rollback && <><Text>Restore {selection(rollback.target)} from backup {rollback.backup_id}.</Text><Text size="sm" style={{ overflowWrap: 'anywhere' }}>Backup SHA256: {rollback.backup_sha256}</Text></>}<Text>The server remains stopped after restore. External mod and plugin databases are excluded.</Text><TextInput label={'Type ' + instanceId + ' to confirm instance rollback'} value={rollbackConfirmation} onChange={event => setRollbackConfirmation(event.currentTarget.value)} autoComplete="off" data-autofocus /><Checkbox label="I explicitly authorize restoring this backup, including its world data." checked={rewindAcknowledged} onChange={event => setRewindAcknowledged(event.currentTarget.checked)} /><Button color="red" loading={busy} disabled={!rewindAcknowledged || rollbackConfirmation !== instanceId} onClick={() => void applyRollback()}>Confirm instance rollback</Button><Button variant="default" disabled={busy} onClick={() => setRollback(null)}>Cancel</Button>{error && <Alert color="red" role="alert">{error}</Alert>}</Stack></Modal>
+    <Modal opened={applyDialog} onClose={() => !busy && setApplyDialog(false)} title="Apply reviewed update" closeButtonProps={{ 'aria-label': 'Close update confirmation' }} size="lg" closeOnEscape={!busy} closeOnClickOutside={!busy}><Stack>{expired && <Alert color="yellow" role="status">This preview expired. Prepare another preview before applying.</Alert>}<Text>{preview ? selection(preview.target) : ''}</Text><Text>A full safety backup must succeed first. Running servers then warn players, stop, commit the reviewed selection and content, and verify the new start. Failed starts retain the new version behind a recovery blocker.</Text><Text size="sm" style={{ overflowWrap: 'anywhere' }}>{preview?.pack ? 'Pack: ' + preview.pack.source.name + ' · release ' + preview.pack.source.selection.version_id + ' · file ' + preview.pack.source.selection.file_id : 'No pack replacement'}</Text><Text size="sm">Warning countdown: {preview?.countdown_seconds} seconds.</Text><Checkbox data-autofocus label="I confirm these exact changes and the warning countdown." checked={confirmed} onChange={event => setConfirmed(event.currentTarget.checked)} /><Button loading={busy} disabled={!confirmed || !canApply} onClick={() => void apply()}>Confirm update</Button><Button variant="default" disabled={busy} onClick={() => setApplyDialog(false)}>Cancel</Button>{error && <Alert color="red" role="alert">{error}</Alert>}</Stack></Modal>
+    <Modal opened={rollback !== null} onClose={() => !busy && setRollback(null)} title="Restore instance and world data" closeButtonProps={{ 'aria-label': 'Close instance rollback confirmation' }} size="lg" closeOnEscape={!busy} closeOnClickOutside={!busy}><Stack>{rollbackExpired && <Alert color="yellow" role="status">This rollback preview expired. Close the dialog and review rollback again.</Alert>}<Alert color="red">This explicitly rewinds world data to the update’s full safety backup. Progress since that backup is replaced. A new full backup of the current stopped instance must succeed first.</Alert>{rollback && <><Text>Restore {selection(rollback.target)} from backup {rollback.backup_id}.</Text><Text size="sm" style={{ overflowWrap: 'anywhere' }}>Backup SHA256: {rollback.backup_sha256}</Text></>}<Text>The server remains stopped after restore. External mod and plugin databases are excluded.</Text><TextInput label={'Type ' + instanceId + ' to confirm instance rollback'} value={rollbackConfirmation} onChange={event => setRollbackConfirmation(event.currentTarget.value)} autoComplete="off" data-autofocus /><Checkbox label="I explicitly authorize restoring this backup, including its world data." checked={rewindAcknowledged} onChange={event => setRewindAcknowledged(event.currentTarget.checked)} /><Button color="red" loading={busy} disabled={!rewindAcknowledged || rollbackConfirmation !== instanceId || rollbackExpired} onClick={() => void applyRollback()}>Confirm instance rollback</Button><Button variant="default" disabled={busy} onClick={() => setRollback(null)}>Cancel</Button>{error && <Alert color="red" role="alert">{error}</Alert>}</Stack></Modal>
   </Stack>;
 }
