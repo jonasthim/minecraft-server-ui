@@ -21,3 +21,4 @@ jobs:
       - run: npm ci
         working-directory: web
       - run: make check build-linux build-windows build-updater-linux build-updater-windows
+      - run: make check-notices

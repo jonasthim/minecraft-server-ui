@@ -41,3 +41,10 @@ dev-backend:
 	MINECRAFT_UI_ADDR=127.0.0.1:8080 MINECRAFT_UI_BASE_URL=http://127.0.0.1:5173 MINECRAFT_UI_DATA_DIR=./devdata $(GO) run ./cmd/minecraft-ui serve
 dev-web:
 	cd web && $(NPM) run dev
+
+.PHONY: notices check-notices
+notices:
+	python3 release/generate_notices.py
+check-notices:
+	python3 -m unittest discover -s release -p 'test_generate_notices.py'
+	python3 release/generate_notices.py --check
