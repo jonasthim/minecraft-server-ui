@@ -125,8 +125,7 @@ func (d linuxDriver) Stop(ctx context.Context) error {
 	return nil
 }
 func (d linuxDriver) Start(ctx context.Context) error {
-	_, err := runFixed(ctx, "/usr/bin/systemctl", "start", "minecraft-ui.service")
-	return err
+	return d.startWithPermit(ctx)
 }
 func (d linuxDriver) ProbeSchema(ctx context.Context, previous bool) (Capability, error) {
 	var capability Capability
@@ -144,6 +143,24 @@ func (d linuxDriver) ProbeSchema(ctx context.Context, previous bool) (Capability
 	}
 	if err := strictJSON(output.body, &capability); err != nil {
 		return capability, errors.New("invalid manager schema probe")
+	}
+	return capability, nil
+}
+func (d linuxDriver) ProbeCandidate(ctx context.Context, expected Installed) (Capability, error) {
+	var capability Capability
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	// The worker copied and independently verified this root-only fixed path.
+	command := exec.CommandContext(ctx, "/usr/sbin/runuser", "-u", "minecraft-ui", "--", filepath.Join(d.paths.Bin, d.paths.Binary)+".next", "update-capability")
+	command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	var output boundedOutput
+	command.Stdout = &output
+	command.Stderr = io.Discard
+	if err := command.Run(); err != nil || output.exceeded {
+		return capability, errors.New("manager-account candidate capability probe failed")
+	}
+	if err := strictJSON(output.body, &capability); err != nil {
+		return capability, errors.New("invalid candidate capability")
 	}
 	return capability, nil
 }
@@ -318,6 +335,13 @@ func RunNativeUpdater(ctx context.Context, args []string, out io.Writer) error {
 	// With no activation journal, boot recovery must not require update trust or a
 	// stable bootstrap receipt: development/unconfigured managers still boot.
 	if len(args) == 1 && args[0] == "recover" {
+		permitted, e := readLaunch(ctx, paths)
+		if e != nil {
+			return e
+		}
+		if permitted {
+			return nil
+		}
 		root, e := openProtectedRoot(ctx, paths.State)
 		if e != nil {
 			return e

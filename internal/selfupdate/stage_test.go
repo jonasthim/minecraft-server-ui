@@ -91,8 +91,8 @@ func TestStagingVerifiesBeforeDurablePublication(t *testing.T) {
 			if string(got) != "binary" {
 				t.Fatal(string(got))
 			}
-			if _, err := s.Stage(context.Background(), "v1.2.3", b, sig, bytes.NewReader(archive)); err == nil {
-				t.Fatal("existing stage overwritten")
+			if again, err := s.Stage(context.Background(), "v1.2.3", b, sig, nil); err != nil || again != result {
+				t.Fatal("verified stage retry did not recover receipt", again, err)
 			}
 		})
 	}

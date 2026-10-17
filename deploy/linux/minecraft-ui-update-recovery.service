@@ -3,6 +3,9 @@ Description=Recover interrupted Minecraft UI executable activation
 Before=minecraft-ui.service
 
 [Service]
+# Intentionally not RemainAfterExit: every ordinary start rechecks recovery,
+# including a restart after an interrupted updater in the same boot. The helper
+# accepts a launch permit only from the live kernel-lock-owning fixed worker.
 Type=oneshot
 User=root
 Group=root

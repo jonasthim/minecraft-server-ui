@@ -8,7 +8,8 @@ Type=oneshot
 User=root
 Group=root
 ExecStart=/usr/local/lib/minecraft-ui/selfupdate run %i
-TimeoutStartSec=9min
+# 9min operation budget + independent 5min cleanup + service margin.
+TimeoutStartSec=15min
 UMask=0077
 # Independent from minecraft-ui.service: this worker must survive its stop.
 # It controls only the fixed manager unit and fixed executable. No caller paths.

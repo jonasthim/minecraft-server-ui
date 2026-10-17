@@ -77,17 +77,27 @@ func (s *Stager) Stage(ctx context.Context, tag string, body, envelope []byte, a
 	if closeErr != nil {
 		return result, closeErr
 	}
-	// The lock counts as one entry. At most two immutable stages are retained;
-	// cleanup of stages is an explicit administrative action until activation owns it.
-	if len(entries) > 2 {
-		return result, errors.New("staging capacity reached; administrator cleanup is required")
-	}
-	idHash := sha256.Sum256(append(append(append([]byte{}, body...), 0), []byte(s.OS+"/"+s.Arch)...))
-	id := hex.EncodeToString(idHash[:])
+	id := stageID(body, s.OS+"/"+s.Arch)
 	if _, err := root.Lstat(id); err == nil {
-		return result, errors.New("release is already staged")
+		existing, err := s.verifyStage(ctx, root, id)
+		if err != nil {
+			return result, err
+		}
+		if s.BeforePublish != nil {
+			if err := s.BeforePublish(ctx); err != nil {
+				return result, err
+			}
+		}
+		if err := sameRoot(ctx, s.Dir, root); err != nil {
+			return result, err
+		}
+		return existing, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return result, err
+	}
+	// Two immutable stages plus our lock; temporary transactions fail closed.
+	if len(entries) > 2 {
+		return result, errors.New("staging capacity reached; administrator cleanup is required")
 	}
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {

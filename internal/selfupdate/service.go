@@ -32,14 +32,17 @@ type Service struct {
 	cfg    Config
 	source *Source
 	mu     sync.Mutex
+	now    func() time.Time
 }
 type Status struct {
-	CurrentVersion      string `json:"current_version"`
-	Schema              int64  `json:"schema"`
-	TrustConfigured     bool   `json:"trust_configured"`
-	ActivationAvailable bool   `json:"activation_available"`
-	DisabledReason      string `json:"disabled_reason"`
-	SchemaPolicy        string `json:"schema_policy"`
+	CurrentVersion      string  `json:"current_version"`
+	Schema              int64   `json:"schema"`
+	TrustConfigured     bool    `json:"trust_configured"`
+	ActivationAvailable bool    `json:"activation_available"`
+	DisabledReason      string  `json:"disabled_reason"`
+	SchemaPolicy        string  `json:"schema_policy"`
+	Stages              []Stage `json:"stages"`
+	StagingError        string  `json:"staging_error"`
 }
 type CheckResult struct {
 	Version      string    `json:"version"`
@@ -60,12 +63,12 @@ func New(cfg Config) *Service {
 		keys[id] = append(ed25519.PublicKey{}, key...)
 	}
 	cfg.Trust.PublicKeys = keys
-	s := &Service{cfg: cfg}
+	s := &Service{cfg: cfg, now: time.Now}
 	s.source, _ = NewSource(cfg.Trust)
 	return s
 }
 func (s *Service) Status(ctx context.Context) Status {
-	out := Status{CurrentVersion: s.cfg.CurrentVersion, Schema: s.cfg.Schema, TrustConfigured: s.source != nil, SchemaPolicy: "unchanged_schema_only"}
+	out := Status{CurrentVersion: s.cfg.CurrentVersion, Schema: s.cfg.Schema, TrustConfigured: s.source != nil, SchemaPolicy: "unchanged_schema_only", Stages: []Stage{}}
 	switch {
 	case s.source == nil:
 		out.DisabledReason = "Release source and verification keys have not been configured."
@@ -79,7 +82,20 @@ func (s *Service) Status(ctx context.Context) Status {
 	default:
 		out.ActivationAvailable = true
 	}
+	if s.source != nil {
+		discovery, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		stages, err := s.stager(nil).List(discovery)
+		if err != nil {
+			out.StagingError = "Staged releases could not be reverified; reconcile expired, damaged or incompatible stages before staging or activation."
+		} else {
+			out.Stages = stages
+		}
+	}
 	return out
+}
+func (s *Service) stager(before func(context.Context) error) *Stager {
+	return &Stager{BeforePublish: before, Dir: s.cfg.StageDir, Trust: s.cfg.Trust, CurrentVersion: s.cfg.CurrentVersion, Schema: s.cfg.Schema, OS: runtime.GOOS, Arch: runtime.GOARCH, Now: s.now}
 }
 func requireAdmin(actor domain.User) error {
 	if actor.Role != domain.RoleAdmin {
@@ -98,7 +114,7 @@ func (s *Service) metadata(ctx context.Context, tag string) (Manifest, []byte, [
 	if err != nil {
 		return Manifest{}, nil, nil, domain.Wrap(domain.CodeUpstreamError, "Release metadata could not be downloaded.", err)
 	}
-	m, err := VerifyManifest(s.cfg.Trust, body, sig, tag, s.cfg.CurrentVersion, s.cfg.Schema, time.Now())
+	m, err := VerifyManifest(s.cfg.Trust, body, sig, tag, s.cfg.CurrentVersion, s.cfg.Schema, s.now())
 	if err != nil {
 		return Manifest{}, nil, nil, domain.Wrap(domain.CodeValidationFailed, "Release verification failed; check trust, version, validity and schema compatibility.", err)
 	}
@@ -124,6 +140,25 @@ func (s *Service) Stage(ctx context.Context, tag string, actor domain.User) (Sta
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// A lost stage response is recoverable without another artifact download.
+	if s.source != nil {
+		stages, err := s.stager(nil).List(ctx)
+		if err != nil {
+			return Stage{}, domain.Wrap(domain.CodeUnavailable, "Existing stages require reconciliation.", err)
+		}
+		for _, stage := range stages {
+			if stage.Version == tag {
+				fresh, err := s.freshAdmin(ctx, actor)
+				if err != nil {
+					return Stage{}, err
+				}
+				if err := s.audit(ctx, fresh, "manager_update.stage_requested", tag); err != nil {
+					return Stage{}, err
+				}
+				return stage, nil
+			}
+		}
+	}
 	m, body, sig, err := s.metadata(ctx, tag)
 	if err != nil {
 		return Stage{}, err
@@ -145,7 +180,7 @@ func (s *Service) Stage(ctx context.Context, tag string, actor domain.User) (Sta
 		return Stage{}, domain.Wrap(domain.CodeUpstreamError, "Release artifact could not be downloaded.", err)
 	}
 	defer r.Close()
-	stager := Stager{BeforePublish: func(ctx context.Context) error { _, err := s.freshAdmin(ctx, actor); return err }, Dir: s.cfg.StageDir, Trust: s.cfg.Trust, CurrentVersion: s.cfg.CurrentVersion, Schema: s.cfg.Schema, OS: runtime.GOOS, Arch: runtime.GOARCH}
+	stager := Stager{BeforePublish: func(ctx context.Context) error { _, err := s.freshAdmin(ctx, actor); return err }, Dir: s.cfg.StageDir, Trust: s.cfg.Trust, CurrentVersion: s.cfg.CurrentVersion, Schema: s.cfg.Schema, OS: runtime.GOOS, Arch: runtime.GOARCH, Now: s.now}
 	result, err := stager.Stage(ctx, tag, body, sig, r)
 	if err != nil {
 		return Stage{}, domain.Wrap(domain.CodeUnavailable, "Release staging failed; no activation was requested.", err)

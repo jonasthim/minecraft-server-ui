@@ -234,3 +234,55 @@ func TestDrainRequiresValidatedTerminalSupersession(t *testing.T) {
 		t.Fatal("terminal supersession with invalid consent accepted")
 	}
 }
+
+func TestWindowsCandidateProbeCapabilityNeverOpensManagerDB(t *testing.T) {
+	for _, mode := range []string{"valid", "schema", "version", "hash", "nonce"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			control := controlDirectory(dir)
+			if err := os.MkdirAll(control, 0700); err != nil {
+				t.Fatal(err)
+			}
+			hash, err := ExecutableSHA256(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			challenge := Challenge{Format: 1, Nonce: digest([]byte("nonce")), FromVersion: "v1.2.2", ToVersion: "v1.2.3", ExpiresAt: time.Now().Add(time.Minute), ActorID: 1}
+			request := CandidateProbeRequest{Format: 1, Nonce: challenge.Nonce, Version: challenge.ToVersion, Schema: 99, SHA256: hash}
+			switch mode {
+			case "schema":
+				request.Schema++
+			case "version":
+				request.Version = "v1.2.4"
+			case "hash":
+				request.SHA256 = digest([]byte("other"))
+			case "nonce":
+				request.Nonce = digest([]byte("other"))
+			}
+			for name, value := range map[string]any{"challenge.json": challenge, "capability.json": request} {
+				b, _ := json.Marshal(value)
+				if err := os.WriteFile(filepath.Join(control, name), b, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = WriteSchemaProbeResult(ctx, dir, "v1.2.3", 99)
+			if (err == nil) != (mode == "valid") {
+				t.Fatal("capability request binding", mode, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "manager.db")); !os.IsNotExist(err) {
+				t.Fatal("capability probe touched manager DB", err)
+			}
+			if mode == "valid" {
+				b, err := os.ReadFile(filepath.Join(control, "probe.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var report ProbeResult
+				if strictJSON(b, &report) != nil || report.Schema != 99 || report.Version != "v1.2.3" || report.ExecutableSHA256 != hash || report.Nonce != challenge.Nonce {
+					t.Fatal(report)
+				}
+			}
+		})
+	}
+}

@@ -369,28 +369,8 @@ type ProbeResult struct {
 
 // WriteSchemaProbeResult is called only by the fixed Windows manager-account
 // probe service. The caller never opens/migrates the application for serving.
-func WriteSchemaProbeResult(ctx context.Context, dataDir, version string) error {
+func WriteSchemaProbeResult(ctx context.Context, dataDir, version string, embeddedSchema int64) error {
 	challenge, err := ReadChallenge(ctx, dataDir)
-	if err != nil {
-		return err
-	}
-	if challenge.FromVersion != version {
-		return errors.New("probe challenge version mismatch")
-	}
-	schema, err := ReadOnlySchema(ctx, filepath.Join(dataDir, "manager.db"))
-	if err != nil {
-		return err
-	}
-	authorized, err := ReadOnlyActorAuthorized(ctx, filepath.Join(dataDir, "manager.db"), challenge.ActorID)
-	if err != nil {
-		return err
-	}
-	hash, err := ExecutableSHA256(ctx)
-	if err != nil {
-		return err
-	}
-	result := ProbeResult{Format: 1, Nonce: challenge.Nonce, Version: version, Schema: schema, ExecutableSHA256: hash, ActorAuthorized: authorized}
-	body, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
@@ -399,6 +379,43 @@ func WriteSchemaProbeResult(ctx context.Context, dataDir, version string) error 
 		return err
 	}
 	defer root.Close()
+	body, requestErr := readChecked(ctx, root, "capability.json", 2048)
+	schema := embeddedSchema
+	authorized := false
+	if requestErr == nil {
+		var request CandidateProbeRequest
+		if strictJSON(body, &request) != nil || request.Format != 1 || request.Nonce != challenge.Nonce || request.Version != version || challenge.ToVersion != version || request.Schema != embeddedSchema || !validHash(request.SHA256) {
+			return errors.New("candidate capability request mismatch")
+		}
+		hash, err := ExecutableSHA256(ctx)
+		if err != nil || hash != request.SHA256 {
+			return errors.New("candidate capability image mismatch")
+		}
+	} else {
+		if !errors.Is(requestErr, os.ErrNotExist) {
+			return requestErr
+		}
+		if challenge.FromVersion != version {
+			return errors.New("probe challenge version mismatch")
+		}
+		schema, err = ReadOnlySchema(ctx, filepath.Join(dataDir, "manager.db"))
+		if err != nil {
+			return err
+		}
+		authorized, err = ReadOnlyActorAuthorized(ctx, filepath.Join(dataDir, "manager.db"), challenge.ActorID)
+		if err != nil {
+			return err
+		}
+	}
+	hash, err := ExecutableSHA256(ctx)
+	if err != nil {
+		return err
+	}
+	result := ProbeResult{Format: 1, Nonce: challenge.Nonce, Version: version, Schema: schema, ExecutableSHA256: hash, ActorAuthorized: authorized}
+	body, err = json.Marshal(result)
+	if err != nil {
+		return err
+	}
 	if err := writeFile(ctx, root, "probe.pending", bytesReader(body), int64(len(body)), ""); err != nil {
 		return err
 	}
@@ -406,4 +423,14 @@ func WriteSchemaProbeResult(ctx context.Context, dataDir, version string) error 
 		return err
 	}
 	return syncRoot(root)
+}
+
+// CandidateProbeRequest is written only by the fixed native importer for the
+// demand-start manager-account probe. It never selects a path or command.
+type CandidateProbeRequest struct {
+	Format  int    `json:"format"`
+	Nonce   string `json:"nonce"`
+	Version string `json:"version"`
+	Schema  int64  `json:"schema"`
+	SHA256  string `json:"sha256"`
 }

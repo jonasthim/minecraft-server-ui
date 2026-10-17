@@ -112,8 +112,29 @@ func openSCMService(name string) (*mgr.Mgr, *mgr.Service, error) {
 	}
 	return m, service, nil
 }
+
+// openSCMQuery is also used by the unprivileged manager pipe client. Service
+// control and configuration deliberately keep their separate privileged helper.
+func openSCMQuery(name string) (*mgr.Mgr, *mgr.Service, error) {
+	h, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return nil, nil, err
+	}
+	m := &mgr.Mgr{Handle: h}
+	n, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		m.Disconnect()
+		return nil, nil, err
+	}
+	service, err := windows.OpenService(h, n, windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		m.Disconnect()
+		return nil, nil, err
+	}
+	return m, &mgr.Service{Name: name, Handle: service}, nil
+}
 func verifiedServicePID(name, path string) (uint32, error) {
-	m, service, err := openSCMService(name)
+	m, service, err := openSCMQuery(name)
 	if err != nil {
 		return 0, err
 	}
@@ -334,21 +355,30 @@ func (d windowsDriver) ReadDrain(ctx context.Context) (DrainReceipt, error) {
 	return receipt, nil
 }
 func (d windowsDriver) ProbeSchema(ctx context.Context, previous bool) (Capability, error) {
+	source := d.paths.Binary
+	if previous {
+		source += ".previous"
+	}
+	return d.probe(ctx, source, d.prior, false)
+}
+func (d windowsDriver) ProbeCandidate(ctx context.Context, expected Installed) (Capability, error) {
+	return d.probe(ctx, d.paths.Binary+".next", expected, true)
+}
+func (d windowsDriver) probe(ctx context.Context, source string, expectedImage Installed, capabilityOnly bool) (Capability, error) {
 	var result Capability
 	bin, err := openProtectedRoot(ctx, d.paths.Bin)
 	if err != nil {
 		return result, err
 	}
 	defer bin.Close()
-	source := d.paths.Binary
-	if previous {
-		source += ".previous"
-	}
 	probe := "minecraft-ui-probe.exe"
 	if err := bin.Remove(probe); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return result, err
 	}
-	if err := copyVerified(ctx, bin, source, bin, probe, d.prior); err != nil {
+	if err := copyVerified(ctx, bin, source, bin, probe, expectedImage); err != nil {
+		return result, err
+	}
+	if err := d.Fence(ctx, bin); err != nil {
 		return result, err
 	}
 	control, err := safepath.OpenRoot(ctx, controlDirectory(d.paths.Data))
@@ -356,7 +386,7 @@ func (d windowsDriver) ProbeSchema(ctx context.Context, previous bool) (Capabili
 		return result, err
 	}
 	defer control.Close()
-	for _, name := range []string{"probe.json", "probe.pending"} {
+	for _, name := range []string{"probe.json", "probe.pending", "capability.json"} {
 		if err := control.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return result, err
 		}
@@ -365,6 +395,17 @@ func (d windowsDriver) ProbeSchema(ctx context.Context, previous bool) (Capabili
 	if err != nil {
 		return result, err
 	}
+	if capabilityOnly {
+		request := CandidateProbeRequest{Format: 1, Nonce: challenge.Nonce, Version: expectedImage.Version, Schema: expectedImage.Schema, SHA256: expectedImage.SHA256}
+		body, e := json.Marshal(request)
+		if e != nil {
+			return result, e
+		}
+		if e := writeFile(ctx, control, "capability.json", bytesReader(body), int64(len(body)), ""); e != nil {
+			return result, e
+		}
+	}
+	defer control.Remove("capability.json")
 	m, service, err := openSCMService(probeService)
 	if err != nil {
 		return result, err
@@ -419,7 +460,7 @@ func (d windowsDriver) ProbeSchema(ctx context.Context, previous bool) (Capabili
 		return result, err
 	}
 	var report ProbeResult
-	if strictJSON(body, &report) != nil || report.Format != 1 || report.Nonce != challenge.Nonce || report.Version != d.prior.Version || report.ExecutableSHA256 != d.prior.SHA256 {
+	if strictJSON(body, &report) != nil || report.Format != 1 || report.Nonce != challenge.Nonce || report.Version != expectedImage.Version || report.ExecutableSHA256 != expectedImage.SHA256 {
 		return result, errors.New("Windows schema probe identity mismatch")
 	}
 	authorized := report.ActorAuthorized

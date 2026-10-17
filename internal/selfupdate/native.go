@@ -119,7 +119,8 @@ type nativeDriver interface {
 	Fence(context.Context, *os.Root) error
 	Stop(context.Context) error
 	Start(context.Context) error
-	ProbeSchema(context.Context, bool) (Capability, error) // false=current,true=previous
+	ProbeSchema(context.Context, bool) (Capability, error)         // false=current,true=previous
+	ProbeCandidate(context.Context, Installed) (Capability, error) // fixed private .next, manager account, no DB
 	WaitHealthy(context.Context, Installed, string) error
 	WriteChallenge(context.Context, Challenge) error
 	ReadDrain(context.Context) (DrainReceipt, error)
@@ -259,48 +260,54 @@ func (w *activationWorker) activate(ctx context.Context, j activationJournal, ca
 		if e != nil || current != j.Prior.SHA256 {
 			return errors.Join(cause, errors.New("manager stop outcome requires recovery"))
 		}
-		j.Phase = "aborted"
-		return errors.Join(cause, w.save(cleanup, j), w.driver.ClearControl(cleanup), w.driver.Start(cleanup))
-	}
-	release, err := w.driver.LockManager(ctx)
-	if err != nil {
-		return err
-	}
-	locked := true
-	completed := false
-	defer func() {
-		if locked {
-			release()
+		next := j
+		next.Phase = "aborted"
+		if e := w.save(cleanup, next); e != nil {
+			return errors.Join(cause, e)
 		}
-	}()
-	// Every error after the manager stopped must either return to the captured
-	// executable or retain a durable failed-recovery journal. Use a cleanup
-	// budget independent of a canceled caller; never retry an attempted rollback.
+		return errors.Join(cause, w.driver.ClearControl(cleanup), w.driver.Start(cleanup))
+	}
+	var release func()
+	locked, completed, cleanupAttempted := false, false, false
+	// One owner performs cleanup, with a budget independent of caller cancellation.
+	// Memory-only phase changes cannot suppress this owner.
 	defer func() {
-		if retErr == nil || completed || j.Phase == "aborted" || j.Phase == "rolled_back" || j.Phase == "rollback" {
-			return
-		}
 		if locked {
 			release()
 			locked = false
 		}
-		cleanup, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		if retErr == nil || completed || cleanupAttempted {
+			return
+		}
+		cleanupAttempted = true
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		current, e := hashFile(cleanup, w.bin, w.binary)
 		if e == nil && current == j.Prior.SHA256 && (j.Phase == "prepared" || j.Phase == "stopped") {
-			j.Phase = "aborted"
-			retErr = errors.Join(retErr, w.save(cleanup, j), w.driver.ClearControl(cleanup), w.driver.Start(cleanup))
+			next := j
+			next.Phase = "aborted"
+			if e := w.save(cleanup, next); e != nil {
+				retErr = errors.Join(retErr, e)
+				return
+			}
+			j = next
+			retErr = errors.Join(retErr, w.driver.ClearControl(cleanup), w.driver.Start(cleanup))
 			return
 		}
 		retErr = errors.Join(retErr, w.rollback(cleanup, &j))
 	}()
+	release, err = w.driver.LockManager(ctx)
+	if err != nil {
+		return err
+	}
+	locked = true
 	receipt, err := w.driver.ReadDrain(ctx)
 	if err != nil || !receipt.Drained || receipt.Nonce != j.Nonce || receipt.Version != j.Prior.Version || receipt.Schema != j.Prior.Schema || receipt.ExecutableSHA256 != j.Prior.SHA256 {
-		return w.abortUnchanged(ctx, &j, release, &locked, errors.New("manager did not prove a complete safe drain"))
+		return errors.New("manager did not prove a complete safe drain")
 	}
 	capability, err := w.driver.ProbeSchema(ctx, false)
 	if err != nil || capability.Format != 1 || capability.Version != j.Prior.Version || capability.Schema != j.Prior.Schema || capability.ActorAuthorized == nil || !*capability.ActorAuthorized {
-		return w.abortUnchanged(ctx, &j, release, &locked, errors.New("live schema or current administrator authorization does not permit activation"))
+		return errors.New("live schema or current administrator authorization does not permit activation")
 	}
 	j.Phase = "stopped"
 	if err := w.save(ctx, j); err != nil {
@@ -322,6 +329,16 @@ func (w *activationWorker) activate(ctx context.Context, j activationJournal, ca
 	}
 	if err := w.fence(ctx, w.bin); err != nil {
 		return err
+	}
+	// A signature authenticates bytes, not packaging consistency. Refuse a
+	// candidate whose own no-DB capability differs before any normal startup.
+	capability, err = w.driver.ProbeCandidate(ctx, j.Candidate)
+	if err != nil || capability.Format != 1 || capability.Version != j.Candidate.Version || capability.Schema != j.Candidate.Schema || capability.Schema != j.Prior.Schema {
+		return errors.New("candidate embedded version or schema does not match verified release; manual maintenance required")
+	}
+	candidateHash, err := hashFile(ctx, w.bin, w.binary+".next")
+	if err != nil || candidateHash != j.Candidate.SHA256 {
+		return errors.New("candidate changed during capability probe")
 	}
 	j.Phase = "replacing"
 	if err := w.save(ctx, j); err != nil {
@@ -352,16 +369,10 @@ func (w *activationWorker) activate(ctx context.Context, j activationJournal, ca
 			return w.driver.ClearControl(ctx)
 		}
 	}
-	return w.rollback(ctx, &j)
-}
-func (w *activationWorker) abortUnchanged(ctx context.Context, j *activationJournal, release func(), locked *bool, cause error) error {
-	release()
-	*locked = false
-	j.Phase = "aborted"
-	if err := w.save(ctx, *j); err != nil {
-		return errors.Join(cause, err)
-	}
-	return errors.Join(cause, w.driver.ClearControl(ctx), w.driver.Start(ctx))
+	cleanupAttempted = true
+	cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	return w.rollback(cleanup, &j)
 }
 func (w *activationWorker) recordInstalled(ctx context.Context, installed Installed) error {
 	body, err := json.Marshal(installed)
@@ -384,11 +395,13 @@ func (w *activationWorker) restorePrior(ctx context.Context, j *activationJourna
 	if j.RollbackAttempted {
 		return errors.New("automatic manager rollback already attempted; manual repair required")
 	}
-	j.RollbackAttempted = true
-	j.Phase = "rollback"
-	if err := w.save(ctx, *j); err != nil {
+	next := *j
+	next.RollbackAttempted = true
+	next.Phase = "rollback"
+	if err := w.save(ctx, next); err != nil {
 		return err
 	}
+	*j = next
 	if start {
 		if err := w.driver.Stop(ctx); err != nil {
 			return err
@@ -409,7 +422,7 @@ func (w *activationWorker) restorePrior(ctx context.Context, j *activationJourna
 		return errors.New("previous manager executable does not match captured receipt")
 	}
 	capability, err := w.driver.ProbeSchema(ctx, true)
-	if err != nil || capability.Schema != j.Prior.Schema || capability.Version != j.Prior.Version {
+	if err != nil || capability.Format != 1 || capability.Schema != j.Prior.Schema || capability.Version != j.Prior.Version {
 		return errors.New("previous manager cannot read current schema; manual maintenance required")
 	}
 	if err := w.bin.Rename(w.binary+".previous", w.binary); err != nil {
@@ -439,8 +452,13 @@ func (w *activationWorker) restorePrior(ctx context.Context, j *activationJourna
 	if err := w.driver.ClearControl(ctx); err != nil {
 		return err
 	}
-	j.Phase = "rolled_back"
-	return w.save(ctx, *j)
+	next = *j
+	next.Phase = "rolled_back"
+	if err := w.save(ctx, next); err != nil {
+		return err
+	}
+	*j = next
+	return nil
 }
 func (w *activationWorker) recover(ctx context.Context) error {
 	j, err := w.load(ctx)

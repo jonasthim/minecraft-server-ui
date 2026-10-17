@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"github.com/jonasthim/minecraft-server-ui/internal/db"
 	"github.com/jonasthim/minecraft-server-ui/internal/selfupdate"
 	"golang.org/x/sys/windows/svc"
 	"time"
@@ -17,7 +18,9 @@ func (s schemaProbeService) Execute(_ []string, requests <-chan svc.ChangeReques
 	defer cancel()
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	done := make(chan error, 1)
-	go func() { done <- selfupdate.WriteSchemaProbeResult(ctx, `C:\ProgramData\MinecraftUI`, version) }()
+	go func() {
+		done <- selfupdate.WriteSchemaProbeResult(ctx, `C:\ProgramData\MinecraftUI`, version, db.LatestVersion())
+	}()
 	for {
 		select {
 		case err := <-done:
