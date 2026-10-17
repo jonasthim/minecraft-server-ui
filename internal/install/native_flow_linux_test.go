@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -376,16 +377,30 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 
 	principal := linuxPrincipal{UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}
 	accountPresent := false
-	status := linuxServiceStatus{LoadState: "not-found", ActiveState: "inactive", SubState: "dead", UnitFileState: "disabled"}
+	status := linuxServiceStatus{LoadState: "not-found", ActiveState: "inactive", SubState: "dead"}
 	reopened := false
+	enableCalls := 0
+	failCandidateProbe := false
 	var firstDriver *linuxInstallDriver
 	hooks := linuxNativeHooks{
 		stateRoot: stateRoot, dataRoot: dataRoot, testRoot: true,
-		account:       func(context.Context) (linuxPrincipal, bool, error) { return principal, accountPresent, nil },
-		createUser:    func(context.Context) (linuxPrincipal, error) { accountPresent = true; return principal, nil },
-		service:       func(context.Context) (linuxServiceStatus, error) { return status, nil },
-		reload:        func(context.Context) error { return nil },
-		probeSchema:   func(context.Context, string, linuxPrincipal, int64) error { return nil },
+		account:    func(context.Context) (linuxPrincipal, bool, error) { return principal, accountPresent, nil },
+		createUser: func(context.Context) (linuxPrincipal, error) { accountPresent = true; return principal, nil },
+		service:    func(context.Context) (linuxServiceStatus, error) { return status, nil },
+		enabled: func(context.Context, bool) error {
+			enableCalls++
+			if status.LoadState != "loaded" {
+				return errors.New("manager service is unavailable or has an unsupported unit-file state")
+			}
+			return nil
+		},
+		reload: func(context.Context) error { return nil },
+		probeSchema: func(context.Context, string, linuxPrincipal, int64) error {
+			if failCandidateProbe {
+				return errors.New("synthetic unhealthy candidate capability")
+			}
+			return nil
+		},
 		configuration: func(context.Context) error { return nil },
 		now:           func() time.Time { return time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC) },
 		importInputs: func(_ context.Context, _ *os.Root, options installinputs.Options) (linuxInstallerInputs, error) {
@@ -495,6 +510,29 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 	}
 	if !bytes.Equal(trustBytes, d2.intent.BootstrapTrust) {
 		t.Fatal("immutable intent lost the independent bootstrap trust bytes")
+	}
+	if err := d2.Publish(context.Background(), *loaded); err != nil {
+		t.Fatalf("publish candidate before simulated unhealthy verification: %v", err)
+	}
+	failCandidateProbe = true
+	if err := d2.Verify(context.Background(), *loaded); err == nil {
+		t.Fatal("synthetic unhealthy candidate unexpectedly passed verification")
+	}
+	rollingBack := *loaded
+	rollingBack.Phase = phaseRollingBack
+	rollingBack.FailedStage = "verify"
+	if err := d2.Rollback(context.Background(), rollingBack); err != nil {
+		t.Fatalf("rollback of unhealthy fresh install without manager.db or prior unit: %v", err)
+	}
+	if enableCalls != 0 {
+		t.Fatalf("rollback tried to change enablement for a fresh unit that is absent: calls=%d", enableCalls)
+	}
+	if _, err := os.Lstat(filepath.Join(dataRoot, "manager.db")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unhealthy candidate fixture unexpectedly created manager.db: %v", err)
+	}
+	retained, present, err := d2.readInventory(context.Background())
+	if err != nil || !present || retained.Status != "retained" || retained.OperationID != loaded.ID || !sameImage(retained.Image, *loaded.Target) {
+		t.Fatalf("failed first install did not publish retained evidence: inventory=%+v present=%v err=%v", retained, present, err)
 	}
 }
 

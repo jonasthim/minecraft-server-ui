@@ -97,3 +97,15 @@ exact captured preimage and retained before an unchanged-content skip. The
 handoff composition regression failed before this change and passes afterward;
 package race/vet and independent native review also pass. A hosted rerun is
 required to establish the correction's effect on the full lifecycle.
+
+## First healthy installed manager
+
+Run `39063841719` at `99ade99405a97eed6f2741f46fe101150a010f02` passed both native input builds and signing. In lifecycle and updater-coexistence on Ubuntu22.04/24.04, the worker reported `installed` for v0.0.1 and the service was active with a nonzero main PID. This confirms first installation progressed past publication and startup.
+
+All six scenario jobs still failed. Lifecycle retained a successful last command without its check report; coexistence retained exit1 without a recognized installer result. Neither summary identifies the later failing assertion. Both retained-retry jobs returned pending for the deliberately unhealthy v0.0.3, with worker manual repair at verify and the manager stopped. These results do not qualify unchanged reruns, upgrades, rollback, recovery, uninstall or coexistence. Diagnostics are being extended using strict check-report fields and bounded harness-only source line numbers, without raw arguments, exception text or journals.
+
+The subsequent source review reproduced two fixture assumptions: an empty manager does not create an `instances` directory until its first instance, and the unchanged-install case reused a preparation output before recording a case. The harness now creates its own private account-owned fixture directory and assigns a fresh output to each preparation attempt. Failure summaries retain strict normalized `install check` reports and up to16 exact harness source line numbers. A service-account executable-access check separates workspace traversal failure from updater staging failure. Sixteen harness and nine scrubber tests pass.
+
+A temporary native composition reproduced rollback failure after removing a newly installed manager unit: generic disable correctly refuses an absent unit. The rollback-specific path now verifies the exact absent/stopped service state. The composition verifies retained inventory and absent manager.db; the general enable/disable API remains strict. Independent review plus integrator install/selfupdate race/vet pass. This still requires native hosted confirmation.
+
+Independent recovery had the analogous snapshot omission for unchanged rollback roles and optional updater trust. A fresh empty-driver-map regression failed before correction; rollback now reinspects and retains exact current snapshots before continuing. The regression verifies all roles and reaches the prior-inventory compare-and-swap guard. Integrator install/selfupdate race, vet and25 Python harness/scrubber checks pass; native interrupted recovery remains unqualified until the hosted run succeeds.

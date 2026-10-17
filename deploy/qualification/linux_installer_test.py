@@ -57,6 +57,93 @@ class InstallerHarnessFixtureTests(unittest.TestCase):
             self.assertNotIn("CANARY-DO-NOT-LEAK", summary)
             self.assertEqual(json.loads(summary)["last_command_result"], qualification.last_command_result)
 
+    def test_install_check_failure_keeps_only_normalized_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "out"
+            output.mkdir()
+            qualification = MODULE.Qualification(root / "bootstrap", root / "candidates", output, "lifecycle")
+            stdout = json.dumps({"state": "drifted", "coherent": False, "pending": False,
+                                "image": {"version": "v0.0.2", "schema": 18, "sha256": "b" * 64}}).encode()
+            with mock.patch.object(MODULE.subprocess, "run", return_value=SimpleNamespace(
+                    stdout=stdout, stderr=b"private diagnostic", returncode=1)):
+                with self.assertRaisesRegex(RuntimeError, "unexpected status"):
+                    qualification.command([root / "bootstrap", "install", "check"], expected=0)
+            self.assertEqual(qualification.last_command_result["check_report"], {
+                "state": "drifted", "coherent": False, "pending": False,
+                "image": {"version": "v0.0.2", "schema": 18, "sha256": "b" * 64},
+            })
+
+            secret_report = b'{"state":"drifted","coherent":false,"pending":false,"debug":"PRIVATE-CANARY"}'
+            with mock.patch.object(MODULE.subprocess, "run", return_value=SimpleNamespace(
+                    stdout=secret_report, stderr=b"PRIVATE-CANARY", returncode=1)):
+                with self.assertRaisesRegex(RuntimeError, "unexpected status"):
+                    qualification.command([root / "bootstrap", "install", "check"], expected=0)
+            encoded = json.dumps(qualification.last_command_result)
+            self.assertEqual(qualification.last_command_result["check_report"], "unavailable")
+            self.assertNotIn("PRIVATE-CANARY", encoded)
+
+            inconsistent = b'{"state":"installed","coherent":true,"pending":true}'
+            with mock.patch.object(MODULE.subprocess, "run", return_value=SimpleNamespace(
+                    stdout=inconsistent, stderr=b"", returncode=1)):
+                with self.assertRaisesRegex(RuntimeError, "unexpected status"):
+                    qualification.command([root / "bootstrap", "install", "check"], expected=0)
+            self.assertEqual(qualification.last_command_result["check_report"], "unavailable")
+
+    def test_prepare_attempts_use_distinct_output_paths_without_case_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "out"
+            output.mkdir()
+            qualification = MODULE.Qualification(root / "bootstrap", root / "candidates", output, "lifecycle")
+            qualification.scratch = root / "scratch"
+            qualification.scratch.mkdir()
+            requested = []
+
+            def fake_cli(*args, **kwargs):
+                destination = Path(args[args.index("--output") + 1])
+                if destination.exists():
+                    raise RuntimeError("preparation output path already used")
+                destination.mkdir()
+                requested.append(destination)
+                return SimpleNamespace(stdout=b'{"outcome":"installed"}')
+
+            with mock.patch.object(qualification, "cli", side_effect=fake_cli):
+                qualification.prepare_install("v0.0.1")
+                qualification.prepare_install("v0.0.1")
+
+            self.assertEqual(qualification.checks, [])
+            self.assertEqual(len(requested), 2)
+            self.assertNotEqual(requested[0], requested[1])
+            self.assertTrue(all(path.is_dir() for path in requested))
+
+    def test_failure_source_line_is_only_from_exact_harness_frame(self):
+        try:
+            source = "def caller():\n    fail()\ndef fail():\n    raise RuntimeError('CANARY-DO-NOT-LEAK')\ncaller()\n"
+            exec(compile(source, MODULE.__file__, "exec"), {})
+        except RuntimeError as error:
+            line = MODULE.failure_source_line(error)
+            lines = MODULE.failure_source_lines(error)
+        else:
+            self.fail("expected synthetic harness failure")
+        self.assertEqual(line, 4)
+        self.assertEqual(lines, [5, 2, 4])
+        self.assertTrue(all(type(value) is int for value in lines))
+
+        foreign_name = "/private/foreign/harness.py"
+        try:
+            exec(compile("raise RuntimeError('CANARY-DO-NOT-LEAK')", foreign_name, "exec"), {})
+        except RuntimeError as error:
+            foreign_line = MODULE.failure_source_line(error)
+            foreign_lines = MODULE.failure_source_lines(error)
+        else:
+            self.fail("expected synthetic foreign failure")
+        self.assertIsNone(foreign_line)
+        self.assertEqual(foreign_lines, [])
+        serialized = json.dumps({"failure_source_line": foreign_line, "failure_source_lines": foreign_lines})
+        self.assertNotIn("CANARY-DO-NOT-LEAK", serialized)
+        self.assertNotIn(foreign_name, serialized)
+
     def test_check_parser_accepts_expected_states_and_valid_optional_image(self):
         self.assertTrue(MODULE.valid_check_report(
             {"state": "absent", "coherent": False, "pending": False}, "absent", False, False))
@@ -153,6 +240,24 @@ class InstallerHarnessFixtureTests(unittest.TestCase):
             expected.unlink()
             expected.symlink_to(process_exe)
             self.assertFalse(MODULE.executor_matches_path(expected, process_exe, uid))
+
+    def test_world_fixture_creates_only_missing_instances_root_as_private_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / "instances"
+            uid, gid = os.getuid(), os.getgid()
+            self.assertFalse(base.exists())
+            MODULE.ensure_fixture_instances_root(base, uid, gid)
+            info = base.lstat()
+            self.assertTrue(MODULE.stat.S_ISDIR(info.st_mode))
+            self.assertEqual((info.st_uid, info.st_gid, MODULE.stat.S_IMODE(info.st_mode)), (uid, gid, 0o700))
+            identity = (info.st_dev, info.st_ino)
+            MODULE.ensure_fixture_instances_root(base, uid, gid)
+            self.assertEqual((base.lstat().st_dev, base.lstat().st_ino), identity)
+
+            link = Path(directory) / "instances-link"
+            link.symlink_to(base, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "unavailable or unsafe"):
+                MODULE.ensure_fixture_instances_root(link, uid, gid)
 
     def test_transaction_reader_retries_atomic_phase_replacement(self):
         operation_id = "a" * 64

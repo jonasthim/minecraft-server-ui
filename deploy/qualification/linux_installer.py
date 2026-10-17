@@ -27,6 +27,7 @@ INSTALLER_FAILED_STAGES = {
     "rollback", "record_rolled_back", "record_manual_repair", "recover", "worker",
 }
 INSTALLER_RESULT_FIELDS = {"outcome", "operation_id", "image", "failed_stage"}
+CHECK_STATES = {"absent", "recovery_required", "drifted", "installed", "uninstalled", "retained"}
 
 
 def strict_json(raw):
@@ -96,6 +97,57 @@ def safe_installer_result(stdout, return_code):
     return diagnostic
 
 
+def safe_check_report(stdout):
+    """Return a normalized install-check report, rejecting unknown or unsafe data."""
+    try:
+        lines = stdout.decode("utf-8", "strict").splitlines()
+        if not lines:
+            return "unavailable"
+        value = strict_json(lines[-1])
+        if not isinstance(value, dict) or set(value) - {"state", "coherent", "pending", "image"}:
+            return "unavailable"
+        if (set(value) - {"image"} != {"state", "coherent", "pending"}
+                or value["state"] not in CHECK_STATES
+                or type(value["coherent"]) is not bool
+                or type(value["pending"]) is not bool):
+            return "unavailable"
+        if value["state"] == "retained":
+            if value["coherent"] or value["pending"]:
+                return "unavailable"
+        elif value["pending"] != (value["state"] == "recovery_required") or (value["coherent"] and value["pending"]):
+            return "unavailable"
+        image = value.get("image")
+        if image is not None:
+            if (not isinstance(image, dict) or set(image) != {"version", "schema", "sha256"}
+                    or not isinstance(image["version"], str)
+                    or re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", image["version"]) is None
+                    or type(image["schema"]) is not int or image["schema"] <= 0
+                    or not isinstance(image["sha256"], str) or HEX64.fullmatch(image["sha256"]) is None):
+                return "unavailable"
+            image = {"version": image["version"], "schema": image["schema"], "sha256": image["sha256"]}
+        return {"state": value["state"], "coherent": value["coherent"],
+                "pending": value["pending"], "image": image}
+    except (UnicodeDecodeError, ValueError, TypeError):
+        return "unavailable"
+
+
+def failure_source_lines(error):
+    """Return bounded line numbers for frames owned by this harness only."""
+    lines = []
+    traceback = error.__traceback__
+    while traceback is not None:
+        if traceback.tb_frame.f_code.co_filename == __file__:
+            lines.append(traceback.tb_lineno)
+        traceback = traceback.tb_next
+    return lines[-16:]
+
+
+def failure_source_line(error):
+    """Return the last line from this harness, without exposing traceback text."""
+    lines = failure_source_lines(error)
+    return lines[-1] if lines else None
+
+
 class Qualification:
     def __init__(self, bootstrap, candidates, output, scenario, qualifier=None, linux_inputs=None, windows_inputs=None):
         self.bootstrap = Path(bootstrap)
@@ -107,6 +159,7 @@ class Qualification:
         self.linux_inputs = Path(linux_inputs) if linux_inputs else None
         self.windows_inputs = Path(windows_inputs) if windows_inputs else None
         self.checks = []
+        self.prepare_attempt = 0
         self.last_command_result = {"return_code": None, "result": "unavailable"}
         self.scratch = Path("/run") / ("minecraft-ui-installer-qualification-" + str(os.getpid()))
 
@@ -122,6 +175,8 @@ class Qualification:
         if len(result.stdout) > 16384 or len(result.stderr) > 16384:
             raise RuntimeError("bounded command output exceeded")
         self.last_command_result = safe_installer_result(result.stdout, result.returncode)
+        if len(argv) >= 2 and str(argv[-2:][0]) == "install" and str(argv[-1]) == "check":
+            self.last_command_result["check_report"] = safe_check_report(result.stdout)
         if expected is not None and result.returncode != expected:
             raise RuntimeError("shipping command returned an unexpected status")
         return result
@@ -146,7 +201,9 @@ class Qualification:
         return report
 
     def prepare_install(self, version, expected_outcome="installed", expected_exit=0):
-        destination = self.scratch / ("prepared-" + version.replace(".", "-") + "-" + str(len(self.checks)))
+        attempt = self.prepare_attempt
+        self.prepare_attempt += 1
+        destination = self.scratch / ("prepared-" + version.replace(".", "-") + "-" + str(attempt))
         candidate = self.candidates / version
         trust = candidate / "development-trust.json"
         result = self.cli("prepare", "--repository", REPO, "--trust-file", trust,
@@ -452,6 +509,10 @@ class Qualification:
                 os.chown(child, uid, gid)
                 os.chmod(child, 0o700 if child.is_dir() else 0o600)
 
+        # Prove the service account can reach the downloaded helper separately
+        # from staging, so bounded source-line diagnostics distinguish workspace
+        # traversal failures from authenticated staging failures.
+        self.command(["runuser", "-u", "minecraft-ui", "--", "test", "-x", self.qualifier], expected=0)
         stages = {}
         for version in ("v0.0.2", "v0.0.3"):
             staged = self.command([
@@ -749,8 +810,7 @@ def validate_scenario_args(scenario, qualifier=None, linux_inputs=None, windows_
 def create_world_marker(path):
     uid, gid = account_ids()
     base = Path("/var/lib/minecraft-ui/instances")
-    if base.is_symlink() or not base.is_dir():
-        raise RuntimeError("manager instances directory is unavailable")
+    ensure_fixture_instances_root(base, uid, gid)
     for directory in [base / "installer-fixture", base / "installer-fixture" / "server",
                       base / "installer-fixture" / "server" / "world"]:
         directory.mkdir(mode=0o700)
@@ -760,6 +820,24 @@ def create_world_marker(path):
         marker.write(b"qualification world persistence marker; not a Minecraft world\n")
     os.chown(path, uid, gid)
     os.chmod(path, 0o600)
+
+
+def ensure_fixture_instances_root(base, uid, gid):
+    created = False
+    try:
+        base.mkdir(mode=0o700)
+        created = True
+    except FileExistsError:
+        pass
+    info = base.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise RuntimeError("manager instances directory is unavailable or unsafe")
+    if created:
+        os.chown(base, uid, gid)
+        os.chmod(base, 0o700)
+        info = base.lstat()
+    if (info.st_uid != uid or info.st_gid != gid or stat.S_IMODE(info.st_mode) != 0o700):
+        raise RuntimeError("manager instances directory ownership or mode differs")
 
 
 def account_exists():
@@ -887,7 +965,9 @@ def main():
     except BaseException as error:
         summary = {"format": 1, "scope": "native-ubuntu-linux-installer-lifecycle", "scenario": args.scenario,
                    "status": "fail", "failure_class": type(error).__name__, "checks": qualification.checks,
-                   "last_command_result": qualification.last_command_result}
+                   "last_command_result": qualification.last_command_result,
+                   "failure_source_line": failure_source_line(error),
+                   "failure_source_lines": failure_source_lines(error)}
         (output / "acceptance-summary.json").write_text(json.dumps(summary, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
         print("FAIL Linux installer qualification; see bounded summary", file=sys.stderr)
         return 1

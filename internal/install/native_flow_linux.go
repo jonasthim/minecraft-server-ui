@@ -473,10 +473,10 @@ func (d *linuxInstallDriver) publishInventory(ctx context.Context, next linuxInv
 			return err
 		}
 	}
-	return writeLinuxProtectedState(ctx, d.state, "installation.json", body, priorInfo)
+	return writeLinuxProtectedState(ctx, d.state, "installation.json", body, priorInfo, d.hooks.testRoot)
 }
 
-func writeLinuxProtectedState(ctx context.Context, root *os.Root, name string, body []byte, prior os.FileInfo) error {
+func writeLinuxProtectedState(ctx context.Context, root *os.Root, name string, body []byte, prior os.FileInfo, testRoot bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -502,7 +502,7 @@ func writeLinuxProtectedState(ctx context.Context, root *os.Root, name string, b
 		return err
 	}
 	created, statErr := file.Stat()
-	if statErr != nil || !isRootOwned(created) || created.Mode().Perm() != 0600 {
+	if statErr != nil || !linuxNativeProtectedFile(created, testRoot) || created.Mode().Perm() != 0600 {
 		_ = file.Close()
 		return errors.Join(errors.New("new protected state file is unsafe"), statErr)
 	}
@@ -825,22 +825,8 @@ func (d *linuxInstallDriver) Rollback(ctx context.Context, tx transaction) error
 			return err
 		}
 	}
-	if tx.Mode == modeUninstall || !intent.ServiceWasEnabled {
-		enabled := d.hooks.enabled
-		if enabled == nil {
-			enabled = setLinuxManagerEnabled
-		}
-		if err := enabled(ctx, intent.ServiceWasEnabled); err != nil {
-			return err
-		}
-	} else {
-		enabled := d.hooks.enabled
-		if enabled == nil {
-			enabled = setLinuxManagerEnabled
-		}
-		if err := enabled(ctx, true); err != nil {
-			return err
-		}
+	if err := d.restoreManagerEnablementAfterRollback(ctx, tx, intent); err != nil {
+		return err
 	}
 	if intent.PriorInventory != nil {
 		if err := d.restorePriorInventory(ctx, tx, intent); err != nil {
@@ -852,6 +838,25 @@ func (d *linuxInstallDriver) Rollback(ctx context.Context, tx transaction) error
 		}
 	}
 	return d.clearOwnMaintenanceControl(ctx, intent, *principal)
+}
+
+func (d *linuxInstallDriver) restoreManagerEnablementAfterRollback(ctx context.Context, tx transaction, intent linuxIntent) error {
+	if tx.Mode == modeApply && intent.Prior == nil {
+		// A fresh install captured no manager unit. Its rollback removes the
+		// candidate unit before daemon-reload, so asking systemd to disable that
+		// now-absent unit fails on supported distributions. Verify the exact
+		// captured absence instead of weakening the general enable/disable API.
+		status, err := d.inspectService(ctx)
+		if err != nil || status.LoadState != "not-found" || !linuxStatusStopped(status) {
+			return errors.Join(errors.New("fresh rollback did not restore the captured absent manager unit"), err)
+		}
+		return nil
+	}
+	enabled := d.hooks.enabled
+	if enabled == nil {
+		enabled = setLinuxManagerEnabled
+	}
+	return enabled(ctx, intent.ServiceWasEnabled)
 }
 
 func rollbackIntent(intent linuxIntent) linuxIntent {
@@ -1068,7 +1073,7 @@ func (d *linuxInstallDriver) Finish(ctx context.Context, tx transaction) error {
 func (d *linuxInstallDriver) writeTerminalResult(ctx context.Context, body []byte) error {
 	info, err := d.operation.Lstat(linuxResultName)
 	if errors.Is(err, os.ErrNotExist) {
-		return writeLinuxProtectedState(ctx, d.operation, linuxResultName, body, nil)
+		return writeLinuxProtectedState(ctx, d.operation, linuxResultName, body, nil, d.hooks.testRoot)
 	}
 	if err != nil {
 		return err
@@ -1136,12 +1141,18 @@ func (d *linuxInstallDriver) rollbackAssets(ctx context.Context, tx transaction,
 			if state.Present && d.validateUpdateTrust(ctx) != nil {
 				return errors.New("operator-controlled update trust changed to an invalid value during rollback")
 			}
+			if err := d.rebindRollbackAssetSnapshot(ctx, plan.Role, state); err != nil {
+				return err
+			}
 			continue
 		}
 		if !found && state != plan.Before {
 			return fmt.Errorf("deployment asset %s changed without recorded installer ownership", plan.Role)
 		}
 		if state == plan.Before {
+			if err := d.rebindRollbackAssetSnapshot(ctx, plan.Role, state); err != nil {
+				return err
+			}
 			continue
 		}
 		ownedIdentity := false
@@ -1216,6 +1227,19 @@ func (d *linuxInstallDriver) rollbackAssets(ctx context.Context, tx transaction,
 		_ = d.replaceAssetSnapshot(plan.Role, check)
 	}
 	return nil
+}
+
+func (d *linuxInstallDriver) rebindRollbackAssetSnapshot(ctx context.Context, role linuxAssetRole, expected linuxAssetState) error {
+	snapshot, err := inspectLinuxAsset(ctx, role)
+	if err != nil {
+		return err
+	}
+	current, err := currentLinuxAsset(ctx, snapshot)
+	if err != nil || snapshot.State() != expected || current != expected {
+		_ = snapshot.Close()
+		return errors.Join(fmt.Errorf("deployment asset %s changed while binding rollback snapshot", role), err)
+	}
+	return d.replaceAssetSnapshot(role, snapshot)
 }
 
 func latestLinuxEffect(effects []linuxNativeEffect, role linuxAssetRole) (linuxAssetState, linuxAssetState, bool) {

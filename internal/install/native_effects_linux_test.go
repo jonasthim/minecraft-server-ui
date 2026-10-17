@@ -246,3 +246,63 @@ func TestRollbackPriorManagerUsesCapturedSupersededReceiptSize(t *testing.T) {
 		t.Fatalf("rollback manager expectation=%+v captured receipt asset=%+v", expected, capturedManager)
 	}
 }
+
+func TestRollbackAssetsRebindsSnapshotsForPriorInventoryRestoration(t *testing.T) {
+	base := t.TempDir()
+	assetRoot := filepath.Join(base, "assets")
+	if err := os.Mkdir(assetRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	paths := make(map[linuxAssetRole]string, len(fixedLinuxAssets))
+	for _, spec := range fixedLinuxAssets {
+		paths[spec.Role] = filepath.Join(assetRoot, string(spec.Role), filepath.Base(spec.Path))
+	}
+	previous := linuxAssetTestPolicy
+	linuxAssetTestPolicy = &linuxAssetTestPolicyConfig{root: assetRoot, uid: uint32(os.Geteuid()), paths: paths}
+	t.Cleanup(func() { linuxAssetTestPolicy = previous })
+
+	operationPath := filepath.Join(base, "operation")
+	if err := os.Mkdir(operationPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := os.OpenRoot(operationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Close()
+	statePath := filepath.Join(base, "state")
+	if err := os.Mkdir(statePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot, err := os.OpenRoot(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateRoot.Close()
+	intent, tx := retainedLinuxApplyFixture()
+	tx.Phase = phaseRollingBack
+	for i := range intent.Assets {
+		intent.Assets[i].Before = linuxAssetState{}
+		intent.PriorInventory.Assets[i].State = linuxAssetState{}
+	}
+	d := &linuxInstallDriver{state: stateRoot, operation: operation, intent: &intent, tx: &tx, assets: make(map[linuxAssetRole]*linuxAssetSnapshot), hooks: linuxNativeHooks{testRoot: true}}
+	if err := d.writeInitialEffects(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.rollbackAssets(context.Background(), tx, intent); err != nil {
+		t.Fatalf("rollback of unchanged captured assets: %v", err)
+	}
+	for _, plan := range intent.Assets {
+		snapshot := d.assets[plan.Role]
+		if snapshot == nil {
+			t.Fatalf("independent rollback did not retain current snapshot for %s", plan.Role)
+		}
+		current, err := currentLinuxAsset(context.Background(), snapshot)
+		if err != nil || current != plan.Before {
+			t.Fatalf("retained snapshot for %s has state %+v, want %+v: %v", plan.Role, current, plan.Before, err)
+		}
+	}
+	if err := d.restorePriorInventory(context.Background(), tx, intent); err == nil || err.Error() != "Linux inventory is not the exact operation image being rolled back" {
+		t.Fatalf("prior inventory restore did not advance to its expected inventory CAS: %v", err)
+	}
+}
