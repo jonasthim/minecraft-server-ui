@@ -16,13 +16,35 @@ The following pure checks passed:
 
 - `python3 -m py_compile .github/scripts/linux-installer-failure-overlay.py .github/scripts/linux-installer-failure-overlay_test.py deploy/qualification/linux_installer.py deploy/qualification/linux_installer_test.py deploy/qualification/linux_installer_diagnostics.py deploy/qualification/linux_installer_diagnostics_test.py`
 - `python3 .github/scripts/linux-installer-failure-overlay_test.py` — 2 tests passed
-- `python3 deploy/qualification/linux_installer_test.py` — 10 tests passed
+- `python3 deploy/qualification/linux_installer_test.py` — 12 tests passed after adding the bounded command-failure diagnostic coverage
 - `python3 deploy/qualification/linux_installer_diagnostics_test.py` — 1 scrubber test passed
 - `/home/thim/.local/go/bin/go test ./cmd/qualify-installer`
 - `/home/thim/.local/go/bin/go vet ./cmd/qualify-installer`
 - `GOFLAGS=-buildvcs=false /home/thim/.local/go/bin/go test ./release/candidate`
+- `/home/thim/.local/go/bin/go test ./cmd/qualify-installer` after adding the Windows `.exe` path regression
 - `bash -n deploy/qualification/linux-installer.sh`
 - Python YAML parse of `.github/workflows/linux-installer.yml`
 - `git diff --check` for assigned files
 
-No host service, account, firewall, manager, updater, or game command was run locally. The workflow has not yet been dispatched, so this report makes no native Ubuntu lifecycle acceptance claim. The fixture unit and marker are only process-lifetime and persistence checks, not a Minecraft support claim. The ordinary updater coexistence case is configured as its own native matrix scenario; local checks only validate the bounded harness grammar and workflow wiring.
+## First dispatched run
+
+Workflow run `39060088701` passed both native input build and upload jobs, then
+failed in `Produce ephemeral signed Linux installer fixtures` before any
+installer lifecycle job ran. The failure was a producer path mismatch: the
+workflow builds Windows inputs as `manager.exe`, `updater.exe`, and
+`bootstrap.exe`, while the producer expected extensionless filenames. The
+producer now appends `.exe` for Windows input paths. Tests cover acceptance of
+the workflow-shaped Windows receipt layout and refusal when only an
+extensionless substitute exists.
+
+The integrator replayed the complete corrected producer with both native input
+artifacts from that run. It successfully produced all three authenticated
+disposable candidates locally. This replay changes only temporary package
+outputs and supplies no installed-service acceptance evidence.
+
+No host service, account, firewall, manager, updater, or game command was run
+locally. The first dispatched run did not execute native installer lifecycle
+tests and therefore makes no Ubuntu acceptance claim. The fixture unit and
+marker are only process-lifetime and persistence checks, not a Minecraft
+support claim. The ordinary updater coexistence case is configured as its own
+native matrix scenario; the first run did not reach it.

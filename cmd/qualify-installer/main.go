@@ -142,6 +142,9 @@ func produce(ctx context.Context, o options, out io.Writer) (err error) {
 }
 
 func inputPath(root, platform, version, name string) string {
+	if platform == "windows" {
+		name += ".exe"
+	}
 	return filepath.Join(root, platform, version, name)
 }
 
