@@ -2,6 +2,7 @@ package selfupdate
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"github.com/jonasthim/minecraft-server-ui/internal/backup"
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
@@ -14,6 +15,55 @@ import (
 	"testing"
 	"time"
 )
+
+func TestReadOnlyProbesPreserveSpecialCharacterDatabaseAndRejectMissingFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "schema # & % probe")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "manager.db")
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, createErr := database.Exec(`CREATE TABLE goose_db_version(id INTEGER PRIMARY KEY,version_id INTEGER,is_applied INTEGER);
+INSERT INTO goose_db_version VALUES(1,42,1);
+CREATE TABLE users(id INTEGER PRIMARY KEY,role TEXT,disabled INTEGER);
+INSERT INTO users VALUES(1,'admin',0),(2,'viewer',0),(3,'admin',1)`)
+	closeErr := database.Close()
+	if createErr != nil || closeErr != nil {
+		t.Fatalf("create fixture: %v; close: %v", createErr, closeErr)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadOnlySchema(t.Context(), path); err != nil || got != 42 {
+		t.Fatalf("existing schema=%d error=%v", got, err)
+	}
+	for _, tc := range []struct {
+		id   int64
+		want bool
+	}{{1, true}, {2, false}, {3, false}, {4, false}} {
+		if got, err := ReadOnlyActorAuthorized(t.Context(), path, tc.id); err != nil || got != tc.want {
+			t.Fatalf("actor %d authorization=%v want=%v error=%v", tc.id, got, tc.want, err)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("read-only probes changed database: %v", err)
+	}
+	missing := filepath.Join(dir, "missing.db")
+	if _, err := ReadOnlySchema(t.Context(), missing); err == nil {
+		t.Fatal("schema probe accepted missing file")
+	}
+	if _, err := ReadOnlyActorAuthorized(t.Context(), missing, 1); err == nil {
+		t.Fatal("actor probe accepted missing file")
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("probe created missing database: %v", err)
+	}
+}
 
 func putChallenge(t *testing.T, dir string) Challenge {
 	t.Helper()

@@ -215,7 +215,9 @@ func copyVerified(ctx context.Context, source *os.Root, from string, destination
 	if err := writeFile(ctx, destination, to, f, info.Size(), expected.SHA256); err != nil {
 		return err
 	}
-	file, err := destination.Open(to)
+	// FlushFileBuffers requires a writable handle on Windows. Preserve the
+	// permission/flush/close error fence after writing verified bytes.
+	file, err := destination.OpenFile(to, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}

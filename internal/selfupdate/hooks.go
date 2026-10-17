@@ -16,7 +16,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -186,8 +185,7 @@ func ReadOnlySchema(ctx context.Context, path string) (int64, error) {
 	if !info.Mode().IsRegular() {
 		return 0, errors.New("unsafe manager database")
 	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
-	database, err := sql.Open("sqlite", u.String()+"?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(1000)")
+	database, err := sql.Open("sqlite", db.FileURI(path)+"?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(1000)")
 	if err != nil {
 		return 0, err
 	}
@@ -342,8 +340,7 @@ func ReadOnlyActorAuthorized(ctx context.Context, path string, id int64) (bool, 
 	if id < 1 {
 		return false, errors.New("native update actor is missing")
 	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
-	database, err := sql.Open("sqlite", u.String()+"?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(1000)")
+	database, err := sql.Open("sqlite", db.FileURI(path)+"?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(1000)")
 	if err != nil {
 		return false, err
 	}

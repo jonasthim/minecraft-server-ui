@@ -64,7 +64,15 @@ func sameWorkingDirectory(_ string, id domain.ProcessIdentity) bool {
 	return filepath.IsAbs(id.WorkingDir)
 }
 func equalExecutable(a, b string) bool {
-	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	// The OS image name can retain an 8.3 alias (e.g. RUNNER~1). Resolve
+	// both existing bindings through the filesystem before comparing complete
+	// paths. Failure here is a live metadata mismatch, never proof of PID exit.
+	canonicalA, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		return false
+	}
+	canonicalB, err := filepath.EvalSymlinks(b)
+	return err == nil && strings.EqualFold(canonicalA, canonicalB)
 }
 func lockState(path string) (func(), error) {
 	f, err := openPrivate(path, os.O_CREATE|os.O_RDWR, 0600)

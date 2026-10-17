@@ -6,6 +6,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"net/http"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -60,10 +61,10 @@ func TestFreshAdministratorRoleIsReadFromDB(t *testing.T) {
 
 func TestStageStatusAndRetryRecoverPublishedReceiptWithoutNetworkOrActivation(t *testing.T) {
 	ctx := context.Background()
-	archive := archiveFixture(t, "linux", []string{"minecraft-ui", "LICENSE", "THIRD_PARTY_NOTICES.txt"})
-	trust, b, sig := stageFixture(t, "linux", archive)
+	archive := archiveFixture(t, runtime.GOOS, []string{binaryName(runtime.GOOS), "LICENSE", "THIRD_PARTY_NOTICES.txt"})
+	trust, b, sig := stageFixture(t, runtime.GOOS, archive)
 	dir := t.TempDir()
-	stager := Stager{Dir: dir, Trust: trust, CurrentVersion: "v1.2.2", Schema: 16, OS: "linux", Arch: "amd64", Now: func() time.Time { return fixtureNow }}
+	stager := Stager{Dir: dir, Trust: trust, CurrentVersion: "v1.2.2", Schema: 16, OS: runtime.GOOS, Arch: runtime.GOARCH, Now: func() time.Time { return fixtureNow }}
 	stage, err := stager.Stage(ctx, "v1.2.3", b, sig, bytes.NewReader(archive))
 	if err != nil {
 		t.Fatal(err)

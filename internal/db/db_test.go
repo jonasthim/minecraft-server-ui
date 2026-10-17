@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
-	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,7 +12,7 @@ import (
 
 func TestOpenMigratesAndPersists(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "a & b", "manager.db")
+	path := filepath.Join(t.TempDir(), "a # & % b", "manager.db")
 	database, err := Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
@@ -137,8 +136,7 @@ func TestDiskConnectorRefusesIncorrectActualSettings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "settings.db")
-			uri := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
-			database, err := open(t.Context(), uri.String()+"?_pragma="+tc.pragmas, true)
+			database, err := open(t.Context(), FileURI(path)+"?_pragma="+tc.pragmas, true)
 			if database != nil {
 				database.Close()
 				t.Fatal("unexpected noncompliant database returned")
@@ -147,6 +145,18 @@ func TestDiskConnectorRefusesIncorrectActualSettings(t *testing.T) {
 				t.Fatalf("wrong %s setting was not refused: %v", tc.name, err)
 			}
 		})
+	}
+}
+
+func TestFileURIKeepsWindowsDriveInPathAndEscapesMetacharacters(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{
+		{"C:/Users/Runner/my # & %/manager.db", "file:///C:/Users/Runner/my%20%23%20&%20%25/manager.db"},
+		{"D:/question?name/manager.db", "file:///D:/question%3Fname/manager.db"},
+		{"/var/lib/my # & %/manager.db", "file:///var/lib/my%20%23%20&%20%25/manager.db"},
+	} {
+		if got := FileURI(tc.path); got != tc.want {
+			t.Errorf("FileURI(%q)=%q, want %q", tc.path, got, tc.want)
+		}
 	}
 }
 func TestMemoryOpeningRetainsMemoryJournalAndSingleConnection(t *testing.T) {

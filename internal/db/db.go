@@ -30,8 +30,7 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
 	// URL encoding preserves paths containing #, ?, &, spaces and Windows drives.
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
-	database, err := open(ctx, u.String()+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)", true)
+	database, err := open(ctx, FileURI(absolute)+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)", true)
 	if err != nil {
 		return nil, err
 	}
@@ -42,6 +41,20 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 		}
 	}
 	return database, nil
+}
+
+// FileURI encodes an absolute filesystem path for use as a SQLite file URI.
+// Callers retain responsibility for path validation and connection options.
+func FileURI(path string) string {
+	path = filepath.ToSlash(path)
+	// Without the leading slash net/url renders C:/... as file://C:/...,
+	// making the drive an authority, which SQLite rejects. SQLite recognizes
+	// /C:/... as an absolute Windows drive path.
+	if len(path) >= 3 && path[0] != '/' && path[1] == ':' && path[2] == '/' {
+		path = "/" + path
+	}
+	u := url.URL{Scheme: "file", Path: path}
+	return u.String()
 }
 func OpenMemory(ctx context.Context) (*sql.DB, error) {
 	return open(ctx, ":memory:?_pragma=foreign_keys(ON)", false)

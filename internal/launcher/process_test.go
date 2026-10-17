@@ -87,6 +87,11 @@ func launchHelper(t *testing.T, mode string, eof bool) (InstancePaths, domain.Pr
 		if err = ReadJSON(filepath.Join(p.State, "control.json"), &control); err == nil {
 			break
 		}
+		select {
+		case launchErr := <-done:
+			t.Fatalf("launcher exited before publishing control metadata: %v", launchErr)
+		default:
+		}
 		if time.Now().After(deadline) {
 			t.Fatalf("no control metadata: %v", err)
 		}
