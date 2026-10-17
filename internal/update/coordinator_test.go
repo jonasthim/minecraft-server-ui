@@ -640,112 +640,128 @@ func TestAutostartSuspensionOrderingAndUncertainFailures(t *testing.T) {
 }
 
 func TestBootRiskStartupKeepsRunningBytesAndAllowsExplicitRollbackJob(t *testing.T) {
-	f := newCoordinatorFixture(t)
-	plan := f.preview(t)
-	job, err := f.s.EnqueueApply(t.Context(), "alpha", plan.ID, true, f.actor)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if done := f.wait(t, job); done.State != domain.JobSucceeded {
-		t.Fatal(done)
-	}
-	var transaction, raw string
-	f.s.config.DB.QueryRow("SELECT id,journal_json FROM update_transactions").Scan(&transaction, &raw)
-	j, err := decodeJournal(raw, "alpha")
-	if err != nil {
-		t.Fatal(err)
-	}
-	j.BootAttempted = true
-	j.StartedIdentity = nil
-	if err = f.s.setJournalState(t.Context(), transaction, j, "boot_attempted"); err != nil {
-		t.Fatal(err)
-	}
-	// The JVM may have survived manager death; no exact returned identity was
-	// retained. Runtime/cwd similarities must never authorize a signal.
-	f.native.mu.Lock()
-	f.native.running = true
-	f.native.mu.Unlock()
-	currentConfig := []byte("motd=game-modified-after-start\n")
-	os.WriteFile(filepath.Join(f.dirs.Server, "server.properties"), currentConfig, 0600)
-	originalGeneration := j.After.Generation
-	if err = f.queue.Stop(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	replacement := jobs.New(f.s.config.DB, nil)
-	config := f.s.config
-	config.Jobs = replacement
-	config.Rollbacks = nil
-	next, err := New(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	coordinator, err := NewRollbackCoordinator(next)
-	if err != nil {
-		t.Fatal(err)
-	}
-	observed := make(chan error, 1)
-	if err = next.SetRollbackCoordinator(observingRollback{RollbackCoordinator: coordinator, result: observed}); err != nil {
-		t.Fatal(err)
-	}
-	if err = next.Register(); err != nil {
-		t.Fatal(err)
-	}
-	f.s = next
-	f.queue = replacement
-	f.guard.queue = replacement
-	f.guard.updates = next
-	if err = replacement.StartPaused(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	defer replacement.Stop(context.Background())
-	if err = next.Reconcile(t.Context()); err != nil {
-		t.Fatal("safe running hold hid administration", err)
-	}
-	if hold, err := next.StartupBlocked(t.Context(), "alpha"); err != nil || !hold {
-		t.Fatal(hold, err)
-	}
-	result, err := next.config.Instances.Reconcile(t.Context())
-	if err != nil || len(result.Deferred) != 1 {
-		t.Fatal(result, err)
-	}
-	if err = next.config.Lifecycle.VerifyRunningAfterReconcile(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	plans, err := next.config.Lifecycle.AutostartPlans(t.Context())
-	if err != nil || len(plans) != 0 {
-		t.Fatal(plans, err)
-	}
-	after, _ := next.config.Lifecycle.UpdateSnapshot(t.Context(), "alpha")
-	bytes, _ := os.ReadFile(filepath.Join(f.dirs.Server, "server.properties"))
-	f.native.mu.Lock()
-	running := f.native.running
-	f.native.mu.Unlock()
-	if after.Generation != originalGeneration || string(bytes) != string(currentConfig) || !running {
-		t.Fatal("startup rewrote held generation/configuration or signaled uncertain JVM")
-	}
-	if err = f.native.Stop(t.Context(), domain.ProcessIdentity{InstanceID: "alpha", PID: 55}); err != nil {
-		t.Fatal(err)
-	} // explicit operator stop fixture
-	rollback, err := next.PreviewRollback(t.Context(), "alpha", transaction, f.actor)
-	if err != nil {
-		t.Fatal(err)
-	}
-	queued, err := next.EnqueueRollback(t.Context(), "alpha", rollback.ID, "alpha", true, f.actor)
-	if err != nil {
-		t.Fatal("confirmed recovery unavailable after restart", err)
-	}
-	if err = replacement.Resume(); err != nil {
-		t.Fatal(err)
-	}
-	if done := f.wait(t, queued); done.State != domain.JobSucceeded {
-		t.Fatalf("separately confirmed stopped rollback failed: %+v; cause: %v", done, <-observed)
-	}
-	after, err = next.config.Lifecycle.UpdateSnapshot(t.Context(), "alpha")
-	if err != nil || after.Plan.Selection.MinecraftVersion != "1.20.1" {
-		t.Fatal(after, err)
-	}
-	if f.native.starts != 0 {
-		t.Fatal("rollback restarted game")
+	for _, state := range []string{"boot_attempted", "complete"} {
+		t.Run(state, func(t *testing.T) {
+			f := newCoordinatorFixture(t)
+			plan := f.preview(t)
+			job, err := f.s.EnqueueApply(t.Context(), "alpha", plan.ID, true, f.actor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if done := f.wait(t, job); done.State != domain.JobSucceeded {
+				t.Fatal(done)
+			}
+			var transaction, raw string
+			f.s.config.DB.QueryRow("SELECT id,journal_json FROM update_transactions").Scan(&transaction, &raw)
+			j, err := decodeJournal(raw, "alpha")
+			if err != nil {
+				t.Fatal(err)
+			}
+			j.BootAttempted = true
+			j.StartedIdentity = nil
+			if err = f.s.setJournalState(t.Context(), transaction, j, state); err != nil {
+				t.Fatal(err)
+			}
+			if state == "complete" {
+				marker := launcher.UpdateBlocker{Version: 1, InstanceID: "alpha", TransactionID: transaction, JobID: job.ID, Kind: "update"}
+				if err = launcher.WriteUpdateBlocker(t.Context(), f.data, marker); err != nil {
+					t.Fatal(err)
+				}
+				if err = launcher.WriteWorldRiskBlocker(t.Context(), f.data, marker); err != nil {
+					t.Fatal(err)
+				}
+				if err = launcher.MarkActivationPending(t.Context(), f.data, "alpha"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The JVM may have survived manager death; no exact returned identity was
+			// retained. Runtime/cwd similarities must never authorize a signal.
+			f.native.mu.Lock()
+			f.native.running = true
+			f.native.mu.Unlock()
+			currentConfig := []byte("motd=game-modified-after-start\n")
+			os.WriteFile(filepath.Join(f.dirs.Server, "server.properties"), currentConfig, 0600)
+			originalGeneration := j.After.Generation
+			if err = f.queue.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			replacement := jobs.New(f.s.config.DB, nil)
+			config := f.s.config
+			config.Jobs = replacement
+			config.Rollbacks = nil
+			next, err := New(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			coordinator, err := NewRollbackCoordinator(next)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observed := make(chan error, 1)
+			if err = next.SetRollbackCoordinator(observingRollback{RollbackCoordinator: coordinator, result: observed}); err != nil {
+				t.Fatal(err)
+			}
+			if err = next.Register(); err != nil {
+				t.Fatal(err)
+			}
+			f.s = next
+			f.queue = replacement
+			f.guard.queue = replacement
+			f.guard.updates = next
+			if err = replacement.StartPaused(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			defer replacement.Stop(context.Background())
+			if err = next.Reconcile(t.Context()); err != nil {
+				t.Fatal("safe running hold hid administration", err)
+			}
+			if hold, err := next.StartupBlocked(t.Context(), "alpha"); err != nil || !hold {
+				t.Fatal(hold, err)
+			}
+			result, err := next.config.Instances.Reconcile(t.Context())
+			if err != nil || len(result.Deferred) != 1 {
+				t.Fatal(result, err)
+			}
+			if err = next.config.Lifecycle.VerifyRunningAfterReconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			plans, err := next.config.Lifecycle.AutostartPlans(t.Context())
+			if err != nil || len(plans) != 0 {
+				t.Fatal(plans, err)
+			}
+			after, _ := next.config.Lifecycle.UpdateSnapshot(t.Context(), "alpha")
+			bytes, _ := os.ReadFile(filepath.Join(f.dirs.Server, "server.properties"))
+			f.native.mu.Lock()
+			running := f.native.running
+			f.native.mu.Unlock()
+			if after.Generation != originalGeneration || string(bytes) != string(currentConfig) || !running {
+				t.Fatal("startup rewrote held generation/configuration or signaled uncertain JVM")
+			}
+			if err = f.native.Stop(t.Context(), domain.ProcessIdentity{InstanceID: "alpha", PID: 55}); err != nil {
+				t.Fatal(err)
+			} // explicit operator stop fixture
+			rollback, err := next.PreviewRollback(t.Context(), "alpha", transaction, f.actor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			queued, err := next.EnqueueRollback(t.Context(), "alpha", rollback.ID, "alpha", true, f.actor)
+			if err != nil {
+				t.Fatal("confirmed recovery unavailable after restart", err)
+			}
+			if err = replacement.Resume(); err != nil {
+				t.Fatal(err)
+			}
+			if done := f.wait(t, queued); done.State != domain.JobSucceeded {
+				t.Fatalf("separately confirmed stopped rollback failed: %+v; cause: %v", done, <-observed)
+			}
+			after, err = next.config.Lifecycle.UpdateSnapshot(t.Context(), "alpha")
+			if err != nil || after.Plan.Selection.MinecraftVersion != "1.20.1" {
+				t.Fatal(after, err)
+			}
+			if f.native.starts != 0 {
+				t.Fatal("rollback restarted game")
+			}
+		})
 	}
 }
 
@@ -758,4 +774,117 @@ func (o observingRollback) Run(ctx context.Context, e *jobs.Execution) error {
 	err := o.RollbackCoordinator.Run(ctx, e)
 	o.result <- err
 	return err
+}
+
+func TestCoordinatorTerminalDiagnosticFailureCannotUndoCompletion(t *testing.T) {
+	f := newCoordinatorFixture(t)
+	plan := f.preview(t)
+	if _, err := f.s.config.DB.Exec(`CREATE TRIGGER fail_final_update_log BEFORE INSERT ON job_logs WHEN NEW.message LIKE 'Update committed with verified%' BEGIN SELECT RAISE(FAIL,'injected final diagnostic failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	job, err := f.s.EnqueueApply(t.Context(), "alpha", plan.ID, true, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := f.wait(t, job); done.State != domain.JobSucceeded {
+		t.Fatalf("durable completion became failure after diagnostic: %+v", done)
+	}
+	var state string
+	if err = f.s.config.DB.QueryRow("SELECT state FROM update_transactions").Scan(&state); err != nil || state != "complete" {
+		t.Fatal(state, err)
+	}
+	if err = launcher.CheckActivationReady(t.Context(), f.data, "alpha"); err != nil {
+		t.Fatal("diagnostic recreated publication blockers", err)
+	}
+}
+
+func TestCompleteBootMarkersPreserveCurrentBytesDuringComposedStartup(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		running, riskOnly bool
+	}{
+		{name: "surviving JVM", running: true},
+		{name: "stopped game changed configuration"},
+		{name: "risk marker only", riskOnly: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCoordinatorFixture(t)
+			plan := f.preview(t)
+			job, err := f.s.EnqueueApply(t.Context(), "alpha", plan.ID, true, f.actor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if done := f.wait(t, job); done.State != domain.JobSucceeded {
+				t.Fatal(done)
+			}
+			var transaction, raw string
+			if err = f.s.config.DB.QueryRow("SELECT id,journal_json FROM update_transactions").Scan(&transaction, &raw); err != nil {
+				t.Fatal(err)
+			}
+			j, err := decodeJournal(raw, "alpha")
+			if err != nil {
+				t.Fatal(err)
+			}
+			j.BootAttempted = true
+			j.StartedIdentity = nil // no exact signal authority survived
+			if err = f.s.setJournalState(t.Context(), transaction, j, "complete"); err != nil {
+				t.Fatal(err)
+			}
+			marker := launcher.UpdateBlocker{Version: 1, InstanceID: "alpha", TransactionID: transaction, JobID: job.ID, Kind: "update"}
+			if !tc.riskOnly {
+				if err = launcher.WriteUpdateBlocker(t.Context(), f.data, marker); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = launcher.WriteWorldRiskBlocker(t.Context(), f.data, marker); err != nil {
+				t.Fatal(err)
+			}
+			if err = launcher.MarkActivationPending(t.Context(), f.data, "alpha"); err != nil {
+				t.Fatal(err)
+			}
+			f.native.mu.Lock()
+			f.native.running = tc.running
+			f.native.mu.Unlock()
+			currentBytes := []byte("motd=changed-by-game-after-boot\n")
+			if err = os.WriteFile(filepath.Join(f.dirs.Server, "server.properties"), currentBytes, 0600); err != nil {
+				t.Fatal(err)
+			}
+			seals := f.sealCount
+			f.pauseRecovery(t)
+			if err = f.s.Reconcile(t.Context()); err != nil {
+				t.Fatal("safe terminal boot hold hid administration", err)
+			}
+			if hold, err := f.s.StartupBlocked(t.Context(), "alpha"); err != nil || !hold {
+				t.Fatal("terminal boot markers did not become administrative hold", hold, err)
+			}
+			result, err := f.s.config.Instances.Reconcile(t.Context())
+			if err != nil || len(result.Deferred) != 1 {
+				t.Fatal(result, err)
+			}
+			if err = f.s.config.Lifecycle.VerifyRunningAfterReconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			starts, err := f.s.config.Lifecycle.AutostartPlans(t.Context())
+			if err != nil || len(starts) != 0 {
+				t.Fatal(starts, err)
+			}
+			after, err := f.s.config.Lifecycle.UpdateSnapshot(t.Context(), "alpha")
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual, err := os.ReadFile(filepath.Join(f.dirs.Server, "server.properties"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.native.mu.Lock()
+			running := f.native.running
+			f.native.mu.Unlock()
+			if after.Generation != j.After.Generation || string(actual) != string(currentBytes) || running != tc.running || f.sealCount != seals {
+				t.Fatal("postboot recovery mutated bytes/pointers, resealed, or signaled uncertain JVM")
+			}
+			if err = f.s.CheckReady(t.Context(), "alpha"); err == nil {
+				t.Fatal("terminal SQL bypassed retained world-risk admission")
+			}
+		})
+	}
 }

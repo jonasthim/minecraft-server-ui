@@ -421,30 +421,31 @@ func (s *Service) StartForUpdateWithReceipt(ctx context.Context, e *jobs.Executi
 	}
 	if onStarted != nil {
 		if err = onStarted(ctx, started); err != nil {
-			return s.stopUnreadyUpdate(e, current.InstanceID, err)
+			return s.stopUnreadyUpdate(e, current.InstanceID, started, err)
 		}
 	}
 	if err = e.Phase(ctx, "verifying_game_readiness", 90); err != nil {
-		return s.stopUnreadyUpdate(e, current.InstanceID, err)
+		return s.stopUnreadyUpdate(e, current.InstanceID, started, err)
 	}
 	if s.control == nil {
-		return s.stopUnreadyUpdate(e, current.InstanceID, domain.E(domain.CodeUnavailable, "game readiness service unavailable"))
+		return s.stopUnreadyUpdate(e, current.InstanceID, started, domain.E(domain.CodeUnavailable, "game readiness service unavailable"))
 	}
 	if err = s.verifyReady(ctx, e, started); err != nil {
-		return s.stopUnreadyUpdate(e, current.InstanceID, err)
+		return s.stopUnreadyUpdate(e, current.InstanceID, started, err)
 	}
 	return e.Log(ctx, "Committed update generation reached acknowledged game readiness and required settings verification.")
 }
 
-// Stop only an identity freshly proven to belong to this managed instance.
-func (s *Service) stopUnreadyUpdate(e *jobs.Execution, id string, cause error) error {
+// Stop only the exact sufficiently identified process returned by this attempt.
+// A replacement JVM or an uncertain receipt leaves a read-only administrative hold.
+func (s *Service) stopUnreadyUpdate(e *jobs.Execution, id string, started domain.ProcessIdentity, cause error) error {
 	cleanup, cancel := e.CleanupContext()
 	defer cancel()
 	identity, err := s.native.Identity(cleanup, id)
 	if os.IsNotExist(err) {
 		return domain.E(domain.CodeUnavailable, "Update did not reach readiness; JVM is stopped and world recovery is required.")
 	}
-	if err == nil && identity.InstanceID == id {
+	if err == nil && started.InstanceID == id && started.PID > 0 && started.StartIdentity != "" && reflect.DeepEqual(identity, started) {
 		observation, inspectErr := s.native.Inspect(cleanup, identity)
 		if inspectErr == nil && !observation.ProcessRunning {
 			return domain.E(domain.CodeUnavailable, "Update did not reach readiness; JVM is stopped and world recovery is required.")

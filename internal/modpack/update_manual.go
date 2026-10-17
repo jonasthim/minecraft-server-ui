@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"os"
 	"reflect"
 	"time"
 
@@ -267,16 +268,10 @@ func (s *Service) StageUpdateMember(ctx context.Context, id, preview, member str
 		}
 		return nil
 	}
-	staged, err := s.stageChecked(ctx, id, actor.ID, reader, file.Size, check)
+	staged, err := s.stageChecked(ctx, id, actor.ID, reader, file.Size, func(ctx context.Context, opened *os.File, staged stage) error {
+		return verifyPackMember(ctx, opened, staged.Size, file)
+	}, check)
 	if err != nil {
-		return UpdateMemberReceipt{}, err
-	}
-	opened, err := s.openStage(ctx, id, staged)
-	if err != nil {
-		return UpdateMemberReceipt{}, err
-	}
-	defer opened.Close()
-	if err = verifyPackMember(ctx, opened, staged.Size, file); err != nil {
 		return UpdateMemberReceipt{}, err
 	}
 	if _, err = s.actor(ctx, actor.ID, true); err != nil {

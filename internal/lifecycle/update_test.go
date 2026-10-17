@@ -274,9 +274,27 @@ func TestAutostartDefersVerifiedUpdateHoldBeforeGenerationMutation(t *testing.T)
 }
 
 func TestDirectUpdateStartRequiresDurableIntentAndDoesNotMintGeneration(t *testing.T) {
-	for _, intent := range []bool{false, true} {
-		t.Run(map[bool]string{false: "missing intent", true: "intent before native"}[intent], func(t *testing.T) {
+	for _, tc := range []struct {
+		name                                           string
+		intent, replacement, receiptFailure, uncertain bool
+	}{
+		{name: "missing intent"},
+		{name: "intent before native", intent: true},
+		{name: "replacement after returned start", intent: true, replacement: true},
+		{name: "receipt persistence failure", intent: true, receiptFailure: true},
+		{name: "uncertain returned identity", intent: true, uncertain: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			s, actor, native := fixture(t)
+			original := domain.ProcessIdentity{InstanceID: "test", PID: 12, StartIdentity: "attempted-A"}
+			if tc.uncertain {
+				original.StartIdentity = ""
+			}
+			currentIdentity := original
+			if tc.replacement {
+				currentIdentity.StartIdentity = "replacement-B"
+			}
+			s.native = &updateStartIdentityNative{testNative: native, started: original, current: currentIdentity}
 			if err := s.queue.Stop(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -297,7 +315,7 @@ func TestDirectUpdateStartRequiresDurableIntentAndDoesNotMintGeneration(t *testi
 				if err != nil {
 					return err
 				}
-				if intent {
+				if tc.intent {
 					raw, _ := json.Marshal(map[string]any{"version": 1, "boot_attempted": true, "after": map[string]any{"generation": generation}})
 					if _, err = s.db.ExecContext(ctx, `INSERT INTO update_transactions(id,instance_id,preview_id,job_id,actor_id,kind,state,backup_id,journal_json,updated_at)VALUES(?,'test','preview',?,?,'update','boot_attempted','backup',?,'now')`, strings.Repeat("8", 32), current.JobID, actor.ID, string(raw)); err != nil {
 						return err
@@ -312,6 +330,9 @@ func TestDirectUpdateStartRequiresDurableIntentAndDoesNotMintGeneration(t *testi
 				}, func(ctx context.Context, id domain.ProcessIdentity) error {
 					if id.InstanceID != "test" {
 						return errors.New("start receipt differs")
+					}
+					if tc.receiptFailure {
+						return errors.New("injected receipt persistence failure")
 					}
 					return nil
 				})
@@ -339,12 +360,35 @@ func TestDirectUpdateStartRequiresDurableIntentAndDoesNotMintGeneration(t *testi
 				t.Fatal("direct update start minted another generation")
 			}
 			expected := 0
-			if intent {
+			if tc.intent {
 				expected = 1
 			}
-			if native.starts != expected || native.running {
+			wantRunning := tc.intent && (tc.replacement || tc.uncertain)
+			wantStops := 0
+			if tc.intent && !wantRunning {
+				wantStops = 1
+			}
+			if native.starts != expected || native.running != wantRunning || native.stops != wantStops {
 				t.Fatal("intent/readiness gate incorrect", native.starts, native.running)
 			}
 		})
 	}
+}
+
+// The returned attempted start and the later observed process may differ even
+// when both belong to the same managed instance.
+type updateStartIdentityNative struct {
+	*testNative
+	started, current domain.ProcessIdentity
+}
+
+func (n *updateStartIdentityNative) Start(ctx context.Context, id string, spec domain.LaunchSpec) (domain.ProcessIdentity, error) {
+	_, err := n.testNative.Start(ctx, id, spec)
+	return n.started, err
+}
+func (n *updateStartIdentityNative) Identity(context.Context, string) (domain.ProcessIdentity, error) {
+	if !n.running {
+		return domain.ProcessIdentity{}, os.ErrNotExist
+	}
+	return n.current, nil
 }

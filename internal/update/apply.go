@@ -178,8 +178,9 @@ func (s *Service) runApply(ctx context.Context, e *jobs.Execution) (result error
 	}
 	marker := launcher.UpdateBlocker{Version: 1, InstanceID: current.InstanceID, TransactionID: transaction, JobID: current.JobID, Kind: "update"}
 	admitted := false
+	finalized := false
 	defer func() {
-		if result != nil && admitted {
+		if result != nil && admitted && !finalized {
 			cleanup, cancel := e.CleanupContext()
 			defer cancel()
 			if journal.BootAttempted {
@@ -361,7 +362,11 @@ func (s *Service) runApply(ctx context.Context, e *jobs.Execution) (result error
 	if err = s.setJournalState(ctx, transaction, journal, "complete"); err != nil {
 		return err
 	}
-	return e.Log(ctx, "Update committed with verified executable, content and configuration pointers. Safety backup retained; world data was not rewound.")
+	finalized = true
+	// Durable completion cannot become a failed publication because a later
+	// diagnostic uses cancelled context or unavailable log storage.
+	_ = e.Log(ctx, "Update committed with verified executable, content and configuration pointers. Safety backup retained; world data was not rewound.")
+	return nil
 }
 func (s *Service) setJournalState(ctx context.Context, transaction string, j Journal, state string) error {
 	encoded, err := journalJSON(j)
@@ -372,8 +377,8 @@ func (s *Service) setJournalState(ctx context.Context, transaction string, j Jou
 	return err
 }
 func (s *Service) restoreNormalFiles(ctx context.Context, scope *instance.TransactionScope, id, transaction string, j Journal, forward bool) error {
-	if !forward && j.BootAttempted {
-		return conflict("automatic executable rollback forbidden after boot intent")
+	if j.BootAttempted {
+		return conflict("automatic file replay forbidden after boot intent")
 	}
 	if err := scope.WithUse(ctx, func(operation context.Context, _ instance.ScopeSnapshot) error {
 		return s.applyJournalFiles(operation, id, transaction, j, forward)

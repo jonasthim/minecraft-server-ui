@@ -228,3 +228,65 @@ No staging/commits, new dependencies, subagents, deployment, game process, EULA,
 native Windows/systemd qualification or vault writes were performed. Real
 Linux/Windows/game/client and power-loss release qualification remains absent;
 mocks, builds and inert artifact checks do not establish stable support.
+
+## Normal review fix round 1 (reviewed HEAD f58d921)
+
+All three Important findings in
+`.superpowers/sdd/2026-10-16-minecraft-server-ui/task18-normal-review.md` were
+addressed for the same reviewer's rereview. This is a worker repair submission,
+not an acceptance claim. Separately approved rollback source files and UI files
+were not edited in this round.
+
+- **I1 — exact attempted process ownership.** Every in-flight readiness/receipt
+  failure now passes the identity returned by `native.Start` to cleanup. Stop
+  requires the original instance, positive PID, nonempty start identity and full
+  equality with the fresh current identity. A replacement or uncertain identity
+  remains an observation-only administrator hold. The direct-start regression
+  now covers A returned/B current, missing proof, and receipt-persistence failure
+  with valid A, as well as original durable intent and generation checks.
+- **I2 — terminal completion and postboot recovery.** After durable `complete`,
+  the final diagnostic log is best effort and the error defer is explicitly
+  disabled. An exact surviving/recreated update or world-risk marker on a booted
+  complete row enters the existing byte-preserving administrative hold; SQL
+  completion cannot authorize file replay. Recovery checks exact marker ownership
+  before reconstruction, handles the risk-only publication edge, reasserts native
+  policy suspension, and preserves NEW pointers. `restoreNormalFiles` rejects
+  every boot-attempted journal as a second guard. Clean terminal policy-only
+  repair retains its read-only path. Regressions cover terminal log SQL failure,
+  running and stopped game-modified configuration, exact risk-only marker,
+  no reseal/materialization/start or uncertain stop, ordinary admission blocking,
+  instance/lifecycle startup deferral, actual queue resume and separately confirmed
+  rollback from both boot-attempted and complete-marker restart states. No game
+  readiness is inferred from terminal SQL or marker possession.
+- **I3 — verify before publication.** The narrow private staging seam validates
+  exact staged member bytes and destination rules before opening the fresh-admin
+  and preview-CAS publication transaction. Failed validation removes the blob and
+  reservation without publishing `pack_member_receipts`. The wrong-digest test
+  asserts zero retained stages/quota/blobs and no receipt reference, then verifies
+  successful acquisition and retained receipt on a valid retry. Ordinary staging
+  continues to use the same wrapper with no additional validator.
+
+### RED → GREEN evidence
+
+Before fixes, focused regressions failed with replacement/uncertain JVM stopped
+(I1), completed update job reported failed after final diagnostic rejection and
+complete-marker startup either refused running native state or left an orphan
+hold after replay (I2), and one retained three-byte stage after wrong digest (I3).
+The same focused regressions passed after the repairs.
+
+Final bounded checks (no repository suite repeated):
+
+```sh
+go test ./internal/update ./internal/lifecycle ./internal/modpack -run 'TestCoordinator|TestCompleteBootMarkers|TestBootRiskStartup|TestAutostartSuspension|TestDirectUpdateStart|TestTargetManualReceipt|TestJournalPublication' -count=1 -timeout=90s
+go test -race ./internal/update ./internal/lifecycle ./internal/modpack -run 'TestCoordinator|TestCompleteBootMarkers|TestBootRiskStartup|TestAutostartSuspension|TestDirectUpdateStart|TestTargetManualReceipt|TestJournalPublication' -count=1 -timeout=90s
+```
+
+Both passed. Race timings: update 8.695s, lifecycle 2.158s, modpack 2.378s.
+Scoped `git diff --check` also passed. These are deterministic local fixtures with
+injected native behavior, not Linux/Windows/game/runtime qualification.
+
+Frozen repair files: `internal/lifecycle/update.go`, `update_test.go`;
+`internal/update/apply.go`, `recovery.go`, `coordinator_test.go`;
+`internal/modpack/stage.go`, `update_manual.go`, `update_manual_test.go`; this
+report. No dependencies, migration/API contracts, staging, commits, host/native
+installation, EULA acceptance or game execution changed.

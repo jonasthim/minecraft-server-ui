@@ -46,9 +46,9 @@ func (s *Service) stageRoot(ctx context.Context, id string) (*os.Root, error) {
 
 // Caller holds service.mu. Reservations precede bytes and survive interruption.
 func (s *Service) stage(ctx context.Context, id string, actor int64, r io.Reader, size int64) (stage, error) {
-	return s.stageChecked(ctx, id, actor, r, size, nil)
+	return s.stageChecked(ctx, id, actor, r, size, nil, nil)
 }
-func (s *Service) stageChecked(ctx context.Context, id string, actor int64, r io.Reader, size int64, check func(context.Context, *sql.Tx, stage) error) (out stage, result error) {
+func (s *Service) stageChecked(ctx context.Context, id string, actor int64, r io.Reader, size int64, verify func(context.Context, *os.File, stage) error, check func(context.Context, *sql.Tx, stage) error) (out stage, result error) {
 	if size < 0 || size > MaxFileBytes {
 		return out, invalid("pack stage size exceeds bound")
 	}
@@ -106,6 +106,19 @@ func (s *Service) stageChecked(ctx context.Context, id string, actor int64, r io
 		return out, e
 	}
 	out.SHA256 = hex.EncodeToString(h.Sum(nil))
+	// Exact publisher/destination validation precedes the publication transaction.
+	// Rejection removes both the reservation and bytes without attaching a receipt.
+	if verify != nil {
+		opened, err := openChecked(root, out.ID+".blob", MaxFileBytes)
+		if err != nil {
+			return out, err
+		}
+		err = verify(ctx, opened, out)
+		err = errors.Join(err, opened.Close())
+		if err != nil {
+			return out, err
+		}
+	}
 	if check == nil {
 		if _, e = s.db.ExecContext(ctx, "UPDATE modpack_stages SET sha256=? WHERE id=?", out.SHA256, out.ID); e != nil {
 			return out, e

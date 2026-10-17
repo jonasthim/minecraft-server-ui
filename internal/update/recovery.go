@@ -64,7 +64,8 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		}
 	}
 	// Independent blockers without a matching active row remain blocking. Terminal
-	// rows interrupted during marker cleanup may be safely sealed and cleared.
+	// preboot rows interrupted during marker cleanup may be repaired; booted rows
+	// retain current bytes and enter a read-only administrative hold.
 	rows, err = s.config.DB.QueryContext(ctx, "SELECT id FROM instances ORDER BY id")
 	if err != nil {
 		return errors.Join(append(failures, err)...)
@@ -102,7 +103,18 @@ func (s *Service) Reconcile(ctx context.Context) error {
 				continue
 			}
 			var successor string
-			if e = s.config.DB.QueryRowContext(ctx, "SELECT coalesce(superseded_by,'') FROM update_transactions WHERE id=? AND instance_id=?", risk.TransactionID, id).Scan(&successor); e != nil || successor == "" {
+			var owner recoveryTransaction
+			owner.id, owner.instance = risk.TransactionID, id
+			if e = s.config.DB.QueryRowContext(ctx, "SELECT kind,state,job_id,actor_id,journal_json,coalesce(superseded_by,'') FROM update_transactions WHERE id=? AND instance_id=?", risk.TransactionID, id).Scan(&owner.kind, &owner.state, &owner.job, &owner.actor, &owner.raw, &successor); e != nil {
+				failures = append(failures, conflict("orphan world-risk marker requires repair"))
+				continue
+			}
+			if successor == "" {
+				if owner.kind != "update" || owner.state == "rolled_back" || owner.state == "superseded" || risk != (launcher.UpdateBlocker{Version: 1, InstanceID: id, TransactionID: owner.id, JobID: owner.job, Kind: "update"}) {
+					failures = append(failures, conflict("world-risk owner is not an exact attempted update"))
+				} else if e = s.reconcileNormal(ctx, owner); e != nil {
+					failures = append(failures, e)
+				}
 				continue
 			}
 			var kind, state, raw string
@@ -152,14 +164,31 @@ func (s *Service) reconcileNormal(ctx context.Context, row recoveryTransaction) 
 		return err
 	}
 	marker := launcher.UpdateBlocker{Version: 1, InstanceID: row.instance, TransactionID: row.id, JobID: row.job, Kind: "update"}
-	// A persisted boot intent is sufficient even if the crash preceded native.Start
-	// or independent risk-marker publication. Recovery never guesses world age.
-	if j.BootAttempted && row.state != "complete" {
+	updateMarker, updatePresent, err := launcher.ReadUpdateBlocker(ctx, data, row.instance)
+	if err != nil {
+		return err
+	}
+	riskMarker, riskPresent, err := launcher.ReadWorldRiskBlocker(ctx, data, row.instance)
+	if err != nil {
+		return err
+	}
+	if updatePresent && updateMarker != marker || riskPresent && riskMarker != marker {
+		return conflict("update recovery found foreign blocker ownership")
+	}
+	if riskPresent && !j.BootAttempted {
+		return conflict("world-risk marker lacks matching durable boot intent")
+	}
+	// Boot intent remains decisive after terminal SQL if a blocker survived or
+	// was recreated. Completion never authorizes replay of game-modified bytes.
+	// A clean terminal row may only repair native policy through the read-only
+	// shortcut below; it does not manufacture world-risk after known completion.
+	if j.BootAttempted && (row.state != "complete" || updatePresent || riskPresent) {
+		if row.state == "rolled_back" {
+			return conflict("rolled-back update has inconsistent boot intent")
+		}
 		if err = launcher.WriteWorldRiskBlocker(ctx, data, marker); err != nil {
 			return err
 		}
-	}
-	if j.BootAttempted && row.state != "complete" {
 		// A game may have changed world/addon/config bytes. No postboot replay,
 		// materialization or reseal is allowed, including with a surviving JVM.
 		if err = s.checkOrdinaryReady(ctx, row.instance); err != nil {

@@ -60,6 +60,29 @@ func TestTargetManualReceiptUsesNewTupleAndExactPublisherHashes(t *testing.T) {
 	if _, err := f.s.StageUpdateMember(t.Context(), "alpha", id, "config/a.cfg", strings.NewReader("bad"), packAdmin); err == nil {
 		t.Fatal("wrong target member hash accepted")
 	}
+	var count, size int64
+	if err := f.database.QueryRow("SELECT count(*), coalesce(sum(size),0) FROM modpack_stages").Scan(&count, &size); err != nil || count != 0 || size != 0 {
+		t.Fatalf("rejected member retained quota: count=%d bytes=%d err=%v", count, size, err)
+	}
+	var rejectedEnvelope string
+	if err := f.database.QueryRow("SELECT private_json FROM update_previews WHERE id=?", id).Scan(&rejectedEnvelope); err != nil || strings.Contains(rejectedEnvelope, "pack_member_receipts") {
+		t.Fatal("rejected member published a private receipt", rejectedEnvelope, err)
+	}
+	root, err := f.s.stageRoot(t.Context(), "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := root.Open(".")
+	if err != nil {
+		root.Close()
+		t.Fatal(err)
+	}
+	entries, err := files.ReadDir(-1)
+	files.Close()
+	root.Close()
+	if err != nil || len(entries) != 0 {
+		t.Fatal("rejected member retained staged bytes", entries, err)
+	}
 	receipt, err := f.s.StageUpdateMember(t.Context(), "alpha", id, "config/a.cfg", strings.NewReader("jar"), packAdmin)
 	if err != nil || receipt.Path != "config/a.cfg" || receipt.SHA256 != digest([]byte("jar")) {
 		t.Fatal(receipt, err)
@@ -79,7 +102,7 @@ func TestTargetManualReceiptUsesNewTupleAndExactPublisherHashes(t *testing.T) {
 	if err != nil || len(next.Preview.Manual) > 0 || len(next.Preview.Blockers) > 0 {
 		t.Fatal(next.Preview, err)
 	}
-	var count int
+	count = 0
 	f.database.QueryRow("SELECT count(*) FROM modpack_previews").Scan(&count)
 	if count != 0 {
 		t.Fatal("target preview entered ordinary apply table")
