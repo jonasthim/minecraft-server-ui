@@ -48,7 +48,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $compilerPath = (Get-Command gcc -CommandType Application -ErrorAction Stop).Source
+          # Get-Command can return multiple applications; select one in PATH order.
+          $compilerPath = @(Get-Command gcc -CommandType Application -All -ErrorAction Stop)[0].Source
           & $compilerPath --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $target = & $compilerPath -dumpmachine
