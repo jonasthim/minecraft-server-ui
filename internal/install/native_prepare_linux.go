@@ -48,6 +48,15 @@ func (d *linuxInstallDriver) Prepare(ctx context.Context, operation mode, option
 	} else if options != (ApplyOptions{}) {
 		return nil, nil, errors.New("uninstall does not accept apply options")
 	}
+	if operation == modeUninstall {
+		gamesStopped := d.hooks.gamesStopped
+		if gamesStopped == nil {
+			gamesStopped = requireLinuxGamesStopped
+		}
+		if err := gamesStopped(ctx); err != nil {
+			return nil, nil, fmt.Errorf("managed game services must be conclusively stopped before uninstall: %w", err)
+		}
+	}
 
 	service, err := d.inspectService(ctx)
 	if err != nil {

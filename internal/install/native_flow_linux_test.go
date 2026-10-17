@@ -348,6 +348,60 @@ func (i *nativeFlowInputs) OpenMember(ctx context.Context, name string) (*os.Fil
 }
 func (i *nativeFlowInputs) Close() error { i.closed = true; return nil }
 
+func TestPrepareRefusesActiveGameBeforeCreatingUninstallOperation(t *testing.T) {
+	ctx := withLinuxServiceTestHooks(context.Background(), linuxServiceTestHooks{
+		run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			t.Fatalf("unexpected host service command in active-game preflight fixture: %s %v", name, args)
+			return nil, errors.New("unexpected host service command")
+		},
+	})
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	dataRoot := filepath.Join(t.TempDir(), "manager-data")
+	if err := os.Mkdir(stateRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	assetRoot := filepath.Join(t.TempDir(), "assets")
+	if err := os.Mkdir(assetRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	assetPaths := make(map[linuxAssetRole]string, len(fixedLinuxAssets))
+	for _, spec := range fixedLinuxAssets {
+		assetPaths[spec.Role] = filepath.Join(assetRoot, string(spec.Role), filepath.Base(spec.Path))
+	}
+	priorAssetPolicy := linuxAssetTestPolicy
+	linuxAssetTestPolicy = &linuxAssetTestPolicyConfig{root: assetRoot, uid: uint32(os.Geteuid()), paths: assetPaths}
+	t.Cleanup(func() { linuxAssetTestPolicy = priorAssetPolicy })
+	session := &nativeFlowSession{statePath: stateRoot}
+	gamesChecks, serviceChecks, accountChecks := 0, 0, 0
+	driver, err := newLinuxInstallDriverWithSession(ctx, session, linuxNativeHooks{
+		stateRoot: stateRoot, dataRoot: dataRoot, testRoot: true,
+		gamesStopped: func(context.Context) error { gamesChecks++; return errors.New("managed game is active") },
+		service:      func(context.Context) (linuxServiceStatus, error) { serviceChecks++; return linuxServiceStatus{}, nil },
+		account: func(context.Context) (linuxPrincipal, bool, error) {
+			accountChecks++
+			return linuxPrincipal{}, false, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Close()
+	tx, unchanged, err := driver.Prepare(ctx, modeUninstall, ApplyOptions{})
+	if err == nil || !strings.Contains(err.Error(), "active") || tx != nil || unchanged != nil {
+		t.Fatalf("active-game uninstall preflight = tx:%+v unchanged:%+v err:%v", tx, unchanged, err)
+	}
+	if gamesChecks != 1 || serviceChecks != 0 || accountChecks != 0 || session.snapshots != 0 {
+		t.Fatalf("preflight ordering: game=%d service=%d account=%d updater=%d", gamesChecks, serviceChecks, accountChecks, session.snapshots)
+	}
+	entries, err := os.ReadDir(stateRoot)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("refused uninstall left protected state: entries=%v err=%v", entries, err)
+	}
+	if _, err := os.Lstat(dataRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused uninstall touched manager data: %v", err)
+	}
+}
+
 func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 	ctx := withLinuxServiceTestHooks(context.Background(), linuxServiceTestHooks{
 		run: func(_ context.Context, name string, args ...string) ([]byte, error) {
