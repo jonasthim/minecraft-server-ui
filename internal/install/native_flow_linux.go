@@ -273,9 +273,6 @@ func (d *linuxInstallDriver) Replace(ctx context.Context, tx transaction) error 
 		return err
 	}
 	for _, plan := range intent.Assets {
-		if sameLinuxAssetContent(plan.Before, plan.After) {
-			continue
-		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -288,6 +285,12 @@ func (d *linuxInstallDriver) Replace(ctx context.Context, tx transaction) error 
 			return fmt.Errorf("deployment asset %s changed before publication", plan.Role)
 		}
 		_ = d.replaceAssetSnapshot(plan.Role, snapshot)
+		// A freshly launched worker has no parent-process asset handles. Bind
+		// unchanged roles too, after creating any missing parent directories;
+		// Publish validates all roles, including absent optional updater trust.
+		if sameLinuxAssetContent(plan.Before, plan.After) {
+			continue
+		}
 		if plan.After.Present {
 			source, err := openLinuxAssetSource(ctx, d.inputs, plan.Role, intent.BootstrapTrust, d.operation, intent)
 			if err != nil {

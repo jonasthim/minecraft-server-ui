@@ -453,6 +453,15 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 	if err := d2.Replace(context.Background(), *loaded); err != nil {
 		t.Fatal(err)
 	}
+	// The independent worker starts with no asset snapshots. Replacement must
+	// bind every role, including absent optional trust whose parent was created
+	// during this operation, so publication can validate the entire inventory.
+	for _, plan := range d2.intent.Assets {
+		current, err := currentLinuxAsset(context.Background(), d2.assets[plan.Role])
+		if err != nil || !matchesPlannedLinuxAsset(current, plan.After) {
+			t.Fatalf("publication snapshot for %s: state=%+v err=%v", plan.Role, current, err)
+		}
+	}
 	// A persisted marker means updater reconciliation completed before native
 	// publication. Rollback must not take a fresh updater snapshot against the
 	// candidate manager image with the prior receipt still present.

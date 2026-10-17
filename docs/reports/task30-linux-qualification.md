@@ -88,3 +88,12 @@ ID and four exact authored entry-failure categories. Unknown fields, duplicate
 JSON, near-match messages and malformed journal objects are rejected. Mixed
 optional result fields sort safely. Nine diagnostic and twelve harness checks
 pass; the integrator's focused staged-executable race regression also passes.
+
+Run `39061902567` supplied the missing worker result: every scenario failed at
+`publish`. The integrator reproduced a fresh-worker snapshot gap: `Replace`
+skipped unchanged roles before retaining their handles, so `Publish` could not
+validate absent optional update trust. Every role is now inspected against its
+exact captured preimage and retained before an unchanged-content skip. The
+handoff composition regression failed before this change and passes afterward;
+package race/vet and independent native review also pass. A hosted rerun is
+required to establish the correction's effect on the full lifecycle.
