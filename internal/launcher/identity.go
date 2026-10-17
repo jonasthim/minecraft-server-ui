@@ -72,7 +72,7 @@ func ProbeIdentityContext(ctx context.Context, id domain.ProcessIdentity) (bool,
 		return false, nil
 	}
 	if !equalExecutable(exe, id.Executable) || !sameWorkingDirectory(cwd, id) {
-		return false, fmt.Errorf("live process metadata does not match")
+		return false, processIdentityStageFailure(processIdentityProcessMetadata, fmt.Errorf("live process metadata does not match"))
 	}
 	return true, nil
 }

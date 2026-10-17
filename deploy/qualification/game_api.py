@@ -411,6 +411,42 @@ class API:
             "Native stop diagnostic: control_response_lost_forced_termination.": "stop_control_response_lost_forced_termination",
             "Native stop diagnostic: control_response_lost_watchdog_failure.": "stop_control_response_lost_watchdog_failure",
             "Native stop diagnostic: control_response_lost_unclean_exit.": "stop_control_response_lost_unclean_exit",
+            "Backup operation failed; inspect saving/restore recovery state before retrying. Local data may be partial.": "backup_internal_failure",
+            "backup execution unavailable": "backup_execution_unavailable",
+            "backup cannot verify JVM state": "backup_process_state_unavailable",
+            "backup cannot verify JVM identity": "backup_process_identity_unavailable",
+            "online backup console unavailable": "backup_console_unavailable",
+            "managed JVM identity is unavailable": "backup_process_identity_unavailable",
+            "managed JVM is not running with a healthy control channel": "backup_console_unhealthy",
+            "managed JVM generation changed during command verification": "backup_process_generation_changed",
+            "managed JVM is no longer ready for command verification": "backup_process_not_ready",
+            "active backup job authority unavailable": "backup_job_authority_unavailable",
+            "backup requester unavailable": "backup_requester_unavailable",
+            "active operator access required": "backup_operator_required",
+            "outstanding saving recovery blocks a new backup": "backup_saving_recovery_blocked",
+            "saving or restore recovery must complete before changing server data": "backup_recovery_blocked",
+            "restore marker requires reconciliation before changing server data": "backup_restore_reconciliation_required",
+            "saved world layout is absent, ambiguous or unsupported": "backup_world_layout_unavailable",
+            "possible credential file in world; export refused": "backup_world_credential_file",
+            "world contains an unsafe path, link, or special file": "backup_world_unsafe_path",
+            "world files changed during capture; retry or use a save-lease backup": "backup_world_changed",
+            "world exceeds export count, size, depth, or time bounds": "backup_world_limits_exceeded",
+            "unknown world layout version": "backup_world_version_unknown",
+            "world layout predates 1.12.2": "backup_world_version_unsupported",
+            "unknown server flavor": "backup_world_flavor_unknown",
+            "world data requires a local filesystem drive": "backup_world_filesystem_unsupported",
+            "world discovery is not configured": "backup_world_discovery_unavailable",
+            "backup contains unsafe, inconsistent, or corrupt data": "backup_data_invalid",
+            "choose world or full backup": "backup_kind_invalid",
+            "invalid backup trigger": "backup_trigger_invalid",
+            "console job session requires a live execution and callback": "backup_console_session_invalid",
+            "native console is unavailable": "backup_console_unavailable",
+        }
+        process_stages = {
+            "boot_identity",
+            "proc_stat", "proc_executable", "proc_working_directory",
+            "broker_path", "broker_invoke", "broker_decode", "broker_identity",
+            "process_metadata",
         }
         try:
             page = self.request("/api/v1/jobs/" + safe_id(identifier) + "/logs?after=0&limit=500")
@@ -424,7 +460,11 @@ class API:
             text = line.get("message") if isinstance(line, dict) else None
             if isinstance(text, str) and len(text) <= 8192 and text in messages:
                 codes.add(messages[text])
-            elif isinstance(text, str) and len(text) <= 32:
+            if isinstance(text, str) and len(text) <= 128:
+                match = re.fullmatch(r"Native stop process API: ([a-z_]{1,48})\.", text)
+                if match and match.group(1) in process_stages:
+                    codes.add("stop_process_api_" + match.group(1))
+            if isinstance(text, str) and len(text) <= 32:
                 match = re.fullmatch(r"Native stop OS error: ([1-9][0-9]{0,4})\.", text)
                 if match and int(match.group(1)) <= 65535:
                     codes.add("stop_native_os_error_" + match.group(1))

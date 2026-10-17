@@ -17,43 +17,53 @@ import (
 )
 
 func processIdentity(pid int) (start, exe, cwd string, err error) {
+	return processIdentityUsing(pid, os.ReadFile, os.Readlink)
+}
+
+func processIdentityUsing(pid int, readFile func(string) ([]byte, error), readlink func(string) (string, error)) (start, exe, cwd string, err error) {
 	if pid <= 0 {
 		return "", "", "", fmt.Errorf("invalid PID")
 	}
-	boot, e := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	boot, e := readFile("/proc/sys/kernel/random/boot_id")
 	if e != nil {
-		return "", "", "", fmt.Errorf("boot identity: %w", e)
+		return "", "", "", processIdentityStageFailure(processIdentityBootIdentity, fmt.Errorf("boot identity: %w", e))
 	}
 	bootID := strings.TrimSpace(string(boot))
 	if len(bootID) != 36 {
-		return "", "", "", fmt.Errorf("missing boot identity")
+		return "", "", "", processIdentityStageFailure(processIdentityBootIdentity, fmt.Errorf("missing boot identity"))
 	}
 	base := "/proc/" + strconv.Itoa(pid)
-	stat, e := os.ReadFile(base + "/stat")
+	stat, e := readFile(base + "/stat")
 	if e != nil {
-		return "", "", "", e
+		return "", "", "", linuxProcessIdentityFailure(processIdentityProcStat, e)
 	}
 	end := strings.LastIndexByte(string(stat), ')')
 	if end < 0 {
-		return "", "", "", fmt.Errorf("invalid proc stat")
+		return "", "", "", processIdentityStageFailure(processIdentityProcStat, fmt.Errorf("invalid proc stat"))
 	}
 	fields := strings.Fields(string(stat[end+1:]))
 	if len(fields) < 20 || fields[0] == "Z" {
 		return "", "", "", os.ErrNotExist
 	}
 	if _, e = strconv.ParseUint(fields[19], 10, 64); e != nil {
-		return "", "", "", e
+		return "", "", "", processIdentityStageFailure(processIdentityProcStat, e)
 	}
 	start = bootID + ":" + fields[19]
-	exe, e = os.Readlink(base + "/exe")
+	exe, e = readlink(base + "/exe")
 	if e != nil {
-		return start, "", "", e
+		return start, "", "", linuxProcessIdentityFailure(processIdentityProcExecutable, e)
 	}
-	cwd, e = os.Readlink(base + "/cwd")
+	cwd, e = readlink(base + "/cwd")
 	if e != nil {
-		return start, "", "", e
+		return start, "", "", linuxProcessIdentityFailure(processIdentityProcWorkingDirectory, e)
 	}
 	return bootID + ":" + fields[19], filepath.Clean(exe), filepath.Clean(cwd), nil
+}
+func linuxProcessIdentityFailure(stage processIdentityStage, err error) error {
+	if IsMissingProcess(err) {
+		return err
+	}
+	return processIdentityStageFailure(stage, err)
 }
 func lockState(path string) (func(), error) {
 	f, err := openPrivate(path, os.O_CREATE|os.O_RDWR, 0600)
@@ -79,7 +89,9 @@ func writeStdin(f *os.File, p []byte) (int, error) {
 	}
 	return f.Write(p)
 }
-func IsMissingProcess(err error) bool { return os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) }
+func IsMissingProcess(err error) bool {
+	return os.IsNotExist(err) || errors.Is(err, syscall.ESRCH)
+}
 
 func openPrivate(path string, flags int, perm os.FileMode) (*os.File, error) {
 	f, err := os.OpenFile(path, flags|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, perm)

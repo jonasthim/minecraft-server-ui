@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -108,12 +109,35 @@ func TestInspectionBrokerFailureRechecksAndConfirmsExitedProcess(t *testing.T) {
 	if !errors.Is(err, os.ErrNotExist) || !IsMissingProcess(err) {
 		t.Fatalf("direct post-broker identity read did not prove exit: %v", err)
 	}
+	if ProcessIdentityFailureStage(err) != "" {
+		t.Fatalf("authoritative missing-process recheck received failure stage %q", ProcessIdentityFailureStage(err))
+	}
 	if reads.Load() != 2 || brokerCalls.Load() != 1 {
 		t.Fatalf("unexpected probe counts: direct_reads=%d broker_calls=%d", reads.Load(), brokerCalls.Load())
 	}
 }
 
 func TestInspectionBrokerFailurePreservesLiveOrUnknownIdentityFailure(t *testing.T) {
+	t.Run("missing broker path is not process exit", func(t *testing.T) {
+		id := domain.ProcessIdentity{
+			InstanceID: "exit-probe", PID: 123, StartIdentity: "boot:start",
+			Executable: "/var/lib/minecraft-ui/runtimes/test/bin/java",
+			WorkingDir: "/var/lib/minecraft-ui/instances/exit-probe/server",
+		}
+		pathErr := &os.PathError{Op: "open", Path: "/usr/local/lib/minecraft-ui/unitctl", Err: syscall.ENOENT}
+		brokerErr := processIdentityStageFailure(processIdentityBrokerPath, pathErr)
+		reads := 0
+		_, _, _, err := inspectIdentityUsing(context.Background(), id, func(int) (string, string, string, error) {
+			reads++
+			return id.StartIdentity, id.Executable, id.WorkingDir, nil
+		}, func(context.Context, domain.ProcessIdentity) (NativeInspection, error) {
+			return NativeInspection{}, brokerErr
+		})
+		if err == nil || !errors.Is(err, syscall.ENOENT) || IsMissingProcess(err) || reads != 2 || ProcessIdentityFailureStage(err) != "broker_path" {
+			t.Fatalf("broker path error was misclassified after live recheck: stage=%q missing=%v reads=%d err=%v", ProcessIdentityFailureStage(err), IsMissingProcess(err), reads, err)
+		}
+	})
+
 	t.Run("same live process", func(t *testing.T) {
 		cmd := startInspectionExitRaceChild(t)
 		start, _, _, err := processIdentity(cmd.Process.Pid)
@@ -134,7 +158,7 @@ func TestInspectionBrokerFailurePreservesLiveOrUnknownIdentityFailure(t *testing
 			brokerCalls.Add(1)
 			return NativeInspection{}, brokerErr
 		})
-		if !errors.Is(err, brokerErr) || IsMissingProcess(err) {
+		if !errors.Is(err, brokerErr) || IsMissingProcess(err) || ProcessIdentityFailureStage(err) != "broker_invoke" {
 			t.Fatalf("live process broker failure was ignored: %v", err)
 		}
 		if reads.Load() != 2 || brokerCalls.Load() != 1 {
@@ -159,7 +183,7 @@ func TestInspectionBrokerFailurePreservesLiveOrUnknownIdentityFailure(t *testing
 		}, func(context.Context, domain.ProcessIdentity) (NativeInspection, error) {
 			return NativeInspection{}, brokerErr
 		})
-		if !errors.Is(err, brokerErr) || IsMissingProcess(err) || calls != 2 {
+		if !errors.Is(err, brokerErr) || IsMissingProcess(err) || calls != 2 || ProcessIdentityFailureStage(err) != "broker_invoke" {
 			t.Fatalf("unknown direct recheck replaced broker failure: calls=%d error=%v", calls, err)
 		}
 	})
@@ -181,7 +205,7 @@ func TestInspectionBrokerFailurePreservesLiveOrUnknownIdentityFailure(t *testing
 		}, func(context.Context, domain.ProcessIdentity) (NativeInspection, error) {
 			return NativeInspection{}, brokerErr
 		})
-		if !errors.Is(err, brokerErr) || IsMissingProcess(err) || calls != 2 {
+		if !errors.Is(err, brokerErr) || IsMissingProcess(err) || calls != 2 || ProcessIdentityFailureStage(err) != "broker_invoke" {
 			t.Fatalf("permission failure at direct recheck replaced broker failure: calls=%d error=%v", calls, err)
 		}
 	})
@@ -224,7 +248,7 @@ func TestInspectionBrokerFailurePreservesLiveOrUnknownIdentityFailure(t *testing
 			cancel()
 			return NativeInspection{}, context.Canceled
 		})
-		if !errors.Is(err, context.Canceled) || calls != 1 {
+		if !errors.Is(err, context.Canceled) || calls != 1 || ProcessIdentityFailureStage(err) != "broker_invoke" {
 			t.Fatalf("cancellation was replaced by a new identity read: calls=%d error=%v", calls, err)
 		}
 	})
@@ -249,7 +273,7 @@ func TestInspectionBrokerFailurePreservesLiveOrUnknownIdentityFailure(t *testing
 		}, func(context.Context, domain.ProcessIdentity) (NativeInspection, error) {
 			return NativeInspection{}, brokerErr
 		})
-		if !errors.Is(err, brokerErr) || IsMissingProcess(err) || calls != 2 {
+		if !errors.Is(err, brokerErr) || IsMissingProcess(err) || calls != 2 || ProcessIdentityFailureStage(err) != "broker_invoke" {
 			t.Fatalf("canceled direct recheck replaced broker failure: calls=%d error=%v", calls, err)
 		}
 	})
@@ -275,7 +299,7 @@ func TestInspectionValidationFailureRechecksButPreservesLiveProcess(t *testing.T
 			StartIdentity: id.StartIdentity, Executable: id.Executable, WorkingDir: id.WorkingDir,
 			UserNamespace: "1:2", InvocationID: "12345678901234567890123456789012"}, nil
 	})
-	if err == nil || IsMissingProcess(err) || reads.Load() != 2 {
+	if err == nil || IsMissingProcess(err) || reads.Load() != 2 || ProcessIdentityFailureStage(err) != "broker_identity" {
 		t.Fatalf("invalid isolation proof was ignored for live process: reads=%d error=%v", reads.Load(), err)
 	}
 }

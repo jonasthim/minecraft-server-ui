@@ -36,9 +36,13 @@ func inspectIdentityUsing(ctx context.Context, id domain.ProcessIdentity, read f
 	}
 	result, e := broker(ctx, id)
 	if e != nil {
+		if ProcessIdentityFailureStage(e) == "" {
+			e = processIdentityStageFailure(processIdentityBrokerInvoke, e)
+		}
 		return reconcileInspectionFailure(ctx, id, start, exe, cwd, e, read)
 	}
 	if e = validateBrokerIdentity(id, result); e != nil {
+		e = processIdentityStageFailure(processIdentityBrokerIdentity, e)
 		return reconcileInspectionFailure(ctx, id, start, exe, cwd, e, read)
 	}
 	return result.StartIdentity, result.Executable, result.WorkingDir, nil
@@ -66,28 +70,41 @@ func reconcileInspectionFailure(ctx context.Context, id domain.ProcessIdentity, 
 }
 
 func readBrokerIdentity(ctx context.Context, id domain.ProcessIdentity) (NativeInspection, error) {
+	return readBrokerIdentityUsing(ctx, id, safeBrokerPath, func(ctx context.Context, id domain.ProcessIdentity) ([]byte, error) {
+		bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(bounded, "/usr/bin/sudo", "-n", "/usr/local/lib/minecraft-ui/unitctl", "inspect", id.InstanceID)
+		output := new(boundedInspectionOutput)
+		cmd.Stdout = output
+		cmd.Stderr = io.Discard
+		if e := cmd.Run(); e != nil {
+			return nil, fmt.Errorf("privileged instance identity inspection: %w", e)
+		}
+		return append([]byte(nil), output.Bytes()...), nil
+	})
+}
+
+func readBrokerIdentityUsing(ctx context.Context, id domain.ProcessIdentity, checkPath func(string) error, invoke func(context.Context, domain.ProcessIdentity) ([]byte, error)) (NativeInspection, error) {
 	for _, path := range []string{"/usr/local/lib/minecraft-ui/unitctl", "/usr/local/bin/minecraft-ui"} {
-		if e := safeBrokerPath(path); e != nil {
-			return NativeInspection{}, e
+		if e := checkPath(path); e != nil {
+			return NativeInspection{}, processIdentityStageFailure(processIdentityBrokerPath, e)
 		}
 	}
-	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(bounded, "/usr/bin/sudo", "-n", "/usr/local/lib/minecraft-ui/unitctl", "inspect", id.InstanceID)
-	output := new(boundedInspectionOutput)
-	cmd.Stdout = output
-	cmd.Stderr = io.Discard
-	if e := cmd.Run(); e != nil {
-		return NativeInspection{}, fmt.Errorf("privileged instance identity inspection: %w", e)
-	}
-	var result NativeInspection
-	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
-	decoder.DisallowUnknownFields()
-	if e := decoder.Decode(&result); e != nil {
+	output, e := invoke(ctx, id)
+	if e != nil {
+		if ProcessIdentityFailureStage(e) == "" {
+			e = processIdentityStageFailure(processIdentityBrokerInvoke, e)
+		}
 		return NativeInspection{}, e
 	}
+	var result NativeInspection
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	decoder.DisallowUnknownFields()
+	if e := decoder.Decode(&result); e != nil {
+		return NativeInspection{}, processIdentityStageFailure(processIdentityBrokerDecode, e)
+	}
 	if decoder.Decode(new(any)) != io.EOF {
-		return NativeInspection{}, fmt.Errorf("extra broker output")
+		return NativeInspection{}, processIdentityStageFailure(processIdentityBrokerDecode, fmt.Errorf("extra broker output"))
 	}
 	return result, nil
 }
