@@ -347,8 +347,12 @@ func (d *linuxInstallDriver) retainedInventoryOrigin(ctx context.Context, invent
 	if err := validateLinuxInventory(inventory); err != nil || inventory.Status != "retained" {
 		return empty, errors.New("retained failed-install inventory is invalid")
 	}
-	result, present, err := readLinuxInstallerResultAt(ctx, d.hooks.stateRoot, inventory.OperationID, 0)
-	if err != nil || !present || result.OperationID != inventory.OperationID || result.Outcome != OutcomeRolledBack || result.FailedStage != "" {
+	resultOwner := uint32(0)
+	if d.hooks.testRoot {
+		resultOwner = uint32(os.Geteuid())
+	}
+	result, present, err := readLinuxInstallerResultAt(ctx, d.hooks.stateRoot, inventory.OperationID, resultOwner)
+	if err != nil || !present || result.OperationID != inventory.OperationID || result.Outcome != OutcomeRolledBack || result.Image != nil || result.FailedStage != "" {
 		return empty, errors.Join(errors.New("retained failed-install result is missing or invalid"), err)
 	}
 	op, err := openLinuxOperation(ctx, d.state, inventory.OperationID)
@@ -357,7 +361,7 @@ func (d *linuxInstallDriver) retainedInventoryOrigin(ctx context.Context, invent
 	}
 	defer op.Close()
 	info, err := op.Lstat(intentFileName)
-	if err != nil || checkProtectedFile(info, 0) != nil || info.Mode().Perm() != 0600 || info.Size() <= 0 || info.Size() > maxIntentBytes {
+	if err != nil || checkProtectedFile(info, resultOwner) != nil || info.Mode().Perm() != 0600 || info.Size() <= 0 || info.Size() > maxIntentBytes {
 		return empty, errors.Join(errors.New("retained origin intent is unsafe"), err)
 	}
 	file, err := op.Open(intentFileName)
@@ -376,7 +380,14 @@ func (d *linuxInstallDriver) retainedInventoryOrigin(ctx context.Context, invent
 		return empty, errors.New("retained origin intent is malformed")
 	}
 	sum := sha256.Sum256(raw)
-	tx := transaction{Format: 1, ID: inventory.OperationID, Mode: modeApply, Phase: phaseRolledBack, Prior: fields.Prior, Target: fields.Target, IntentSHA256: hex.EncodeToString(sum[:])}
+	// The terminal journal has already been removed, and the protected result
+	// above proves that this operation rolled back. Use a valid prepared-phase
+	// transaction only as the immutable intent binding for ReadIntent and
+	// decodeLinuxIntent; the retained inventory does not preserve the original
+	// failure stage, so it cannot reconstruct a valid rolled-back transaction.
+	// This synthetic binding is never loaded, published, or treated as evidence
+	// of the operation's historical phase.
+	tx := transaction{Format: 1, ID: inventory.OperationID, Mode: modeApply, Phase: phasePrepared, Prior: fields.Prior, Target: fields.Target, IntentSHA256: hex.EncodeToString(sum[:])}
 	verified, err := d.store.ReadIntent(ctx, tx)
 	if err != nil || !bytes.Equal(raw, verified) {
 		return empty, errors.Join(errors.New("retained origin intent digest is invalid"), err)

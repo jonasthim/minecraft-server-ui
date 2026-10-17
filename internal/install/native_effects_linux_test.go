@@ -124,6 +124,120 @@ func TestRecoverPendingUpdaterReconciliationMarker(t *testing.T) {
 	}
 }
 
+func TestRetainedInventoryOriginValidatesIntentWithoutInventingTerminalStage(t *testing.T) {
+	ctx := context.Background()
+	statePath := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(statePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state, err := os.OpenRoot(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	store, err := newJournalStoreWithConfig(ctx, state, journalStoreConfig{testRoot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	intent, prepared := freshLinuxApplyFixture()
+	rawIntent, err := marshalLinuxIntent(intent, prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared.IntentSHA256, err = store.CreateIntent(ctx, prepared.ID, rawIntent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := openLinuxOperation(ctx, state, prepared.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Close()
+	principal := linuxPrincipal{UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}
+	d := &linuxInstallDriver{
+		state: state, store: store, operation: operation, intent: &intent,
+		hooks: linuxNativeHooks{stateRoot: statePath, testRoot: true},
+	}
+	if err := d.writeInitialEffects(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.setExistingPrincipal(ctx, principal); err != nil {
+		t.Fatal(err)
+	}
+	evidence, _, evidenceInfo, err := d.readEvidence(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence.AccountCreated = true
+	evidenceBody, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.writeEvidence(ctx, evidenceBody, evidenceInfo); err != nil {
+		t.Fatal(err)
+	}
+
+	rolledBack := prepared
+	rolledBack.Phase = phaseRolledBack
+	rolledBack.FailedStage = "verify"
+	terminal := terminalResult(rolledBack)
+	resultBody, err := json.Marshal(struct {
+		Outcome     Outcome `json:"outcome"`
+		OperationID string  `json:"operation_id"`
+		Image       *Image  `json:"image,omitempty"`
+		FailedStage string  `json:"failed_stage"`
+	}{terminal.Outcome, terminal.OperationID, terminal.Image, terminal.FailedStage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal.FailedStage != "" {
+		t.Fatalf("protected terminal result unexpectedly preserved worker stage: %+v", terminal)
+	}
+	if err := writeLinuxProtectedState(ctx, operation, linuxResultName, resultBody, nil, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// The terminal result intentionally omits the worker's original failure
+	// stage, so a synthetic rolled-back transaction cannot validate the
+	// immutable intent. This reproduces the retained-check regression.
+	rolledBack.IntentSHA256 = prepared.IntentSHA256
+	rolledBack.FailedStage = ""
+	if _, err := decodeLinuxIntent(rawIntent, rolledBack); err == nil {
+		t.Fatal("rolled-back binding without a persisted failure stage unexpectedly validated")
+	}
+
+	assets := make([]linuxOwnedAsset, 0, len(fixedLinuxAssets))
+	for _, spec := range fixedLinuxAssets {
+		assets = append(assets, linuxOwnedAsset{Role: spec.Role})
+	}
+	inventory := linuxInventory{
+		Format: 1, Status: "retained", OperationID: prepared.ID,
+		Image: *intent.Target, Principal: principal, Assets: assets,
+	}
+	if _, err := d.retainedInventoryOrigin(ctx, inventory); err != nil {
+		t.Fatalf("valid rolled-back first-install origin was rejected: %v", err)
+	}
+
+	unexpectedImage := *intent.Target
+	resultWithImage, err := json.Marshal(struct {
+		Outcome     Outcome `json:"outcome"`
+		OperationID string  `json:"operation_id"`
+		Image       *Image  `json:"image,omitempty"`
+		FailedStage string  `json:"failed_stage"`
+	}{OutcomeRolledBack, prepared.ID, &unexpectedImage, ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(statePath, installDirectory, prepared.ID, linuxResultName), resultWithImage, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.retainedInventoryOrigin(ctx, inventory); err == nil {
+		t.Fatal("fresh-install retained origin accepted a rolled-back result with an unexpected image")
+	}
+}
+
 func TestRollbackAssetRestoreAcceptsNewInodeWithCapturedContent(t *testing.T) {
 	snapshot, target, operation := linuxAssetFixture(t, linuxAssetManager, true)
 	before := snapshot.State()

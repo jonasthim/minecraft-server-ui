@@ -259,6 +259,29 @@ class InstallerHarnessFixtureTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "unavailable or unsafe"):
                 MODULE.ensure_fixture_instances_root(link, uid, gid)
 
+    def test_qualification_helper_is_copied_out_of_private_source_ancestry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private_source_parent = root / "runner-private"
+            private_source_parent.mkdir(mode=0o700)
+            source = private_source_parent / "qualify-selfupdate"
+            source.write_bytes(b"offline fixture executable bytes")
+            source.chmod(0o755)
+            destination_parent = root / "usr-local-lib-minecraft-ui"
+            destination_parent.mkdir(mode=0o755)
+            destination_parent.chmod(0o755)
+            destination = destination_parent / "qualification-updater"
+            uid, gid = os.getuid(), os.getgid()
+
+            staged = MODULE.install_qualification_helper(source, destination, uid, gid)
+            info = staged.lstat()
+            self.assertEqual(staged.read_bytes(), source.read_bytes())
+            self.assertEqual((info.st_uid, info.st_gid, MODULE.stat.S_IMODE(info.st_mode), info.st_nlink),
+                             (uid, gid, 0o755, 1))
+            self.assertEqual(private_source_parent.stat().st_mode & 0o777, 0o700)
+            with self.assertRaisesRegex(RuntimeError, "destination already exists"):
+                MODULE.install_qualification_helper(source, destination, uid, gid)
+
     def test_transaction_reader_retries_atomic_phase_replacement(self):
         operation_id = "a" * 64
         with tempfile.TemporaryDirectory() as directory:

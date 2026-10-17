@@ -349,6 +349,12 @@ func (i *nativeFlowInputs) OpenMember(ctx context.Context, name string) (*os.Fil
 func (i *nativeFlowInputs) Close() error { i.closed = true; return nil }
 
 func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
+	ctx := withLinuxServiceTestHooks(context.Background(), linuxServiceTestHooks{
+		run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			t.Fatalf("unexpected host service command in native temp fixture: %s %v", name, args)
+			return nil, errors.New("unexpected host service command")
+		},
+	})
 	base := t.TempDir()
 	stateRoot := filepath.Join(base, "state")
 	dataRoot := filepath.Join(base, "manager-data")
@@ -380,8 +386,12 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 	status := linuxServiceStatus{LoadState: "not-found", ActiveState: "inactive", SubState: "dead"}
 	reopened := false
 	enableCalls := 0
-	failCandidateProbe := false
+	failCandidateReady := false
+	launchPermit := false
+	rollbackRevokedPermit := false
+	candidateStarted := false
 	var firstDriver *linuxInstallDriver
+	var lastSession *nativeFlowSession
 	hooks := linuxNativeHooks{
 		stateRoot: stateRoot, dataRoot: dataRoot, testRoot: true,
 		account:    func(context.Context) (linuxPrincipal, bool, error) { return principal, accountPresent, nil },
@@ -396,13 +406,43 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 		},
 		reload: func(context.Context) error { return nil },
 		probeSchema: func(context.Context, string, linuxPrincipal, int64) error {
-			if failCandidateProbe {
-				return errors.New("synthetic unhealthy candidate capability")
+			return nil
+		},
+		ready: func(context.Context, transaction, linuxIntent) error {
+			if !candidateStarted {
+				return errors.New("candidate readiness was checked before the test start hook")
+			}
+			if failCandidateReady {
+				return errors.New("synthetic unhealthy candidate readiness")
 			}
 			return nil
 		},
+		start: func(context.Context) error {
+			candidateStarted = true
+			return nil
+		},
 		configuration: func(context.Context) error { return nil },
-		now:           func() time.Time { return time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC) },
+		grantLaunch: func(_ context.Context, tx transaction, image Image) error {
+			if tx.Target == nil || !sameImage(image, *tx.Target) {
+				t.Fatalf("candidate launch grant was not bound to target image: phase=%s image=%+v", tx.Phase, image)
+			}
+			launchPermit = true
+			return nil
+		},
+		revokeLaunch: func(_ context.Context, tx transaction) error {
+			if !launchPermit {
+				return nil
+			}
+			if tx.Phase == phaseRollingBack {
+				if lastSession == nil || !lastSession.locked || serviceActive(status) {
+					return errors.New("rollback permit revocation did not hold the stopped-manager lock")
+				}
+				rollbackRevokedPermit = true
+			}
+			launchPermit = false
+			return nil
+		},
+		now: func() time.Time { return time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC) },
 		importInputs: func(_ context.Context, _ *os.Root, options installinputs.Options) (linuxInstallerInputs, error) {
 			if options.Prepared != prepared || options.Version != "v1.2.3" || options.Trust.Repository != trust.Repository {
 				t.Fatalf("import options=%+v", options)
@@ -421,7 +461,9 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 		},
 	}
 	newDriver := func() *linuxInstallDriver {
-		d, err := newLinuxInstallDriverWithSession(context.Background(), &nativeFlowSession{statePath: stateRoot}, hooks)
+		session := &nativeFlowSession{statePath: stateRoot}
+		lastSession = session
+		d, err := newLinuxInstallDriverWithSession(ctx, session, hooks)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -429,12 +471,12 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 	}
 	d1 := newDriver()
 	firstDriver = d1
-	tx, unchanged, err := d1.Prepare(context.Background(), modeApply, ApplyOptions{Prepared: prepared, TrustFile: trustPath, Version: "v1.2.3"})
+	tx, unchanged, err := d1.Prepare(ctx, modeApply, ApplyOptions{Prepared: prepared, TrustFile: trustPath, Version: "v1.2.3"})
 	if err != nil || unchanged != nil || tx == nil {
 		_ = d1.Close()
 		t.Fatalf("Prepare tx=%+v unchanged=%+v err=%v", tx, unchanged, err)
 	}
-	if err := d1.Record(context.Background(), nil, *tx); err != nil {
+	if err := d1.Record(ctx, nil, *tx); err != nil {
 		t.Fatal(err)
 	}
 	if err := d1.Close(); err != nil {
@@ -442,21 +484,21 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 	}
 	d2 := newDriver()
 	defer d2.Close()
-	loaded, err := d2.Load(context.Background())
+	loaded, err := d2.Load(ctx)
 	if err != nil || loaded == nil || loaded.ID != tx.ID || loaded.IntentSHA256 != tx.IntentSHA256 {
 		t.Fatalf("Load tx=%+v err=%v", loaded, err)
 	}
-	if err := d2.Quiesce(context.Background(), *loaded); err != nil {
+	if err := d2.Quiesce(ctx, *loaded); err != nil {
 		t.Fatal(err)
 	}
 	if !reopened || !d2.session.(*nativeFlowSession).locked {
 		t.Fatal("Quiesce did not reopen authenticated inputs before holding the stopped-manager lock")
 	}
-	evidence, _, _, evidenceErr := d2.readEvidence(context.Background())
+	evidence, _, _, evidenceErr := d2.readEvidence(ctx)
 	if evidenceErr != nil || !evidence.UpdaterReconciled || d2.session.(*nativeFlowSession).reconciles != 1 {
 		t.Fatalf("Quiesce did not durably record updater reconciliation: evidence=%+v reconciles=%d err=%v", evidence, d2.session.(*nativeFlowSession).reconciles, evidenceErr)
 	}
-	control, err := d2.openControl(context.Background(), principal)
+	control, err := d2.openControl(ctx, principal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,14 +507,14 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 	if err != nil || len(challenge) == 0 {
 		t.Fatalf("fresh apply did not publish its challenge before start: %v", err)
 	}
-	if err := d2.Replace(context.Background(), *loaded); err != nil {
+	if err := d2.Replace(ctx, *loaded); err != nil {
 		t.Fatal(err)
 	}
 	// The independent worker starts with no asset snapshots. Replacement must
 	// bind every role, including absent optional trust whose parent was created
 	// during this operation, so publication can validate the entire inventory.
 	for _, plan := range d2.intent.Assets {
-		current, err := currentLinuxAsset(context.Background(), d2.assets[plan.Role])
+		current, err := currentLinuxAsset(ctx, d2.assets[plan.Role])
 		if err != nil || !matchesPlannedLinuxAsset(current, plan.After) {
 			t.Fatalf("publication snapshot for %s: state=%+v err=%v", plan.Role, current, err)
 		}
@@ -481,7 +523,7 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 	// publication. Rollback must not take a fresh updater snapshot against the
 	// candidate manager image with the prior receipt still present.
 	beforeSnapshots := d2.session.(*nativeFlowSession).snapshots
-	if err := d2.recoverUpdaterBeforeNativeRollback(context.Background(), *d2.intent, principal); err != nil {
+	if err := d2.recoverUpdaterBeforeNativeRollback(ctx, *d2.intent, principal); err != nil {
 		t.Fatalf("candidate image/prior receipt recovery: %v", err)
 	}
 	if d2.session.(*nativeFlowSession).snapshots != beforeSnapshots {
@@ -491,7 +533,7 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 		if spec.Member == "" {
 			continue
 		}
-		actual, err := inspectLinuxAsset(context.Background(), spec.Role)
+		actual, err := inspectLinuxAsset(ctx, spec.Role)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -511,18 +553,27 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 	if !bytes.Equal(trustBytes, d2.intent.BootstrapTrust) {
 		t.Fatal("immutable intent lost the independent bootstrap trust bytes")
 	}
-	if err := d2.Publish(context.Background(), *loaded); err != nil {
+	if err := d2.Publish(ctx, *loaded); err != nil {
 		t.Fatalf("publish candidate before simulated unhealthy verification: %v", err)
 	}
-	failCandidateProbe = true
-	if err := d2.Verify(context.Background(), *loaded); err == nil {
-		t.Fatal("synthetic unhealthy candidate unexpectedly passed verification")
+	failCandidateReady = true
+	if err := d2.Verify(ctx, *loaded); err == nil {
+		t.Fatal("synthetic unhealthy candidate unexpectedly passed readiness")
+	}
+	if !launchPermit {
+		t.Fatal("unhealthy candidate fixture did not retain its pre-readiness launch permit")
+	}
+	if !candidateStarted {
+		t.Fatal("candidate test start hook was not called before readiness")
 	}
 	rollingBack := *loaded
 	rollingBack.Phase = phaseRollingBack
 	rollingBack.FailedStage = "verify"
-	if err := d2.Rollback(context.Background(), rollingBack); err != nil {
+	if err := d2.Rollback(ctx, rollingBack); err != nil {
 		t.Fatalf("rollback of unhealthy fresh install without manager.db or prior unit: %v", err)
+	}
+	if launchPermit || !rollbackRevokedPermit {
+		t.Fatalf("rollback left a stale candidate permit: active=%v revoked=%v", launchPermit, rollbackRevokedPermit)
 	}
 	if enableCalls != 0 {
 		t.Fatalf("rollback tried to change enablement for a fresh unit that is absent: calls=%d", enableCalls)
@@ -530,7 +581,7 @@ func TestFreshNativePrepareCloseLoadQuiesceReplaceComposition(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(dataRoot, "manager.db")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unhealthy candidate fixture unexpectedly created manager.db: %v", err)
 	}
-	retained, present, err := d2.readInventory(context.Background())
+	retained, present, err := d2.readInventory(ctx)
 	if err != nil || !present || retained.Status != "retained" || retained.OperationID != loaded.ID || !sameImage(retained.Image, *loaded.Target) {
 		t.Fatalf("failed first install did not publish retained evidence: inventory=%+v present=%v err=%v", retained, present, err)
 	}

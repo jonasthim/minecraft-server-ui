@@ -579,7 +579,7 @@ func (d *linuxInstallDriver) Verify(ctx context.Context, tx transaction) error {
 	if err := d.probeCandidate(ctx, *principal, *intent.Target); err != nil {
 		return err
 	}
-	if err := grantLinuxInstallerLaunch(ctx, tx, *intent.Target); err != nil {
+	if err := d.grantLaunchPermit(ctx, tx, *intent.Target); err != nil {
 		return fmt.Errorf("authorize native manager launch: %w", err)
 	}
 	if err := d.session.UnlockManager(); err != nil {
@@ -597,7 +597,7 @@ func (d *linuxInstallDriver) Verify(ctx context.Context, tx transaction) error {
 	if err := d.waitMaintenanceReady(ctx, tx, intent); err != nil {
 		return err
 	}
-	if err := revokeLinuxInstallerLaunch(ctx, tx); err != nil {
+	if err := d.revokeLaunchPermit(ctx, tx); err != nil {
 		return fmt.Errorf("revoke native manager launch permit: %w", err)
 	}
 	enabled := d.hooks.enabled
@@ -714,6 +714,20 @@ func (d *linuxInstallDriver) recoverUpdaterBeforeNativeRollback(ctx context.Cont
 	return nil
 }
 
+func (d *linuxInstallDriver) grantLaunchPermit(ctx context.Context, tx transaction, image Image) error {
+	if d.hooks.grantLaunch != nil {
+		return d.hooks.grantLaunch(ctx, tx, image)
+	}
+	return grantLinuxInstallerLaunch(ctx, tx, image)
+}
+
+func (d *linuxInstallDriver) revokeLaunchPermit(ctx context.Context, tx transaction) error {
+	if d.hooks.revokeLaunch != nil {
+		return d.hooks.revokeLaunch(ctx, tx)
+	}
+	return revokeLinuxInstallerLaunch(ctx, tx)
+}
+
 func (d *linuxInstallDriver) Rollback(ctx context.Context, tx transaction) error {
 	intent, err := d.intentFor(ctx, tx)
 	if err != nil {
@@ -766,6 +780,14 @@ func (d *linuxInstallDriver) Rollback(ctx context.Context, tx transaction) error
 	if err := d.lockStoppedManager(ctx); err != nil {
 		return err
 	}
+	// A candidate permit can survive any Verify failure, including a fresh
+	// install with no prior service to restart. Revoke this operation's permit
+	// while the manager is conclusively stopped and before rollback changes the
+	// image or removes the journal. Unknown and foreign permits still fail
+	// closed in the strict revoker.
+	if err := d.revokeLaunchPermit(ctx, tx); err != nil {
+		return err
+	}
 	if err := d.recoverUpdaterBeforeNativeRollback(ctx, intent, *principal); err != nil {
 		return err
 	}
@@ -803,7 +825,7 @@ func (d *linuxInstallDriver) Rollback(ctx context.Context, tx transaction) error
 		if err := d.writeMaintenanceChallenge(ctx, tx, rollback, *principal); err != nil {
 			return err
 		}
-		if err := grantLinuxInstallerLaunch(ctx, tx, *intent.Prior); err != nil {
+		if err := d.grantLaunchPermit(ctx, tx, *intent.Prior); err != nil {
 			return err
 		}
 		if err := d.session.UnlockManager(); err != nil {
@@ -821,7 +843,7 @@ func (d *linuxInstallDriver) Rollback(ctx context.Context, tx transaction) error
 		if err := d.waitMaintenanceReady(ctx, tx, rollback); err != nil {
 			return err
 		}
-		if err := revokeLinuxInstallerLaunch(ctx, tx); err != nil {
+		if err := d.revokeLaunchPermit(ctx, tx); err != nil {
 			return err
 		}
 	}

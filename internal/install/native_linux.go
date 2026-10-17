@@ -85,6 +85,8 @@ type linuxNativeHooks struct {
 	now           func() time.Time
 	importInputs  func(context.Context, *os.Root, installinputs.Options) (linuxInstallerInputs, error)
 	openRecorded  func(context.Context, *os.Root, installinputs.RecordedOptions) (linuxInstallerInputs, error)
+	grantLaunch   func(context.Context, transaction, Image) error
+	revokeLaunch  func(context.Context, transaction) error
 }
 
 type linuxInstallDriver struct {

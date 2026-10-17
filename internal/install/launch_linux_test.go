@@ -3,6 +3,7 @@
 package install
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -229,6 +230,114 @@ func TestLinuxInstallerLaunchGrantStartupRevokeFlow(t *testing.T) {
 	allowed, err = CheckLinuxInstallerStartup(ctx)
 	if err == nil || allowed || !errors.Is(err, errLinuxInstallerRecoveryRequired) {
 		t.Fatalf("journal without permit did not require ordinary recovery: allowed=%v err=%v", allowed, err)
+	}
+}
+
+func TestLinuxInstallerRollbackRevokesExactStaleCandidatePermit(t *testing.T) {
+	fixture := newLinuxLaunchFlowFixture(t)
+	defer fixture.release()
+	ctx := withLaunchLinuxConfig(context.Background(), fixture.config)
+	if err := grantLinuxInstallerLaunch(ctx, fixture.tx, fixture.image); err != nil {
+		t.Fatalf("grant candidate permit before failed readiness: %v", err)
+	}
+
+	root, err := os.OpenRoot(fixture.config.stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := newJournalStoreWithConfig(context.Background(), root, journalStoreConfig{testRoot: true})
+	if err != nil {
+		root.Close()
+		t.Fatal(err)
+	}
+	current, err := store.Load(context.Background())
+	if err != nil || current == nil {
+		store.Close()
+		root.Close()
+		t.Fatalf("load verifying journal: tx=%v err=%v", current, err)
+	}
+	rollingBack := *current
+	rollingBack.Phase = phaseRollingBack
+	rollingBack.FailedStage = "verify"
+	if err := store.Record(context.Background(), current, rollingBack); err != nil {
+		store.Close()
+		root.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := revokeLinuxInstallerLaunch(ctx, rollingBack); err != nil {
+		t.Fatalf("rollback could not remove its exact stale candidate permit: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(fixture.config.stateRoot, launchLinuxPermitName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("candidate permit remains after rollback revocation: %v", err)
+	}
+}
+
+func TestLinuxInstallerRollbackPreservesForeignLaunchPermit(t *testing.T) {
+	fixture := newLinuxLaunchFlowFixture(t)
+	defer fixture.release()
+	ctx := withLaunchLinuxConfig(context.Background(), fixture.config)
+	if err := grantLinuxInstallerLaunch(ctx, fixture.tx, fixture.image); err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := os.OpenRoot(fixture.config.stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := newJournalStoreWithConfig(context.Background(), root, journalStoreConfig{testRoot: true})
+	if err != nil {
+		root.Close()
+		t.Fatal(err)
+	}
+	current, err := store.Load(context.Background())
+	if err != nil || current == nil {
+		store.Close()
+		root.Close()
+		t.Fatalf("load verifying journal: tx=%v err=%v", current, err)
+	}
+	rollingBack := *current
+	rollingBack.Phase = phaseRollingBack
+	rollingBack.FailedStage = "verify"
+	if err := store.Record(context.Background(), current, rollingBack); err != nil {
+		store.Close()
+		root.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	permitPath := filepath.Join(fixture.config.stateRoot, launchLinuxPermitName)
+	raw, err := os.ReadFile(permitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignID := strings.Repeat("f", 64)
+	foreign := bytes.Replace(raw, []byte(fixture.tx.ID), []byte(foreignID), 1)
+	if bytes.Equal(raw, foreign) {
+		t.Fatal("fixture permit did not contain operation identity")
+	}
+	if err := os.WriteFile(permitPath, foreign, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := revokeLinuxInstallerLaunch(ctx, rollingBack); !errors.Is(err, errLinuxInstallerRecoveryRequired) {
+		t.Fatalf("rollback accepted a foreign permit: %v", err)
+	}
+	after, err := os.ReadFile(permitPath)
+	if err != nil || !bytes.Equal(after, foreign) {
+		t.Fatalf("foreign permit was not preserved: err=%v", err)
 	}
 }
 

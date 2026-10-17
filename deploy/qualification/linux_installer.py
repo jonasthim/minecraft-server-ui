@@ -18,6 +18,8 @@ import urllib.request
 
 REPO = "jonasthim/minecraft-server-ui"
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+MAX_QUALIFIER_BYTES = 128 * 1024 * 1024
+STAGED_QUALIFIER = Path("/usr/local/lib/minecraft-ui/qualification-updater")
 PHASES = {"prepared", "quiescing", "stopped", "replacing", "published", "verifying", "rolling_back", "rolled_back", "committed", "manual_repair"}
 INSTALLER_OUTCOMES = {"pending", "unchanged", "installed", "uninstalled", "rolled_back", "manual_repair"}
 INSTALLER_FAILED_STAGES = {
@@ -509,14 +511,12 @@ class Qualification:
                 os.chown(child, uid, gid)
                 os.chmod(child, 0o700 if child.is_dir() else 0o600)
 
-        # Prove the service account can reach the downloaded helper separately
-        # from staging, so bounded source-line diagnostics distinguish workspace
-        # traversal failures from authenticated staging failures.
-        self.command(["runuser", "-u", "minecraft-ui", "--", "test", "-x", self.qualifier], expected=0)
+        staged_qualifier = install_qualification_helper(self.qualifier, STAGED_QUALIFIER)
+        self.command(["runuser", "-u", "minecraft-ui", "--", "test", "-x", staged_qualifier], expected=0)
         stages = {}
         for version in ("v0.0.2", "v0.0.3"):
             staged = self.command([
-                "runuser", "-u", "minecraft-ui", "--", self.qualifier, "stage",
+                "runuser", "-u", "minecraft-ui", "--", staged_qualifier, "stage",
                 "--bundle", input_dir, "--version", version, "--current", "v0.0.1",
                 "--stage-dir", "/var/lib/minecraft-ui/selfupdate/stages",
             ], expected=0, timeout=180)
@@ -749,6 +749,77 @@ def fingerprint(path):
     return {"device": stat.st_dev, "inode": stat.st_ino, "uid": stat.st_uid,
             "gid": stat.st_gid, "mode": stat.st_mode & 0o777, "size": stat.st_size,
             "sha256": digest}
+
+
+def install_qualification_helper(source, destination, owner_uid=0, owner_gid=0):
+    source = Path(source)
+    destination = Path(destination)
+    try:
+        source_info = source.lstat()
+        parent_info = destination.parent.lstat()
+        destination.lstat()
+    except FileNotFoundError as error:
+        if error.filename == str(destination):
+            pass
+        else:
+            raise RuntimeError("qualification helper source or parent is unavailable") from None
+    except OSError:
+        raise RuntimeError("qualification helper paths are unsafe") from None
+    else:
+        raise RuntimeError("qualification helper destination already exists")
+
+    if (not stat.S_ISREG(source_info.st_mode) or stat.S_ISLNK(source_info.st_mode)
+            or source_info.st_nlink != 1 or source_info.st_mode & 0o111 == 0
+            or source_info.st_size <= 0 or source_info.st_size > MAX_QUALIFIER_BYTES):
+        raise RuntimeError("qualification helper source is not an ordinary executable")
+    if (not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode)
+            or parent_info.st_uid != owner_uid or parent_info.st_gid != owner_gid
+            or stat.S_IMODE(parent_info.st_mode) != 0o755):
+        raise RuntimeError("qualification helper parent is not the expected protected directory")
+
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with source.open("rb") as input_file, destination.open("xb") as output_file:
+            opened_source = os.fstat(input_file.fileno())
+            if not os.path.samestat(source_info, opened_source):
+                raise RuntimeError("qualification helper source changed while opening")
+            while True:
+                chunk = input_file.read(1 << 20)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_QUALIFIER_BYTES:
+                    raise RuntimeError("qualification helper exceeds its size bound")
+                digest.update(chunk)
+                output_file.write(chunk)
+            if not os.path.samestat(opened_source, os.fstat(input_file.fileno())):
+                raise RuntimeError("qualification helper source changed while reading")
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        os.chown(destination, owner_uid, owner_gid)
+        os.chmod(destination, 0o755)
+    except OSError:
+        raise RuntimeError("qualification helper could not be staged safely") from None
+
+    source_after = source.lstat()
+    target_after = destination.lstat()
+    parent_after = destination.parent.lstat()
+    if (not os.path.samestat(source_info, source_after) or source_info.st_size != total
+            or not os.path.samestat(parent_info, parent_after)
+            or parent_after.st_uid != owner_uid or parent_after.st_gid != owner_gid
+            or stat.S_IMODE(parent_after.st_mode) != 0o755
+            or not stat.S_ISREG(target_after.st_mode) or target_after.st_nlink != 1
+            or target_after.st_uid != owner_uid or target_after.st_gid != owner_gid
+            or stat.S_IMODE(target_after.st_mode) != 0o755 or target_after.st_size != total):
+        raise RuntimeError("staged qualification helper identity or metadata differs")
+    target_digest = hashlib.sha256()
+    with destination.open("rb") as staged_file:
+        for chunk in iter(lambda: staged_file.read(1 << 20), b""):
+            target_digest.update(chunk)
+    if target_digest.digest() != digest.digest():
+        raise RuntimeError("staged qualification helper bytes differ from source")
+    return destination
 
 
 def ordinary_file_identity(path):
