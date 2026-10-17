@@ -4,7 +4,7 @@
 
 ### R1 — Resolved: transient units and systemctl query failures are checked
 
-The follow-up adds exact-name `list-units --all` alongside `list-unit-files` and returns failure if either systemctl query fails. Cleanup rechecks loaded units and only stops a unit whose `FragmentPath` is the exact probe unit file path; otherwise it preserves files and reports cleanup failure. Pure fixtures cover existing installed units, loaded units, and failures from each query. The official [systemctl reference](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html) distinguishes loaded units from installed unit files.
+The follow-up adds exact-name `list-units --all` alongside `list-unit-files` and returns failure if either systemctl query fails. Cleanup rechecks loaded units and only stops a unit whose `FragmentPath` is the exact probe unit file path. Unit and helper files are exclusively created, recorded by device/inode/owner, and removed only if those identities still match; otherwise cleanup preserves them and reports failure. Pure fixtures cover existing installed units, loaded units, and failures from each preflight query. The official [systemctl reference](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html) distinguishes loaded units from installed unit files.
 
 The rereview finds R1 resolved. Cleanup's native systemd behavior remains unqualified because no local services or hosted run were invoked.
 
