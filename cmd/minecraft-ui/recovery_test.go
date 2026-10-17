@@ -46,7 +46,8 @@ func TestAdminResetUsesConfiguredDirectoryWithoutCreatingState(t *testing.T) {
 }
 
 func TestAdminResetCommandSuccess(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "state #?&")
+	// Keep URI-special path coverage with characters valid on Windows and Linux.
+	dir := filepath.Join(t.TempDir(), "state #& %3F")
 	database, err := db.Open(t.Context(), filepath.Join(dir, "manager.db"))
 	if err != nil {
 		t.Fatal(err)

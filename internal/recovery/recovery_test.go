@@ -29,7 +29,9 @@ type fixture struct {
 
 func newFixture(t *testing.T) fixture {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "state #?&")
+	// URI delimiters and literal escapes must survive encoding on both host OSes.
+	// A literal '?' cannot be created in a Windows directory name.
+	dir := filepath.Join(t.TempDir(), "state #& %3F")
 	database, err := db.Open(t.Context(), filepath.Join(dir, "manager.db"))
 	if err != nil {
 		t.Fatal(err)

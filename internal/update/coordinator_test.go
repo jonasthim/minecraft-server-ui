@@ -303,19 +303,58 @@ func newCoordinatorFixtureFlavor(t *testing.T, flavor domain.Flavor) *coordinato
 }
 func (f *coordinatorFixture) wait(t *testing.T, job jobs.Job) jobs.Job {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		current, err := f.queue.Get(t.Context(), job.ID)
+	return f.waitWithin(t, job, 3*time.Second)
+}
+func (f *coordinatorFixture) waitWithin(t *testing.T, job jobs.Job, budget time.Duration) jobs.Job {
+	t.Helper()
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(t.Context(), budget)
+	defer cancel()
+	subscription, err := f.queue.Subscribe(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.Close()
+	events := subscription.Events
+	// Events wake normal observations. A bounded fallback also observes durable
+	// state after a subscriber gap without contending for SQLite every millisecond.
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	var last jobs.Job
+	transaction, transactionState, previous := "", "", ""
+	diagnostic := func() string {
+		return "job=" + job.ID + " kind=" + job.Kind + " state=" + string(last.State) + " phase=" + last.Phase + " transaction=" + transaction + " transaction_state=" + transactionState
+	}
+	for {
+		current, err := f.queue.Get(ctx, job.ID)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("coordinator observation failed after %s: %s: %v", time.Since(started), diagnostic(), err)
+		}
+		last = current
+		err = f.s.config.DB.QueryRowContext(ctx, "SELECT id,state FROM update_transactions WHERE job_id=?", job.ID).Scan(&transaction, &transactionState)
+		if errors.Is(err, sql.ErrNoRows) {
+			transaction, transactionState = "none", "none"
+		} else if err != nil {
+			t.Fatalf("coordinator transaction observation failed after %s: %s: %v", time.Since(started), diagnostic(), err)
+		}
+		if observed := diagnostic(); observed != previous {
+			t.Logf("coordinator after %s: %s", time.Since(started), observed)
+			previous = observed
 		}
 		if current.State != domain.JobRunning && current.State != domain.JobQueued {
+			t.Logf("coordinator terminal state observed after %s (budget %s)", time.Since(started), budget)
 			return current
 		}
-		time.Sleep(time.Millisecond)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("coordinator job timed out after %s (budget %s): %s: %v", time.Since(started), budget, diagnostic(), ctx.Err())
+		case _, open := <-events:
+			if !open {
+				events = nil
+			}
+		case <-tick.C:
+		}
 	}
-	t.Fatal("coordinator job timed out")
-	return jobs.Job{}
 }
 func (f *coordinatorFixture) preview(t *testing.T) Plan {
 	t.Helper()
@@ -648,7 +687,9 @@ func TestBootRiskStartupKeepsRunningBytesAndAllowsExplicitRollbackJob(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if done := f.wait(t, job); done.State != domain.JobSucceeded {
+			// This composes a durable full backup and file/SQL activation; three
+			// seconds is not a product deadline. Keep the larger bound local here.
+			if done := f.waitWithin(t, job, 30*time.Second); done.State != domain.JobSucceeded {
 				t.Fatal(done)
 			}
 			var transaction, raw string
@@ -751,7 +792,7 @@ func TestBootRiskStartupKeepsRunningBytesAndAllowsExplicitRollbackJob(t *testing
 			if err = replacement.Resume(); err != nil {
 				t.Fatal(err)
 			}
-			if done := f.wait(t, queued); done.State != domain.JobSucceeded {
+			if done := f.waitWithin(t, queued, 30*time.Second); done.State != domain.JobSucceeded {
 				t.Fatalf("separately confirmed stopped rollback failed: %+v; cause: %v", done, <-observed)
 			}
 			after, err = next.config.Lifecycle.UpdateSnapshot(t.Context(), "alpha")
