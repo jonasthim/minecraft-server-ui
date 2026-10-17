@@ -1,0 +1,101 @@
+name: Installed Minecraft acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      accept_minecraft_eula:
+        description: Accept the Minecraft EULA for these disposable test servers
+        required: true
+        type: boolean
+        default: false
+      minecraft_version:
+        description: Exact initial Vanilla qualification tuple
+        required: true
+        type: choice
+        options:
+          - '1.21.9'
+permissions:
+  contents: read
+jobs:
+  installed-game:
+    name: Vanilla ${{ inputs.minecraft_version }} on ${{ matrix.os }}
+    if: inputs.accept_minecraft_eula
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            goos: linux
+            extension: ''
+          - os: windows-2022
+            goos: windows
+            extension: .exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: x64
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Record exact native candidate
+        shell: bash
+        env:
+          EXPECTED_GOOS: ${{ matrix.goos }}
+        run: |
+          test "$RUNNER_ARCH" = X64
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(go env GOHOSTOS)" = "$EXPECTED_GOOS"
+          test "$(go env GOOS)" = "$EXPECTED_GOOS"
+          test "$(go env GOARCH)" = amd64
+          mkdir -p game-results bin
+          git rev-parse HEAD > game-results/commit.txt
+          go version > game-results/go-version.txt
+          echo "$RUNNER_OS $RUNNER_ARCH $ImageOS $ImageVersion" > game-results/runner.txt
+      - name: Build shipping manager with embedded frontend
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          BINARY_EXTENSION: ${{ matrix.extension }}
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+          go build -trimpath -ldflags '-s -w -X main.version=0.0.0-dev' -o "bin/minecraft-ui$BINARY_EXTENSION" ./cmd/minecraft-ui
+      - name: Exercise Linux installed first-server workflow
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 30
+        env:
+          MINECRAFT_TEST_VERSION: ${{ inputs.minecraft_version }}
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,PATH bash deploy/qualification/linux-game.sh "$GITHUB_WORKSPACE/bin/minecraft-ui" "$GITHUB_WORKSPACE/game-results" "$MINECRAFT_TEST_VERSION"
+      - name: Exercise Windows installed first-server workflow
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 30
+        env:
+          MINECRAFT_TEST_VERSION: ${{ inputs.minecraft_version }}
+        run: |
+          & ./deploy/qualification/windows-game.ps1 -Binary (Join-Path $env:GITHUB_WORKSPACE 'bin\minecraft-ui.exe') -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE 'game-results') -MinecraftVersion $env:MINECRAFT_TEST_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain only scrubbed assertions and exact-source metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-game-${{ matrix.os }}-${{ inputs.minecraft_version }}-${{ github.sha }}
+          path: |
+            game-results/commit.txt
+            game-results/go-version.txt
+            game-results/runner.txt
+            game-results/game-summary.json
+            game-results/result.json
+          if-no-files-found: error
+          retention-days: 14
