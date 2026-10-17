@@ -97,3 +97,115 @@ Independent source review and a subsequent exact-commit hosted run remain
 required. The next failed run must be interpreted using its actual fixed stage,
 then reproduced or traced further before a behavior fix is proposed. Task32B
 acceptance and implementation-ledger changes remain with the integrator.
+
+## Hosted diagnostic run39036772847 — schema probe failure established
+
+[Run39036772847](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39036772847)
+at `d0994d106c77421eb36983a79e4601aeb69d065d` again passed Ubuntu22 and failed
+Ubuntu24. Job117408497554 failed in about four seconds after the installed
+exercise began. Its scrubbed artifact was downloaded read-only to
+`/home/thim/.cache/dilla-tmp/updater-39036772847-ubuntu24`.
+
+The fixed diagnostic is now present:
+
+```json
+"native_update_failure_counts": {"schema_probe": 1}
+```
+
+This identifies `linuxDriver.ProbeSchema(ctx, false)` returning an error during
+the genuine initial update. The preceding stop, manager-lock acquisition and
+complete drain-receipt validation passed. It is distinct from returned
+capability/schema/administrator rejection, which would emit `schema_validate`.
+Candidate copying, probing and executable replacement were not reached.
+
+The retained journal is `aborted`, schema20, prior `v0.0.1`, candidate `v0.0.2`,
+and `rollback_attempted: false`. This time cleanup completed before the snapshot:
+the old manager is active/running with MainPID2760 and Result `success`; the
+worker has failed with exit1 and MainPID0, and the recovery unit is inactive/dead
+with Result `success`. There are two manager-listening events. Prefix mode
+restoration and owned-state cleanup are recorded, with `cleanup_checked: true`.
+This proves successful recovery to the prior manager for this observed failed
+activation; it does not qualify a successful Ubuntu24 update.
+
+The precise underlying schema-probe error is **still not retained**. The current
+adapter runs fixed `/usr/sbin/runuser -u minecraft-ui --
+/usr/local/bin/minecraft-ui update-schema` with the fixed data-directory
+environment. It discards stderr and reduces command failure/response overflow
+to one error, or rejects malformed JSON separately. The outer diagnostic
+intentionally emits only `schema_probe`. The artifact cannot establish whether
+the launcher, manager probe execution, read-only database/schema/challenge/
+authorization operation, output bound or JSON decoding failed.
+
+No behavior correction was made from this evidence. A further diagnostic-only
+scope should distinguish command launch/exit/signal, overflow and JSON failure;
+if the manager probe exits, fixed child-operation markers can identify its
+config, schema-read, challenge-read or administrator-read boundary. Error text,
+paths, credentials and challenge/request values must remain omitted. A product
+fix requires that evidence or a faithful failing reproduction; changing
+permissions, replacing the privilege boundary or increasing waits now would be
+speculation.
+
+## Diagnostic-only follow-up after run39036772847
+
+The integrator assigned a further bounded diagnostic packet, including the
+root-owned command probe wiring as an explicit ownership exception. No
+behavior correction or alternate privilege mechanism is included.
+
+- `cmd/minecraft-ui/selfupdate.go` now marks a failure at config loading, schema
+  read, challenge read, challenge version, actor authorization read or JSON
+  encoding. It returns the same original error. Categories come only from
+  `errors.Is` for permission, missing-file and context errors, a bounded numeric
+  `(*modernc.org/sqlite.Error).Code()` from the existing direct dependency, or
+  fixed `other`. No underlying error text is copied.
+- `linuxDriver.ProbeSchema` retains its fixed runuser command, account, current/
+  previous executable selection and environment. Its helper captures at most
+  8KiB of stderr. On failure it forwards at most one exact authored child marker;
+  all other stderr is discarded. Oversized stderr is never parsed. It emits
+  fixed command launch, exit1–255, signal1–64, context, stdout/stderr overflow or
+  invalid-JSON diagnostics before returning the original fixed adapter error.
+  Successful probes emit no failure diagnostics and return the same capability.
+- The journal scrubber adds `native_schema_probe_counts`, using exact stage/
+  reason allowlists and canonical bounded decimal codes. Previous fields retain
+  their meanings. Numeric SQLite codes must be1–65535; unknown, signed, padded,
+  Unicode, oversized or appended payloads are rejected. No raw stderr, JSON
+  body, path, request, nonce or credential is retained.
+
+The markers use `native-update-schema-diagnostic:<stage>:<reason>` with a
+numeric final field only for SQLite, process exit or process signal categories.
+For example, an actual child `schema_read:sqlite:14` together with
+`command:exit:1` would establish a typed SQLite failure in the read-only schema
+operation. This is an illustration of the grammar, **not an observation from
+the failed hosted run**. A nonzero command without a child marker would locate
+failure below or before the authored probe boundaries; its exact lower-level
+cause would still require further evidence.
+
+Focused verification of this follow-up:
+
+- Seven real subprocess probe fixtures failed before instrumentation and pass
+  afterwards: config, missing DB, actual SQLite schema error, invalid challenge,
+  mismatched challenge version, actual SQLite actor error and encoding failure.
+  Wrapped permission/missing/context errors retain only their fixed category;
+  unknown stages and nil errors emit nothing.
+- Linux helper tests use real temporary child processes, without account or
+  service operations. They establish fixed exit37, SIGTERM15, stdout/stderr
+  bounds, missing/nonexecutable launch, canceled/deadline contexts, invalid JSON
+  and successful typed output. Private stderr and malformed marker decoys are
+  omitted, and the original fixed error messages are asserted.
+- Temporary Go build overlays, without changing shared workspace files,
+  suppress each diagnostic layer. The child-boundary regression then fails all
+  seven cases; removing adapter outcome reporting fails the corresponding exit,
+  signal, overflow, launch and context cases. The unmodified candidate passes.
+- `go test -race ./internal/selfupdate ./cmd/minecraft-ui -count=1`: PASS
+  (`13.946s` and `9.826s`). `go vet ./internal/selfupdate ./cmd/minecraft-ui`:
+  PASS.
+- `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o
+  /home/thim/.cache/dilla-tmp/schema-diagnostics-minecraft-ui.test.exe
+  ./cmd/minecraft-ui`: PASS, compilation only; no Windows runtime claim.
+- Four actual scrubber subprocess tests: PASS. The new schema-marker regression
+  failed before implementation. Python3.10 grammar and scoped whitespace checks:
+  PASS.
+
+No local services, accounts, firewalls, games, preview or canonical installation
+paths were changed, and no hosted job was dispatched. Independent review and a
+subsequent exact-commit Ubuntu24 run remain required; the schema-probe root cause
+and a concrete behavior fix are still pending that evidence.

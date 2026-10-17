@@ -133,23 +133,91 @@ func (d linuxDriver) Start(ctx context.Context) error {
 	return d.startWithPermit(ctx)
 }
 func (d linuxDriver) ProbeSchema(ctx context.Context, previous bool) (Capability, error) {
-	var capability Capability
 	binary := filepath.Join(d.paths.Bin, d.paths.Binary)
 	if previous {
 		binary += ".previous"
 	}
 	command := exec.CommandContext(ctx, "/usr/sbin/runuser", "-u", "minecraft-ui", "--", binary, "update-schema")
 	command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "MINECRAFT_UI_DATA_DIR=" + d.paths.Data}
-	var output boundedOutput
+	return runLinuxSchemaProbe(ctx, command, os.Stderr)
+}
+
+// The caller constructs the fixed manager-account command above. This helper
+// captures bounded stderr only to recognize exact authored child diagnostics;
+// all other bytes, including the child's existing raw error log, are discarded.
+func runLinuxSchemaProbe(ctx context.Context, command *exec.Cmd, diagnostics io.Writer) (Capability, error) {
+	var capability Capability
+	var output, stderr boundedOutput
 	command.Stdout = &output
-	command.Stderr = io.Discard
-	if err := command.Run(); err != nil || output.exceeded {
+	command.Stderr = &stderr
+	err := command.Run()
+	if err != nil || output.exceeded {
+		if stderr.exceeded {
+			_, _ = fmt.Fprintln(diagnostics, "native-update-schema-diagnostic:command:stderr_overflow")
+		} else {
+			for _, line := range strings.Split(string(stderr.body), "\n") {
+				if validSchemaProbeDiagnostic(line) {
+					_, _ = fmt.Fprintln(diagnostics, line)
+					break // At most one fixed child boundary per failed probe.
+				}
+			}
+		}
+		writeLinuxSchemaCommandFailure(diagnostics, ctx, err, output.exceeded)
 		return capability, errors.New("manager-account schema probe failed")
 	}
 	if err := strictJSON(output.body, &capability); err != nil {
+		_, _ = fmt.Fprintln(diagnostics, "native-update-schema-diagnostic:command:invalid_json")
 		return capability, errors.New("invalid manager schema probe")
 	}
 	return capability, nil
+}
+
+func validSchemaProbeDiagnostic(line string) bool {
+	fields := strings.Split(line, ":")
+	if len(fields) < 3 || len(fields) > 4 || fields[0] != "native-update-schema-diagnostic" {
+		return false
+	}
+	switch fields[1] {
+	case "config", "schema_read", "challenge_read", "challenge_version", "actor_read", "encode":
+	default:
+		return false
+	}
+	if fields[2] == "sqlite" && len(fields) == 4 {
+		code, err := strconv.Atoi(fields[3])
+		return err == nil && code > 0 && code <= 65535 && strconv.Itoa(code) == fields[3]
+	}
+	if len(fields) != 3 {
+		return false
+	}
+	switch fields[2] {
+	case "permission", "not_exist", "canceled", "deadline", "other":
+		return true
+	}
+	return false
+}
+
+func writeLinuxSchemaCommandFailure(out io.Writer, ctx context.Context, err error, overflow bool) {
+	reason := "launch_other"
+	var exit *exec.ExitError
+	switch {
+	case overflow:
+		reason = "output_overflow"
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		reason = "context_deadline"
+	case errors.Is(ctx.Err(), context.Canceled):
+		reason = "context_canceled"
+	case errors.As(err, &exit):
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() && status.Signal() > 0 && status.Signal() <= 64 {
+			reason = "signal:" + strconv.Itoa(int(status.Signal()))
+		} else if code := exit.ExitCode(); code > 0 && code <= 255 {
+			reason = "exit:" + strconv.Itoa(code)
+		}
+	case errors.Is(err, os.ErrPermission):
+		reason = "launch_permission"
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, exec.ErrNotFound):
+		reason = "launch_not_exist"
+	}
+	_, _ = fmt.Fprintln(out, "native-update-schema-diagnostic:command:"+reason)
 }
 func (d linuxDriver) ProbeCandidate(ctx context.Context, expected Installed) (Capability, error) {
 	var capability Capability
