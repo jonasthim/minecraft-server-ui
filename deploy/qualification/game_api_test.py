@@ -48,6 +48,30 @@ def launcher_identity():
 
 
 class Helpers(unittest.TestCase):
+    def test_instance_draft_keeps_valid_desired_distance_for_both_versions(self):
+        class DraftCaptured(Exception):
+            pass
+        for version in game.TUPLES:
+            draft = {}
+            def request(path, body=None, expected=200):
+                if path.endswith('/auth/status'):
+                    return {'needs_setup': True}
+                if path.endswith('/auth/setup'):
+                    return {'user': {'id': 1, 'role': 'admin'}}
+                if path.endswith('/auth/me'):
+                    return {'user': {'id': 1}, 'csrf_token': 'fixture'}
+                self.assertEqual(path, '/api/v1/instances')
+                draft.update(body)
+                raise DraftCaptured()
+            with tempfile.TemporaryDirectory() as tmp, mock.patch.object(game, 'ready'), mock.patch.object(game, 'API') as api:
+                api.return_value.request.side_effect = request
+                with self.assertRaises(DraftCaptured):
+                    game.execute(Path(tmp), {}, game.tuple_for(version))
+            # InstanceConfig requires a valid stored desired value even when
+            # Properties omits it for the selected server's capabilities.
+            self.assertEqual(draft['config'].get('simulation_distance'), 2)
+            self.assertEqual(draft['instance']['minecraft_version'], version)
+
     def test_frozen_qualification_tuples_bind_version_java_and_evidence_scope(self):
         self.assertEqual(set(game.TUPLES), {"1.12.2", "1.21.9"})
         self.assertEqual(game.TUPLES["1.12.2"].java_major, 8)
@@ -638,6 +662,34 @@ class LinuxGamePaths(unittest.TestCase):
 
     def map(self, path):
         return self.root / path.removeprefix("/")
+
+    def test_exit_cleanup_retains_tuple_without_function_positional_arguments(self):
+        cleanup = re.search(r'^cleanup\(\) \{\n.*?^\}', self.source, re.M | re.S)
+        self.assertIsNotNone(cleanup)
+        binding = re.search(r'^minecraft_version=\$3$', self.source, re.M)
+        for version in game.TUPLES:
+            for status in (0, 7):
+                with self.subTest(version=version, status=status):
+                    output = self.root / ('report-' + version + '-' + str(status))
+                    scratch = self.root / ('scratch-' + version + '-' + str(status))
+                    output.mkdir()
+                    scratch.mkdir()
+                    summary = output / 'game-summary.json'
+                    summary.write_text('{}')
+                    summary.chmod(0o600)
+                    script = 'set -euo pipefail\nset -- fixture fixture ' + shlex.quote(version) + '\n'
+                    script += (binding.group() + '\n') if binding else ''
+                    script += 'output=' + shlex.quote(str(output)) + '\nscratch=' + shlex.quote(str(scratch)) + '\n'
+                    script += 'owned=0\nfirewall4=0\nfirewall6=0\nstage=fixture\nbinary_hash=' + 'a' * 64 + '\n'
+                    script += 'record_permissions() { :; }\nrestore_hosted_prefix() { :; }\n'
+                    script += cleanup.group() + '\ntrap cleanup EXIT\nexit ' + str(status) + '\n'
+                    result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, status, result.stderr)
+                    report = json.loads((output / 'result.json').read_text())
+                    self.assertEqual(report['minecraft_version'], version)
+                    self.assertEqual(report['exit_code'], status)
+                    self.assertEqual(summary.stat().st_mode & 0o777, 0o644)
+                    self.assertFalse(scratch.exists())
 
     def fragment(self, body):
         # Replace only static absolute operands after checking every operand.

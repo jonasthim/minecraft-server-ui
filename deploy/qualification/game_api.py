@@ -875,8 +875,11 @@ def execute(output, report, tuple_config):
         require(me["user"]["id"] == setup["user"]["id"], "setup_session_identity")
         phase("instance_create")
         game_config = {"motd": "Disposable hosted acceptance", "difficulty": "peaceful", "game_mode": "creative", "max_players": 2,
-                       "online_mode": False, "pvp": False, "view_distance": 2, "level_name": "world", "level_seed": "33",
+                       "online_mode": False, "pvp": False, "view_distance": 2, "simulation_distance": 2,
+                       "level_name": "world", "level_seed": "33",
                        "extra": {"spawn-protection": "0", "enforce-secure-profile": "false"}}
+        # The typed API requires a valid desired value for every version.
+        # Version projection omits it from legacy server.properties.
         if tuple_config.simulation_distance is not None:
             game_config["simulation_distance"] = tuple_config.simulation_distance
         draft = {"instance": {"id": INSTANCE, "name": "Disposable game acceptance", "flavor": "vanilla",

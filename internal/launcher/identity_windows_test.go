@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,6 +184,45 @@ func TestWindowsProcessIdentityNativeMetadataDuringExitRaceIsConclusive(t *testi
 	}
 }
 
+func TestWindowsProcessIdentityWaitsOnHeldHandleForQueryExitRace(t *testing.T) {
+	cmd := startProcessIdentityRaceChild(t)
+	boundedWaitEntered := make(chan struct{})
+	childWaited := make(chan struct{})
+	go func() {
+		<-boundedWaitEntered
+		if err := cmd.Process.Kill(); err != nil {
+			t.Errorf("terminate harmless child during bounded exit wait: %v", err)
+		} else {
+			_ = cmd.Wait()
+		}
+		close(childWaited)
+	}()
+	ops := nativeWindowsProcessIdentityOps()
+	nativeWait := ops.wait
+	var waitGate sync.Once
+	ops.wait = func(handle windows.Handle, milliseconds uint32) (uint32, error) {
+		if milliseconds > 0 {
+			waitGate.Do(func() { close(boundedWaitEntered) })
+		}
+		return nativeWait(handle, milliseconds)
+	}
+	ops.queryImage = func(windows.Handle, uint32, *uint16, *uint32) error {
+		return windows.ERROR_ACCESS_DENIED
+	}
+	_, _, _, err := processIdentityWithOps(cmd.Process.Pid, ops)
+	// Release the child after return as well, so the old immediate-recheck
+	// behavior fails the assertion below without leaking the fixture process.
+	waitGate.Do(func() { close(boundedWaitEntered) })
+	select {
+	case <-childWaited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("test child did not exit during bounded process-handle wait")
+	}
+	if !errors.Is(err, os.ErrNotExist) || !IsMissingProcess(err) {
+		t.Fatalf("bounded wait did not observe exit on the held handle: %v", err)
+	}
+}
+
 func TestWindowsProcessIdentityMetadataErrorsRequireConclusiveRecheck(t *testing.T) {
 	t.Run("live process preserves metadata error", func(t *testing.T) {
 		cmd := startProcessIdentityRaceChild(t)
@@ -207,6 +247,9 @@ func TestWindowsProcessIdentityMetadataErrorsRequireConclusiveRecheck(t *testing
 		if !errors.Is(err, metadataErr) || IsMissingProcess(err) {
 			t.Fatalf("live image error was recast as exit: error=%v", err)
 		}
+		if ProcessIdentityFailureStage(err) != "query_image" {
+			t.Fatalf("live image error stage changed: %q", ProcessIdentityFailureStage(err))
+		}
 	})
 
 	for _, tc := range []struct {
@@ -225,10 +268,16 @@ func TestWindowsProcessIdentityMetadataErrorsRequireConclusiveRecheck(t *testing
 				ops := windowsProcessIdentityOps{
 					openProcess: func(uint32, bool, uint32) (windows.Handle, error) { return windows.Handle(1), nil },
 					closeHandle: func(windows.Handle) error { return nil },
-					wait: func(windows.Handle, uint32) (uint32, error) {
+					wait: func(_ windows.Handle, milliseconds uint32) (uint32, error) {
 						calls++
 						if calls == 1 {
+							if milliseconds != 0 {
+								t.Fatalf("initial process wait timeout = %d ms, want zero", milliseconds)
+							}
 							return uint32(windows.WAIT_TIMEOUT), nil
+						}
+						if milliseconds != processMetadataExitWaitMilliseconds || milliseconds > 1000 {
+							t.Fatalf("metadata exit wait timeout = %d ms, want bounded %d ms", milliseconds, processMetadataExitWaitMilliseconds)
 						}
 						return tc.state, tc.waitErr
 					},
@@ -239,6 +288,12 @@ func TestWindowsProcessIdentityMetadataErrorsRequireConclusiveRecheck(t *testing
 				_, _, _, err := processIdentityWithOps(123, ops)
 				if !errors.Is(err, metadataErr) || IsMissingProcess(err) {
 					t.Fatalf("ambiguous recheck changed metadata error %v: error=%v", metadataErr, err)
+				}
+				if tc.waitErr != nil && !errors.Is(err, tc.waitErr) {
+					t.Fatalf("ambiguous recheck lost wait error: metadata=%v wait=%v error=%v", metadataErr, tc.waitErr, err)
+				}
+				if ProcessIdentityFailureStage(err) != "get_process_times" {
+					t.Fatalf("ambiguous recheck changed metadata API stage: %q", ProcessIdentityFailureStage(err))
 				}
 			}
 		})

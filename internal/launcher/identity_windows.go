@@ -26,6 +26,8 @@ type windowsProcessIdentityOps struct {
 	afterWait   func(windows.Handle)
 }
 
+const processMetadataExitWaitMilliseconds uint32 = 1000
+
 func nativeWindowsProcessIdentityOps() windowsProcessIdentityOps {
 	return windowsProcessIdentityOps{
 		openProcess: windows.OpenProcess,
@@ -83,14 +85,22 @@ func processIdentityWithOps(pid int, ops windowsProcessIdentityOps) (start, exe,
 }
 
 // A process may exit after the initial zero-time wait and before a metadata
-// query completes. Only a signaled result from that same held process handle
-// proves exit; every failed or ambiguous recheck preserves the metadata error.
+// query completes. After a metadata failure, wait briefly on the same held
+// process handle so an exit racing the query can become observable. Only a
+// signaled result proves exit; every failed or ambiguous wait preserves the
+// metadata error.
 func processMetadataError(handle windows.Handle, metadataErr error, wait func(windows.Handle, uint32) (uint32, error)) error {
-	state, waitErr := wait(handle, 0)
+	state, waitErr := wait(handle, processMetadataExitWaitMilliseconds)
 	if waitErr == nil && state == uint32(windows.WAIT_OBJECT_0) {
 		return os.ErrNotExist
 	}
-	return &processMetadataUnavailable{cause: metadataErr}
+	cause := metadataErr
+	if waitErr != nil {
+		cause = errors.Join(cause, processIdentityStageFailure(processIdentityWaitProcess, waitErr))
+	} else if state != uint32(windows.WAIT_TIMEOUT) {
+		cause = errors.Join(cause, processIdentityStageFailure(processIdentityWaitProcess, fmt.Errorf("unexpected process wait state 0x%08x", state)))
+	}
+	return &processMetadataUnavailable{cause: cause}
 }
 
 type processMetadataUnavailable struct {

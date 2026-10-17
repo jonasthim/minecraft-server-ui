@@ -68,3 +68,34 @@ game server or either hosted OS tuple.
 and the targeted test proves a matching fixture passes while a mismatched
 digest is rejected. Focused re-review passed. Native legacy game qualification
 remains pending hosted runs.
+
+## Follow-up review — legacy setup and cleanup regressions
+
+The failed hosted Linux legacy attempt recorded `api_http_status` at
+`instance_create`; the same cleanup path then failed to read `$3` under
+`set -u`. The current correction gives the typed draft a valid desired
+`simulation_distance` of 2 for both tuples, while the product's versioned
+`Properties` projection omits that key before Minecraft 1.18. The qualification
+tuple continues to report the capability as unsupported for 1.12.2. This
+preserves typed configuration validation without claiming the legacy server
+supports the property.
+
+The wrapper now copies the already validated version argument into
+`minecraft_version` before defining `cleanup`, and reports that captured value
+instead of reading the function's positional parameters. The new shell fixture
+executes cleanup without function arguments for both exact versions and both
+zero and failure exit statuses; it checks the retained report version/status,
+restored report permissions, and removal of the owned scratch directory.
+
+Independent verification on the current diff:
+
+- `MINECRAFT_UI_TEST_PWSH=/home/thim/.cache/dilla-tmp/task33a-powershell-7.6.7/runtime/pwsh python3 -m unittest game_api_test.py` — 34 tests passed.
+- `bash -n deploy/qualification/linux-game.sh` and Python byte-compilation — passed.
+- `npm test --prefix deploy/qualification/game-client` — 7 tests passed.
+- Existing `internal/instance/versioned_test.go` verifies that the generated
+  legacy properties omit `simulation-distance`.
+
+**Follow-up verdict: Approve.** These corrections address the observed setup
+and cleanup failures without changing the approved 1.12.2/Temurin 8 and
+1.21.9/Temurin 21 tuples or weakening the qualification guards. Actual hosted
+legacy gameplay qualification remains pending.

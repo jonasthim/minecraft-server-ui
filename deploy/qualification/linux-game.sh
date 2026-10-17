@@ -5,6 +5,7 @@ umask 077
 [[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted && $EUID == 0 ]] || { echo 'FAIL hosted_root_required' >&2; exit 2; }
 [[ $# == 3 ]] || { echo 'FAIL tuple_not_allowlisted' >&2; exit 2; }
 case "$3" in 1.12.2|1.21.9) ;; *) echo 'FAIL tuple_not_allowlisted' >&2; exit 2 ;; esac
+minecraft_version=$3
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 repo=$(realpath "$here/../..")
 [[ -f $1 && ! -L $1 && -d $2 && ! -L $2 ]] || exit 2
@@ -118,7 +119,7 @@ cleanup() {
     fi
     restore_hosted_prefix || status=1
     record_permissions after-prefix-restoration || status=1
-    python3 - "$status" "$stage" "$binary_hash" "$scratch/permissions.json" "$3" <<'PY' >"$output/result.json"
+    python3 - "$status" "$stage" "$binary_hash" "$scratch/permissions.json" "$minecraft_version" <<'PY' >"$output/result.json"
 import json
 from pathlib import Path
 import sys
