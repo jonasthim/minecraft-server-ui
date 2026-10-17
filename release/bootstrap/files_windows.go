@@ -33,6 +33,19 @@ func singleFile(f *os.File, _ os.FileInfo) bool {
 	var info windows.ByHandleFileInformation
 	return windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info) == nil && info.NumberOfLinks == 1 && info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0
 }
+func duplicateCreationFile(f *os.File) (*os.File, error) {
+	var duplicate windows.Handle
+	process := windows.CurrentProcess()
+	if err := windows.DuplicateHandle(process, windows.Handle(f.Fd()), process, &duplicate, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
+		return nil, err
+	}
+	pinned := os.NewFile(uintptr(duplicate), "bootstrap-owned-file")
+	if pinned == nil {
+		_ = windows.CloseHandle(duplicate)
+		return nil, errors.New("could not retain created file handle")
+	}
+	return pinned, nil
+}
 
 // Files inherit only from the protected private destination DACL. Unix modes
 // describe the authenticated bundle contract and are rechecked during extraction.

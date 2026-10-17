@@ -123,25 +123,43 @@ func readRegular(ctx context.Context, root *os.Root, name string, limit int64) (
 type ownedFile struct {
 	name string
 	info os.FileInfo
+	pin  *os.File
+}
+
+func (f ownedFile) identity() (os.FileInfo, error) {
+	if f.pin == nil {
+		return nil, errors.New("created file identity handle is unavailable")
+	}
+	info, err := f.pin.Stat()
+	if err != nil || (f.info != nil && !os.SameFile(info, f.info)) || unsafeInfo(info) || !info.Mode().IsRegular() || !singleFile(f.pin, info) {
+		return nil, errors.New("created file identity handle changed")
+	}
+	return info, nil
 }
 
 func (f ownedFile) check(root *os.Root) error {
+	identity, err := f.identity()
+	if err != nil {
+		return err
+	}
 	now, err := root.Lstat(f.name)
 	if err != nil {
 		return err
 	}
-	if unsafeInfo(now) || !os.SameFile(now, f.info) {
+	if unsafeInfo(now) || !now.Mode().IsRegular() || !os.SameFile(now, identity) {
 		return errors.New("owned file binding changed")
 	}
 	return nil
 }
 
 type destination struct {
-	parent *checkedRoot
-	root   *os.Root
-	name   string
-	info   os.FileInfo
-	files  []ownedFile
+	parent      *checkedRoot
+	root        *os.Root
+	name        string
+	info        os.FileInfo
+	files       []ownedFile
+	cleanupDone bool
+	cleanupErr  error
 }
 
 func newDestination(path string) (*destination, error) {
@@ -195,12 +213,31 @@ func (d *destination) create(name string, mode os.FileMode) (*os.File, error) {
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		d.files = append(d.files, ownedFile{name: name, pin: f})
 		return nil, err
 	}
-	d.files = append(d.files, ownedFile{name, info})
+	pin, err := duplicateCreationFile(f)
+	if err != nil {
+		// Keep the original creation handle as cleanup authority when duplication
+		// itself fails. The operation still fails and never returns the writer.
+		d.files = append(d.files, ownedFile{name: name, info: info, pin: f})
+		return nil, err
+	}
+	pinnedInfo, err := pin.Stat()
+	if err != nil || !os.SameFile(info, pinnedInfo) || unsafeInfo(pinnedInfo) || !pinnedInfo.Mode().IsRegular() || !singleFile(pin, pinnedInfo) {
+		_ = pin.Close()
+		d.files = append(d.files, ownedFile{name: name, info: info, pin: f})
+		return nil, errors.New("created file identity could not be pinned")
+	}
+	now, err := d.root.Lstat(name)
+	if err != nil || unsafeInfo(now) || !now.Mode().IsRegular() || !os.SameFile(now, pinnedInfo) {
+		_ = pin.Close()
+		d.files = append(d.files, ownedFile{name: name, info: info, pin: f})
+		return nil, errors.New("created file binding changed")
+	}
+	d.files = append(d.files, ownedFile{name: name, info: pinnedInfo, pin: pin})
 	if err = exactMode(f, mode); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	return f, nil
@@ -227,7 +264,8 @@ func (d *destination) openOwnedRegular(name string, limit int64) (*os.File, erro
 		return nil, err
 	}
 	opened, err := f.Stat()
-	if err != nil || !os.SameFile(opened, owned.info) || owned.check(d.root) != nil {
+	identity, identityErr := owned.identity()
+	if err != nil || identityErr != nil || !os.SameFile(opened, identity) || owned.check(d.root) != nil {
 		f.Close()
 		return nil, errors.New("opened file differs from created identity")
 	}
@@ -246,6 +284,9 @@ func (d *destination) removeOwned(name string) error {
 }
 
 func (d *destination) cleanup() error {
+	if d.cleanupDone {
+		return d.cleanupErr
+	}
 	// Remove only identities created by this operation, through the retained
 	// destination handle. A substituted destination pathname is never traversed.
 	incomplete := false
@@ -257,6 +298,13 @@ func (d *destination) cleanup() error {
 			}
 		}
 	}
+	// Windows can keep a removed file pending until its last handle closes.
+	// Release identity pins after attempting every owned-file removal and
+	// before removing the destination directory, while keeping d.root open as
+	// the authority for the directory binding.
+	if d.closePins() {
+		incomplete = true
+	}
 	if now, e := d.parent.root.Lstat(d.name); e == nil {
 		if unsafeInfo(now) || !os.SameFile(now, d.info) || d.parent.root.Remove(d.name) != nil {
 			incomplete = true
@@ -264,12 +312,29 @@ func (d *destination) cleanup() error {
 	} else if !errors.Is(e, os.ErrNotExist) {
 		incomplete = true
 	}
+	d.cleanupDone = true
 	if incomplete {
-		return errors.New("owned output cleanup incomplete")
+		d.cleanupErr = errors.New("owned output cleanup incomplete")
 	}
-	return nil
+	return d.cleanupErr
 }
+
+func (d *destination) closePins() bool {
+	incomplete := false
+	for i := range d.files {
+		if d.files[i].pin == nil {
+			continue
+		}
+		if err := d.files[i].pin.Close(); err != nil {
+			incomplete = true
+		}
+		d.files[i].pin = nil
+	}
+	return incomplete
+}
+
 func (d *destination) close() {
+	_ = d.closePins()
 	if d.root != nil {
 		_ = d.root.Close()
 	}

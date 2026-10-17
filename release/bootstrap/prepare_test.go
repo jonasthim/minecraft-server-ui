@@ -167,6 +167,136 @@ func TestSnapshotReplacementBeforeOwnedRemovalPreserved(t *testing.T) {
 	assertAbsent(t, filepath.Join(f.o.Output, ReceiptName))
 }
 
+func TestDestinationPinPreservesCreatedIdentityAgainstReplacement(t *testing.T) {
+	f := newFixture(t)
+	d, err := newDestination(f.o.Output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	writer, err := d.create(".bundle", 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("authenticated input")); err != nil {
+		writer.Close()
+		t.Fatal(err)
+	}
+	owned, err := d.owned(".bundle")
+	if err != nil {
+		writer.Close()
+		t.Fatal(err)
+	}
+	if writer.Fd() == owned.pin.Fd() {
+		writer.Close()
+		t.Fatal("owned identity handle aliases caller writer")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owned.pin.Stat(); err != nil {
+		t.Fatalf("pinned creation descriptor did not outlive writer close: %v", err)
+	}
+	if err := d.root.Remove(".bundle"); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := d.root.OpenFile(".bundle", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := replacement.Write([]byte("authenticated input")); err != nil {
+		replacement.Close()
+		t.Fatal(err)
+	}
+	replacementInfo, err := replacement.Stat()
+	if err != nil {
+		replacement.Close()
+		t.Fatal(err)
+	}
+	if err := replacement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pinnedInfo, err := owned.pin.Stat()
+	if err != nil || os.SameFile(pinnedInfo, replacementInfo) {
+		t.Fatalf("replacement reused pinned identity: %v", err)
+	}
+	if err := d.removeOwned(".bundle"); err == nil {
+		t.Fatal("removed a replacement while retaining the creation handle")
+	}
+	if err := d.cleanup(); err == nil {
+		t.Fatal("replacement cleanup should report retained foreign state")
+	}
+	if _, err := owned.pin.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("cleanup did not close the creation pin: %v", err)
+	}
+	info, err := d.root.Lstat(".bundle")
+	if err != nil || !os.SameFile(info, replacementInfo) {
+		t.Fatal("replacement identity was removed or changed", err)
+	}
+	body, err := d.root.ReadFile(".bundle")
+	if err != nil || string(body) != "authenticated input" {
+		t.Fatal("replacement bytes changed", err)
+	}
+}
+
+func TestDestinationPinsCloseAfterSuccessAndCancellationCleanup(t *testing.T) {
+	for _, cancel := range []bool{false, true} {
+		name := "successful destination close"
+		if cancel {
+			name = "cancelled destination cleanup"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			d, err := newDestination(f.o.Output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer, err := d.create("bootstrap.json", 0600)
+			if err != nil {
+				d.close()
+				t.Fatal(err)
+			}
+			if _, err := writer.Write([]byte("fixture")); err != nil {
+				writer.Close()
+				d.close()
+				t.Fatal(err)
+			}
+			owned, err := d.owned("bootstrap.json")
+			if err != nil {
+				writer.Close()
+				d.close()
+				t.Fatal(err)
+			}
+			pin := owned.pin
+			if err := writer.Close(); err != nil {
+				d.close()
+				t.Fatal(err)
+			}
+			if cancel {
+				ctx, stop := context.WithCancel(context.Background())
+				stop()
+				if ctx.Err() == nil {
+					t.Fatal("fixture context was not cancelled")
+				}
+				if err := d.cleanup(); err != nil {
+					d.close()
+					t.Fatal(err)
+				}
+			} else {
+				d.close()
+			}
+			if _, err := pin.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("destination pin remained open: %v", err)
+			}
+			if cancel {
+				assertAbsent(t, f.o.Output)
+			} else if _, err := os.Stat(filepath.Join(f.o.Output, "bootstrap.json")); err != nil {
+				t.Fatalf("successful close removed prepared file: %v", err)
+			}
+		})
+	}
+}
+
 func hash(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 func wire(v any) []byte {
 	b, e := json.Marshal(v)
