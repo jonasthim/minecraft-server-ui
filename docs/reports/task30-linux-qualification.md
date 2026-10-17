@@ -71,3 +71,20 @@ operator updater trust. New directories receive0755; borrowed directories keep
 their metadata. Both fixes passed independent source review, focused repeated
 regressions and the integrator's combined race/vet checks. Hosted rerun remains
 required.
+
+## Worker startup investigation
+
+Run `39061276106` at `08d7d16` passed native builds and signing. All six scenarios
+passed absent/read-only/authentication refusal, then reached worker dispatch and
+returned `pending`. The worker journal contained a manual-repair result, but the
+original scrubber omitted its failed stage; no protected final result or manager
+startup was observed. This is not lifecycle acceptance.
+
+A temporary process fixture successfully stages and records an executor, closes
+the parent, executes that exact file, and loads/verifies it through a fresh
+driver. Actual hosted session/systemd behavior remains under investigation.
+Diagnostics now retain only strict validated worker results bound to their unit
+ID and four exact authored entry-failure categories. Unknown fields, duplicate
+JSON, near-match messages and malformed journal objects are rejected. Mixed
+optional result fields sort safely. Nine diagnostic and twelve harness checks
+pass; the integrator's focused staged-executable race regression also passes.

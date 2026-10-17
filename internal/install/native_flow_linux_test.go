@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +75,196 @@ func TestStageExecutorHonorsRestrictiveUmask(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("StageExecutor failed in umask 0077 subprocess: %v\n%s", err, output)
+	}
+}
+
+const (
+	linuxWorkerFixturePhaseEnv = "MCSUI_LINUX_WORKER_EXEC_PHASE"
+	linuxWorkerFixtureStateEnv = "MCSUI_LINUX_WORKER_EXEC_STATE"
+)
+
+func TestLinuxWorkerLoadsAndVerifiesStagedExecutorAfterExec(t *testing.T) {
+	const phaseEnv = linuxWorkerFixturePhaseEnv
+	const stateEnv = linuxWorkerFixtureStateEnv
+	switch os.Getenv(phaseEnv) {
+	case "stage":
+		stageLinuxWorkerExecFixture(t, os.Getenv(stateEnv))
+	case "verify":
+		verifyLinuxWorkerExecFixture(t, os.Getenv(stateEnv))
+	default:
+		stateRoot := filepath.Join(t.TempDir(), "state")
+		cmd := exec.Command(os.Args[0], "-test.run=^TestLinuxWorkerLoadsAndVerifiesStagedExecutorAfterExec$")
+		cmd.Env = linuxWorkerFixtureEnv(phaseEnv, stateEnv, "stage", stateRoot)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("stage/exec/load/verify child failed: %v\n%s", err, output)
+		}
+	}
+}
+
+func stageLinuxWorkerExecFixture(t *testing.T, stateRoot string) {
+	t.Helper()
+	syscall.Umask(0077)
+	if stateRoot == "" || filepath.Clean(stateRoot) != stateRoot {
+		t.Fatal("worker fixture state root is invalid")
+	}
+	if err := os.MkdirAll(filepath.Join(stateRoot, installDirectory), 0700); err != nil {
+		t.Fatal(err)
+	}
+	intent, tx := freshLinuxApplyFixture()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, executableHash, err := hashExecutor(context.Background(), file)
+	if err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	intent.ExecutorSHA256 = executableHash
+	for i := range intent.Assets {
+		if intent.Assets[i].Role == linuxAssetUpdater {
+			info, err := file.Stat()
+			if err != nil {
+				_ = file.Close()
+				t.Fatal(err)
+			}
+			intent.Assets[i].After.SHA256 = executableHash
+			intent.Assets[i].After.Size = info.Size()
+			intent.Assets[i].After.Mode = 0755
+		}
+	}
+	rawIntent, err := marshalLinuxIntent(intent, tx)
+	if err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	intentDigest := sha256.Sum256(rawIntent)
+	tx.IntentSHA256 = hex.EncodeToString(intentDigest[:])
+
+	opPath := filepath.Join(stateRoot, installDirectory, tx.ID)
+	if err := os.Mkdir(opPath, 0700); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(stateRoot, "executor-source")
+	source, err := os.Create(sourcePath)
+	if err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(source, file); err != nil {
+		_ = source.Close()
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := os.OpenRoot(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := newJournalStoreWithConfig(context.Background(), state, journalStoreConfig{testRoot: true})
+	if err != nil {
+		_ = state.Close()
+		t.Fatal(err)
+	}
+	operation, err := os.OpenRoot(opPath)
+	if err != nil {
+		_ = store.Close()
+		_ = state.Close()
+		t.Fatal(err)
+	}
+	driver := &linuxInstallDriver{
+		state: state, store: store, operation: operation,
+		inputs: &nativeFlowInputs{paths: map[string]string{"selfupdate": sourcePath}},
+		intent: &intent, tx: &tx,
+		hooks: linuxNativeHooks{stateRoot: stateRoot, testRoot: true},
+	}
+	executor, err := driver.StageExecutor(context.Background(), tx)
+	if err != nil {
+		_ = driver.Close()
+		t.Fatal(err)
+	}
+	if err := os.Remove(sourcePath); err != nil {
+		_ = driver.Close()
+		t.Fatal(err)
+	}
+	writeIntent, err := operation.OpenFile(intentFileName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		_ = driver.Close()
+		t.Fatal(err)
+	}
+	if err := writeAll(writeIntent, rawIntent); err != nil {
+		_ = writeIntent.Close()
+		_ = driver.Close()
+		t.Fatal(err)
+	}
+	if err := writeIntent.Sync(); err != nil {
+		_ = writeIntent.Close()
+		_ = driver.Close()
+		t.Fatal(err)
+	}
+	if err := writeIntent.Close(); err != nil {
+		_ = driver.Close()
+		t.Fatal(err)
+	}
+	if err := syncDirectory(operation); err != nil {
+		_ = driver.Close()
+		t.Fatal(err)
+	}
+	if err := driver.Record(context.Background(), nil, tx); err != nil {
+		_ = driver.Close()
+		t.Fatal(err)
+	}
+	if err := driver.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Exec(executor, []string{executor, "-test.run=^TestLinuxWorkerLoadsAndVerifiesStagedExecutorAfterExec$"}, linuxWorkerFixtureEnv(linuxWorkerFixturePhaseEnv, linuxWorkerFixtureStateEnv, "verify", stateRoot)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func linuxWorkerFixtureEnv(phaseKey, stateKey, phase, state string) []string {
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, phaseKey+"=") || strings.HasPrefix(entry, stateKey+"=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, phaseKey+"="+phase, stateKey+"="+state)
+}
+
+func verifyLinuxWorkerExecFixture(t *testing.T, stateRoot string) {
+	t.Helper()
+	session := &nativeFlowSession{statePath: stateRoot}
+	driver, err := newLinuxInstallDriverWithSession(context.Background(), session, linuxNativeHooks{
+		stateRoot: stateRoot, testRoot: true, authority: func() error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Close()
+	tx, err := driver.Load(context.Background())
+	if err != nil || tx == nil {
+		t.Fatalf("Load after staged executor exec: tx=%v err=%v", tx, err)
+	}
+	if err := driver.VerifyExecutor(context.Background(), *tx); err != nil {
+		t.Fatalf("VerifyExecutor after staged executor exec: %v", err)
 	}
 }
 
