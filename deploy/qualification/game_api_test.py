@@ -37,6 +37,13 @@ class Response(io.BytesIO):
 
 
 class Helpers(unittest.TestCase):
+    def test_windows_failure_handler_does_not_resolve_unavailable_exception_type(self):
+        # GitHub run39036770835 proved this type literal itself throws inside
+        # catch, replacing the original dependency error. This source guard is
+        # not a replacement for executing the catch path in native PowerShell.
+        source = (game.HERE / "windows-game.ps1").read_text()
+        self.assertNotIn("[Management.Automation.ParameterBindingValidationException]", source)
+
     def test_windows_identity_preserves_submicrosecond_creation_ticks(self):
         # Native FILETIME may end in any 100 ns tick; CIM roundtrips lose the
         # final decimal digit. Test the actual subprocess-result abstraction.

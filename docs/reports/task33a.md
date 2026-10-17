@@ -156,3 +156,25 @@ PASS (exit0)
 New source fixtures verify exact classification and rejection of malicious/near-match messages, unavailable/oversized diagnostic pages, metadata-only output, mode preservation/restoration for0777/02777/01777/0755, and refusal to restore through a replaced directory binding. All prefix paths are remapped under temporary fixture directories; no privileged host prefix, native service or game was touched locally. Existing `.new` refusal/removal/final-absence tests continue to pass. `pwsh` remains unavailable locally, so the new Windows source diagnostics still require hosted PowerShell execution.
 
 This patch requires independent source review and a later integrator-owned exact-source dispatch. The failed attempt remains failed; Task33A real gameplay acceptance and the broader Task33 matrix remain open.
+
+## Second hosted attempt — run39036770835
+
+[Installed Minecraft acceptance39036770835](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39036770835) ran exact source `d0994d106c77421eb36983a79e4601aeb69d065d` with the same explicit EULA/Vanilla1.21.9 inputs. Both hosts finished **failure**. This worker monitored the integrator's dispatch, read only the scrubbed artifacts and filtered failure signals, and performed no further dispatch.
+
+Ubuntu artifact **12102357708**, manager SHA256 `8da8fa2f7937f8c1d0ac4d63f07a94b16d7cd8badc9087c13c2176033b2958aa`, establishes progress beyond the first attempt: shipping lifecycle installation completed, and the actual managed official Adoptium runtime manifest reports Temurin21.0.12.1+1-LTS, archive SHA256 `ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94`. Native start then failed at **`verifying_game_readiness`**, reported under harness phase `native_start_readiness`; the bounded public-job classifier returned `unclassified`. This is a failed product lifecycle readiness job, not a passed game-start assertion. Its specific underlying readiness cause remains unknown from the retained evidence; no client, online backup, restore or reconnect assertions were reached. The integrator was notified for root-owned production diagnosis.
+
+The new Linux metadata confirms this runner's original `/usr/local/bin` was UID0/GID0, nonsymlink directory, mode0777, device2049/inode50791. Test preparation changed only the mode to0755. Before cleanup it remained0755, and restoration returned it to0777 on the exact same device/inode. The previously suspected unsafe-prefix precondition is therefore **observed and corrected for this run**. This does not retroactively prove the earlier run's exact failure cause.
+
+Windows artifact **12102616083**, manager SHA256 `21a2640061cd4a0c71785785fa0a21a2c7bb9a7191070ab6fbae90bbd699e2ff`, narrows the initial failure to **`dependency_npm`**, before firewall/account/installer/API work. Its `failure_diagnostic` remained null. The completed job log supplies a concrete harness defect: **`Unable to find type [Management.Automation.ParameterBindingValidationException]`**. The newly added catch classifier attempted to resolve an unavailable PowerShell type before storing its numeric line and classification, masking the original npm-stage exception. Therefore the npm operation's original error/source line is still unknown.
+
+The demonstrated catch defect is corrected by capturing the existing exception's runtime `GetType().Name` as text and comparing it to the fixed string `ParameterBindingValidationException`; it no longer tries to resolve that type. A safe default diagnostic is stored before further classification, and the fixed catch output reuses the captured type name. No speculative change to npm invocation, dependency versions, authentication, native installers or production guards is included.
+
+Source regression and verification:
+
+```text
+python3 -B -m unittest discover -s deploy/qualification -p game_api_test.py -v
+Before correction: Ran18 tests; FAILED (failures=1).
+After correction: Ran18 tests; OK (0.194s).
+```
+
+The added source guard rejects the exact unavailable type literal that this hosted job proved unsafe. It does not substitute for native PowerShell execution; `pwsh` remains unavailable locally. This correction needs source review and a later root-owned hosted run to expose the original npm-stage failure. Both hosted attempts remain failed and Task33 gameplay acceptance remains open. No source was staged or committed by this worker, and no local native operation or game was launched.

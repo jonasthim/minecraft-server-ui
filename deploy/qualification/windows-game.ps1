@@ -83,13 +83,15 @@ try {
  $stage = 'complete'
 } catch {
  $failed = $true
+ $exceptionTypeName = $_.Exception.GetType().Name
+ $failureDiagnostic = @{code='unclassified';source_line=0}
  $failureLine = [int]$_.InvocationInfo.ScriptLineNumber
  if ($failureLine -lt 0 -or $failureLine -gt 10000) { $failureLine = 0 }
  $failureCode = 'unclassified'
- if ($_.Exception -is [Management.Automation.ParameterBindingValidationException]) { $failureCode = 'parameter_binding_validation' }
+ if ($exceptionTypeName -eq 'ParameterBindingValidationException') { $failureCode = 'parameter_binding_validation' }
  $failureDiagnostic = @{code=$failureCode;source_line=$failureLine}
  # Fixed stage/type only: exception messages may contain arbitrary native data.
- Write-Output ('FAIL game acceptance stage=' + $stage + ' type=' + $_.Exception.GetType().Name)
+ Write-Output ('FAIL game acceptance stage=' + $stage + ' type=' + $exceptionTypeName)
 } finally {
  try {
   if ($installStarted) {
