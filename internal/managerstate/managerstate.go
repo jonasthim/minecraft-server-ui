@@ -119,10 +119,6 @@ func snapshotWithFileHook(ctx context.Context, dataDir, binaryVersion string, af
 	if err := verifyDataBinding(ctx, dataDir, data); err != nil {
 		return Summary{}, err
 	}
-	files, err := sourceFiles(data)
-	if err != nil {
-		return Summary{}, err
-	}
 	managerSID, err := platformManagerSID(data)
 	if err != nil {
 		return Summary{}, errors.New("manager account identity could not be verified")
@@ -137,7 +133,26 @@ func snapshotWithFileHook(ctx context.Context, dataDir, binaryVersion string, af
 			summary = Summary{}
 		}
 	}()
+	return snapshotLocked(ctx, dataDir, data, maintenance, managerSID, binaryVersion, afterCopy, afterFile)
+}
 
+func snapshotLocked(ctx context.Context, dataDir string, data, maintenance *os.Root, managerSID, binaryVersion string, afterCopy func(*os.Root) error, afterFile func(string)) (summary Summary, retErr error) {
+	if err := ctx.Err(); err != nil {
+		return Summary{}, err
+	}
+	if err := validateVersion(binaryVersion); err != nil {
+		return Summary{}, err
+	}
+	files, err := sourceFiles(data)
+	if err != nil {
+		return Summary{}, err
+	}
+	if err := verifyDataBinding(ctx, dataDir, data); err != nil {
+		return Summary{}, err
+	}
+	if err := verifyMaintenanceRootBinding(ctx, dataDir, data, maintenance); err != nil {
+		return Summary{}, err
+	}
 	id, err := newID()
 	if err != nil {
 		return Summary{}, errors.New("snapshot identifier could not be generated")
@@ -502,6 +517,14 @@ func rejectDuplicateJSONKeys(body []byte) error {
 }
 
 func sourceFiles(root *os.Root) ([]sourceFile, error) {
+	return sourceFilesWithDatabaseRequirement(root, true)
+}
+
+func sourceFilesAllowMissingDatabase(root *os.Root) ([]sourceFile, error) {
+	return sourceFilesWithDatabaseRequirement(root, false)
+}
+
+func sourceFilesWithDatabaseRequirement(root *os.Root, requireDatabase bool) ([]sourceFile, error) {
 	entries, err := rootReadDir(root)
 	if err != nil {
 		return nil, errors.New("manager state directory could not be inspected")
@@ -522,7 +545,7 @@ func sourceFiles(root *os.Root) ([]sourceFile, error) {
 		files = append(files, sourceFile{name: name, info: info})
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
-	if len(files) == 0 || files[0].name != "manager.db" {
+	if requireDatabase && (len(files) == 0 || files[0].name != "manager.db") {
 		return nil, errors.New("existing manager database is required")
 	}
 	return files, nil
@@ -1071,6 +1094,21 @@ func openDataRoot(ctx context.Context, dataDir string) (*os.Root, error) {
 		return nil, errors.New("existing manager data directory is unsafe")
 	}
 	if _, err := sourceFiles(root); err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	return root, nil
+}
+
+func openDataRootAllowMissingDatabase(ctx context.Context, dataDir string) (*os.Root, error) {
+	if !filepath.IsAbs(dataDir) || filepath.Clean(dataDir) != dataDir {
+		return nil, errors.New("existing manager data directory is required")
+	}
+	root, err := safepath.OpenRoot(ctx, dataDir)
+	if err != nil {
+		return nil, errors.New("existing manager data directory is unsafe")
+	}
+	if _, err := sourceFilesAllowMissingDatabase(root); err != nil {
 		_ = root.Close()
 		return nil, err
 	}

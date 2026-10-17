@@ -32,11 +32,152 @@ func TestManagerStateGrammarRejectsExtraOrMalformedArguments(t *testing.T) {
 		{"resume", "--snapshot", strings.Repeat("a", 64)},
 		{"resume", "--snapshot", strings.Repeat("a", 64), "--confirm-manager-state-review", "extra"},
 		{"resume", "--snapshot", strings.Repeat("a", 64), "--confirm-manager-state-review", "--confirm-manager-state-review"},
+		{"restore"},
+		{"restore", "--snapshot", strings.Repeat("a", 64)},
+		{"restore", "--snapshot", strings.Repeat("A", 64), "--confirm-manager-state-restore"},
+		{"restore", "--snapshot", strings.Repeat("a", 64), "--confirm-manager-state-restore", "--resume-version", "v1.2.3"},
+		{"restore", "--snapshot", strings.Repeat("a", 64), "--confirm-manager-state-restore", "--resume-executable-sha256", strings.Repeat("a", 64)},
+		{"restore", "--snapshot", strings.Repeat("a", 64), "--resume-version", "v1.2.3", "--confirm-manager-state-restore", "--resume-executable-sha256", strings.Repeat("a", 64)},
+		{"restore", "--snapshot", strings.Repeat("a", 64), "--confirm-manager-state-restore", "--resume-version", "v1.2.3", "--resume-executable-sha256", strings.Repeat("A", 64)},
+		{"restore", "--snapshot", strings.Repeat("a", 64), "--confirm-manager-state-restore", "--resume-version", "v1.2.3", "--resume-executable-sha256", strings.Repeat("a", 64), "extra"},
 	} {
 		var output bytes.Buffer
-		if err := runManagerState(context.Background(), args, &output); err == nil || output.Len() != 0 {
-			t.Fatalf("accepted arguments %q or wrote output: %s", args, output.String())
+		if err := runManagerState(context.Background(), args, &output); err == nil || !strings.HasPrefix(err.Error(), "usage:") || output.Len() != 0 {
+			t.Fatalf("arguments %q were not rejected by grammar before configuration or wrote output: err=%v output=%s", args, err, output.String())
 		}
+	}
+}
+
+func TestDispatchedManagerStateRestoreRequiresExplicitImageForOlderSchema(t *testing.T) {
+	dir := t.TempDir()
+	snapshot := olderManagerStateCommandFixture(t, dir)
+	t.Setenv("MINECRAFT_UI_DATA_DIR", dir)
+	previousVersion := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = previousVersion })
+	var output bytes.Buffer
+	err := run(t.Context(), []string{"manager-state", "restore", "--snapshot", snapshot.ID, "--confirm-manager-state-restore"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "older schema requires an explicit resume image binding") || output.Len() != 0 {
+		t.Fatalf("older-schema restore without an image binding did not fail safely: err=%v output=%q", err, output.String())
+	}
+	if err := managerstate.CheckStartup(t.Context(), dir); err != nil {
+		t.Fatalf("rejected restore created a maintenance hold: %v", err)
+	}
+}
+
+func TestDispatchedManagerStateRestoreAcceptsExplicitFutureImageBinding(t *testing.T) {
+	dir := t.TempDir()
+	snapshot := olderManagerStateCommandFixture(t, dir)
+	t.Setenv("MINECRAFT_UI_DATA_DIR", dir)
+	previousVersion := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = previousVersion })
+	resumeVersion, resumeHash := "v2.0.0", strings.Repeat("b", 64)
+	var output bytes.Buffer
+	err := run(t.Context(), []string{"manager-state", "restore", "--snapshot", snapshot.ID, "--confirm-manager-state-restore", "--resume-version", resumeVersion, "--resume-executable-sha256", resumeHash}, &output)
+	if err != nil {
+		t.Fatalf("older-schema restore with a complete explicit image binding failed: %v", err)
+	}
+	var restored managerstate.MaintenanceSummary
+	if err := json.Unmarshal(output.Bytes(), &restored); err != nil || restored.State != "restored" || !restored.ReviewRequired || restored.AfterSchema != snapshot.Schema || restored.ExecutableSHA256 != resumeHash {
+		t.Fatalf("explicitly bound older-schema restore returned an unexpected summary: %+v err=%v", restored, err)
+	}
+	if err := managerstate.CheckStartup(t.Context(), dir); err == nil {
+		t.Fatal("startup was allowed for a restore bound to a different future image")
+	}
+}
+
+func TestDispatchedManagerStateRestoreKeepsSafetySnapshotAndWorldData(t *testing.T) {
+	dir := t.TempDir()
+	prepareManagerStateCommandTestDirectory(t, dir)
+	database, err := db.Open(t.Context(), filepath.Join(dir, "manager.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(t.Context(), "INSERT INTO instances(id,name,flavor,minecraft_version,java_major,memory_mib,game_port,config_json) VALUES('restore-world','Before restore','vanilla','1.21.1',21,1024,25566,'{}')"); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	worldMarker := filepath.Join(dir, "instances", "restore-world", "server", "world", "marker.dat")
+	if err := os.MkdirAll(filepath.Dir(worldMarker), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(worldMarker, []byte("world bytes stay as-is"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MINECRAFT_UI_DATA_DIR", dir)
+	previousVersion := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = previousVersion })
+
+	var output bytes.Buffer
+	if err := run(t.Context(), []string{"manager-state", "snapshot"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var captured managerstate.Summary
+	if err := json.Unmarshal(output.Bytes(), &captured); err != nil || captured.Schema != db.LatestVersion() {
+		t.Fatalf("latest-schema source snapshot missing: summary=%+v err=%v", captured, err)
+	}
+	mutator, err := sql.Open("sqlite", db.FileURI(filepath.Join(dir, "manager.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mutator.ExecContext(t.Context(), "UPDATE instances SET name='Changed after snapshot' WHERE id='restore-world'"); err != nil {
+		_ = mutator.Close()
+		t.Fatal(err)
+	}
+	if err := mutator.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	output.Reset()
+	if err := run(t.Context(), []string{"manager-state", "restore", "--snapshot", captured.ID, "--confirm-manager-state-restore"}, &output); err != nil {
+		t.Fatalf("dispatched restore failed: %v", err)
+	}
+	var restored managerstate.MaintenanceSummary
+	if err := json.Unmarshal(output.Bytes(), &restored); err != nil {
+		t.Fatalf("restore did not return a typed summary: %v", err)
+	}
+	if restored.Operation != "restore" || restored.State != "restored" || restored.SnapshotID != captured.ID ||
+		restored.SafetySnapshotID == "" || restored.BeforeSchema != db.LatestVersion() || restored.AfterSchema != db.LatestVersion() ||
+		!restored.ReviewRequired || len(restored.ExecutableSHA256) != 64 || strings.Contains(output.String(), dir) {
+		t.Fatalf("unexpected or unsafe restore summary: %+v output=%s", restored, output.String())
+	}
+	if err := managerstate.CheckStartup(t.Context(), dir); err == nil {
+		t.Fatal("startup was allowed before explicit restore review")
+	}
+	assertInstanceName := func(databasePath, want string) {
+		t.Helper()
+		readDB, err := sql.Open("sqlite", db.FileURI(databasePath))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer readDB.Close()
+		var got string
+		if err := readDB.QueryRowContext(t.Context(), "SELECT name FROM instances WHERE id='restore-world'").Scan(&got); err != nil || got != want {
+			t.Fatalf("database %s has name %q, want %q (err=%v)", databasePath, got, want, err)
+		}
+	}
+	assertInstanceName(filepath.Join(dir, "manager.db"), "Before restore")
+	assertInstanceName(filepath.Join(dir, "maintenance", restored.SafetySnapshotID, "manager.db"), "Changed after snapshot")
+	worldBytes, err := os.ReadFile(worldMarker)
+	if err != nil || string(worldBytes) != "world bytes stay as-is" {
+		t.Fatalf("restore changed or removed world marker: %q err=%v", worldBytes, err)
+	}
+
+	output.Reset()
+	if err := run(t.Context(), []string{"manager-state", "resume", "--snapshot", captured.ID, "--confirm-manager-state-review"}, &output); err != nil {
+		t.Fatalf("explicit restore review/resume failed: %v", err)
+	}
+	var resumed managerstate.MaintenanceSummary
+	if err := json.Unmarshal(output.Bytes(), &resumed); err != nil || resumed.State != "resumed" || resumed.ReviewRequired {
+		t.Fatalf("restore review did not return resumed summary: %+v err=%v", resumed, err)
+	}
+	if err := managerstate.CheckStartup(t.Context(), dir); err != nil {
+		t.Fatalf("startup remained held after explicit restore review: %v", err)
 	}
 }
 

@@ -6,7 +6,7 @@ The current build is `0.0.0-dev`. No stable release or supported Minecraft/loade
 
 Use the reviewed native installers only after designating a test host and reviewing its service configuration. Linux runs the manager as `minecraft-ui`, with a root-owned `/usr/local/bin/minecraft-ui`; the manager must never be granted arbitrary privileged copy or shell access. The existing `unitctl` accepts lifecycle operations on validated instance identifiers only. Windows Server2022 installed-service, ACL and updater checks have hosted evidence; other Windows targets and the full installer lifecycle still need qualification.
 
-Keep `manager.db` and its SQLite WAL/SHM sidecars private. Game backups exclude manager state. Before an administrative manager migration, separately arrange a consistent manager-state backup while the manager is stopped; never copy only a live WAL-mode database file. Restoring manager state requires a reviewed maintenance procedure and must not silently rewind game worlds.
+Keep `manager.db` and its SQLite WAL/SHM sidecars private. Game backups exclude manager state. Manager snapshots and restore operate only while the manager is stopped; never copy only a live WAL-mode database file. Restoring manager state requires explicit review and does not rewind game worlds.
 
 ## Stopped manager-state snapshots
 
@@ -29,9 +29,55 @@ They do not start the service or migrate the database.
 
 Treat these snapshots as sensitive: they contain manager users, credentials
 and configuration. They exclude worlds and other game files. Keep the complete
-directory intact. Snapshot and verification source tests pass on Linux; native
-Windows execution and installed recovery qualification remain pending. A
-dedicated manager-state restore command is not available yet.
+directory intact. Snapshot and verification tests have run on Linux and Windows
+Server 2022; installed recovery qualification remains pending.
+
+## Stopped manager-state restore
+
+Stop the manager through its normal service controls. On Linux, run restore and
+resume as the manager account. On Windows, use LocalSystem or an elevated
+Administrator with the data directory on the fixed local C: NTFS volume.
+Set `MINECRAFT_UI_DATA_DIR` to that existing data directory. Verify the selected
+snapshot first, and review its schema and summary. Restore creates and verifies
+a safety snapshot of the current manager database before replacing the complete
+SQLite file set. Its successful JSON summary includes the selected snapshot ID,
+safety snapshot ID, schema transition and the required resume executable hash.
+Keep both snapshots intact.
+
+For a snapshot at the schema embedded in the currently running manager, run:
+
+```text
+minecraft-ui manager-state restore --snapshot HEX_ID --confirm-manager-state-restore
+```
+
+If the selected snapshot has an older schema, supply the exact version and
+SHA-256 of the manager build that will perform resume. That build must support
+this restore format and have the same embedded schema as the selected snapshot:
+
+```text
+minecraft-ui manager-state restore --snapshot HEX_ID --confirm-manager-state-restore --resume-version VERSION --resume-executable-sha256 HEX_SHA256
+```
+
+The version and hash must be supplied together and in that order. Use the
+executable hash reported by the trusted release process; do not guess it.
+Restoring older-schema state without this binding is refused. The restore leaves
+a startup hold for review. Inspect restored manager records and separately
+reconcile them with the running world state. Then run the recorded matching
+manager build and explicitly review the hold:
+
+```text
+minecraft-ui manager-state resume --snapshot HEX_ID --confirm-manager-state-review
+```
+
+Resume verifies the selected snapshot and current manager executable before it
+clears the hold. Restore and resume do not start the manager or game servers,
+copy world files, or rewind world progress. Do not delete `hold.json`,
+`hold.pending`, or recovery files manually. To continue an interrupted restore,
+repeat the same confirmed restore command with the same executing build and
+resume-image options. A valid recorded operation continues from its verified
+file locations and retains its original safety snapshot. Ambiguous or changed
+state is refused and keeps startup blocked for manual recovery. Resume is only
+available after restore reaches its completed, held state.
 
 ## Stopped-manager schema migration
 
@@ -66,9 +112,7 @@ normal service controls only after resume succeeds.
 
 A failed or interrupted migration keeps startup blocked for review or recovery.
 Do not delete `hold.json` or `hold.pending` manually and do not use resume to
-clear a `migrating` hold. The explicit restore/recovery operation is a separate
-future procedure; do not edit the database or restore a snapshot as an
-automatic failure response. Preserve the original verified snapshot unchanged.
+clear a `migrating` hold. Preserve the original verified snapshot unchanged.
 
 ## Manager update trust
 

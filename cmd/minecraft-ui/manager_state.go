@@ -14,7 +14,7 @@ import (
 
 // runManagerState implements the no-server manager-state command grammar.
 func runManagerState(ctx context.Context, args []string, output io.Writer) error {
-	var operation, id string
+	var operation, id, resumeVersion, resumeHash string
 	var fromSchema, toSchema int64
 	switch {
 	case len(args) == 1 && args[0] == "snapshot":
@@ -28,8 +28,15 @@ func runManagerState(ctx context.Context, args []string, output io.Writer) error
 	case len(args) == 4 && args[0] == "resume" && args[1] == "--snapshot" && validManagerStateID(args[2]) &&
 		args[3] == "--confirm-manager-state-review":
 		operation, id = "resume", args[2]
+	case len(args) == 4 && args[0] == "restore" && args[1] == "--snapshot" && validManagerStateID(args[2]) &&
+		args[3] == "--confirm-manager-state-restore":
+		operation, id = "restore", args[2]
+	case len(args) == 8 && args[0] == "restore" && args[1] == "--snapshot" && validManagerStateID(args[2]) &&
+		args[3] == "--confirm-manager-state-restore" && args[4] == "--resume-version" && args[5] != "" &&
+		args[6] == "--resume-executable-sha256" && validManagerStateID(args[7]):
+		operation, id, resumeVersion, resumeHash = "restore", args[2], args[5], args[7]
 	default:
-		return errors.New("usage: manager-state snapshot | verify --snapshot HEX_ID | migrate --snapshot HEX_ID --from-schema N --to-schema M | resume --snapshot HEX_ID --confirm-manager-state-review")
+		return errors.New("usage: manager-state snapshot | verify --snapshot HEX_ID | migrate --snapshot HEX_ID --from-schema N --to-schema M | restore --snapshot HEX_ID --confirm-manager-state-restore [--resume-version VERSION --resume-executable-sha256 HEX_SHA256] | resume --snapshot HEX_ID --confirm-manager-state-review")
 	}
 	cfg, err := config.FromEnvironment()
 	if err != nil {
@@ -61,6 +68,13 @@ func runManagerState(ctx context.Context, args []string, output io.Writer) error
 		}
 	case "resume":
 		maintenance, err = managerstate.Resume(ctx, cfg.DataDir, version, id, true)
+		if err != nil {
+			return err
+		}
+	case "restore":
+		maintenance, err = managerstate.Restore(ctx, cfg.DataDir, version, managerstate.RestoreOptions{
+			SnapshotID: id, Confirmed: true, ResumeBinaryVersion: resumeVersion, ResumeExecutableSHA256: resumeHash,
+		})
 		if err != nil {
 			return err
 		}

@@ -33,6 +33,8 @@ type MaintenanceSummary struct {
 	Operation        string `json:"operation"`
 	State            string `json:"state"`
 	SnapshotID       string `json:"snapshot_id"`
+	SafetySnapshotID string `json:"safety_snapshot_id,omitempty"`
+	OperationID      string `json:"operation_id,omitempty"`
 	BeforeSchema     int64  `json:"before_schema"`
 	AfterSchema      int64  `json:"after_schema"`
 	ExecutableSHA256 string `json:"executable_sha256"`
@@ -115,7 +117,7 @@ func (s *lockedMaintenance) close() error {
 	return closeErr
 }
 
-func acquireLockedMaintenance(ctx context.Context, dataDir string, authorize func() error) (*lockedMaintenance, error) {
+func acquireLockedMaintenance(ctx context.Context, dataDir string, authorize func() error, allowMissingDatabase ...bool) (*lockedMaintenance, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -124,7 +126,14 @@ func acquireLockedMaintenance(ctx context.Context, dataDir string, authorize fun
 			return nil, errors.New("administrator authority is required")
 		}
 	}
-	data, err := openDataRoot(ctx, dataDir)
+	allowMissing := len(allowMissingDatabase) > 0 && allowMissingDatabase[0]
+	var data *os.Root
+	var err error
+	if allowMissing {
+		data, err = openDataRootAllowMissingDatabase(ctx, dataDir)
+	} else {
+		data, err = openDataRoot(ctx, dataDir)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +152,11 @@ func acquireLockedMaintenance(ctx context.Context, dataDir string, authorize fun
 		_ = session.close()
 		return nil, err
 	}
-	if _, err := sourceFiles(data); err != nil {
+	checkFiles := sourceFiles
+	if allowMissing {
+		checkFiles = sourceFilesAllowMissingDatabase
+	}
+	if _, err := checkFiles(data); err != nil {
 		_ = session.close()
 		return nil, err
 	}
@@ -408,7 +421,7 @@ func resumeWithDeps(ctx context.Context, dataDir, binaryVersion, snapshotID stri
 	if !validID(snapshotID) || validateVersion(binaryVersion) != nil {
 		return summary, maintenanceFailure("resume options are invalid", nil)
 	}
-	session, err := acquireLockedMaintenance(ctx, dataDir, deps.authorize)
+	session, err := acquireLockedMaintenance(ctx, dataDir, deps.authorize, true)
 	if err != nil {
 		return summary, maintenanceFailure("resume could not acquire safe manager state", err)
 	}
@@ -420,6 +433,13 @@ func resumeWithDeps(ctx context.Context, dataDir, binaryVersion, snapshotID stri
 	}()
 	if err := requireAbsent(session.maintenance, "hold.pending"); err != nil {
 		return summary, maintenanceFailure("resume found pending maintenance state", err)
+	}
+	format, err := currentMaintenanceHoldFormat(ctx, session.maintenance)
+	if err != nil {
+		return summary, maintenanceFailure("resume requires a matching maintenance hold", err)
+	}
+	if format == 2 {
+		return resumeRestoreWithSession(ctx, session, binaryVersion, snapshotID, deps)
 	}
 	pin, hold, err := openCurrentHold(ctx, session.maintenance)
 	if err != nil {
@@ -983,7 +1003,7 @@ func replaceHoldCAS(ctx context.Context, session *lockedMaintenance, previous *m
 	return pending, nil
 }
 
-func strictHoldJSON(body []byte, hold *migrationHold) error {
+func strictHoldJSON[T any](body []byte, hold *T) error {
 	if err := rejectDuplicateJSONKeys(body); err != nil {
 		return err
 	}
