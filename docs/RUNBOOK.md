@@ -8,6 +8,31 @@ Use the reviewed native installers only after designating a test host and review
 
 Keep `manager.db` and its SQLite WAL/SHM sidecars private. Game backups exclude manager state. Before an administrative manager migration, separately arrange a consistent manager-state backup while the manager is stopped; never copy only a live WAL-mode database file. Restoring manager state requires a reviewed maintenance procedure and must not silently rewind game worlds.
 
+## Stopped manager-state snapshots
+
+After stopping the manager through its normal service controls, run these
+commands as the manager account with `MINECRAFT_UI_DATA_DIR` set to its existing
+data directory (Windows also permits an authorized administrator):
+
+```text
+minecraft-ui manager-state snapshot
+minecraft-ui manager-state verify --snapshot HEX_ID
+```
+
+Use the 64-character lowercase `id` from the first command for `HEX_ID`. A
+successful command prints one JSON summary. Snapshots are private directories
+at `maintenance/HEX_ID` within the data directory. They include `manager.db`
+and every present SQLite WAL/SHM/journal sidecar. Verification checks the
+manifest, hashes, schema and SQLite integrity using a separate working copy.
+Both commands hold the manager lock and refuse absent or unsafe database state.
+They do not start the service or migrate the database.
+
+Treat these snapshots as sensitive: they contain manager users, credentials
+and configuration. They exclude worlds and other game files. Keep the complete
+directory intact. Snapshot and verification source tests pass on Linux; native
+Windows execution and installed recovery qualification remain pending. Database
+migration and restoration commands are not yet available.
+
 ## Manager update trust
 
 Production release source and verification public keys are not configured. Self-update activation must remain unavailable until the integrator supplies and reviews a root-owned trust configuration, a bounded native activation worker, shutdown/drain coordination, and authenticated version-specific readiness. A local checksum or a checksum fetched beside an artifact does not establish publisher identity.

@@ -74,6 +74,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	if command == "admin-reset" {
 		return runAdminReset(ctx, args[1:], os.Stdin, out)
 	}
+	if command == "manager-state" {
+		return runManagerState(ctx, args[1:], out)
+	}
 	if command == "launch" {
 		return runLaunch(ctx, args[1:], os.Stdin)
 	}
