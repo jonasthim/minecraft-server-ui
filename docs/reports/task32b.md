@@ -294,3 +294,66 @@ Bash syntax, Python3.10 grammar and scoped whitespace checks pass. New Windows
 PowerShell diagnostics still require actual hosted parsing/execution. The
 diagnostic rerun remains an integrator dispatch/review gate; no successful
 installed updater evidence has yet been obtained.
+
+## Diagnostic rerun39033415308 — exact observed blockers
+
+[Run39033415308](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39033415308)
+at `23698965ac067a5a0e22decf6a8157a42971438e` completed **failure**: both native
+build jobs passed; Ubuntu22, Ubuntu24 and Windows2022 installed jobs failed.
+Scrubbed reports were downloaded read-only to a separate run-specific cache.
+
+The Ubuntu image versions remain `ubuntu22 20261012.322.1` and
+`ubuntu24 20261012.334.1`. Both now directly record the same real, root-owned
+`/usr/local/bin` lifecycle:
+
+| Snapshot phase | UID:GID | Mode | Symlink |
+| --- | --- | --- | --- |
+| Before hosted-prefix provisioning | `0:0` | `0777` | false |
+| After provisioning | `0:0` | `0755` | false |
+| Before application cleanup | `0:0` | `0755` | false |
+| After exact prefix restoration | `0:0` | `0777` | false |
+
+The shipping installer/bootstrap now succeeds on both Ubuntu runners. The
+harness reaches manager-account staging, actual native manager startup, empty
+database setup, authenticated administrator/session and update availability
+checks. Manager unit summaries show the genuine unprivileged manager running
+with the shipping sandbox. The **first activation POST returns HTTP403**, so
+no native executable activation or recovery case has passed. Source trace
+identifies a harness omission: `manager_api.request` sets JSON content type but
+no `X-CSRF-Token`; shipping authenticated cookie mutations require the
+session-bound token returned by `GET /api/v1/auth/me`. The narrow correction is
+to supply that in-memory token for the updater harness's activation requests,
+retaining all product CSRF checks and avoiding another package's request helper.
+Both failed run results still record cleanup checked and the actual prefix
+restoration above.
+
+Windows remains `win22 20261012.333.1` and fails during shipping installer
+bootstrap. The `failure-before-cleanup` DACL snapshot establishes the exact
+first rejected path in the shipping ancestry walk:
+
+- `C:\ProgramData\MinecraftUIUpdate` passes: administrator owner, no reparse,
+  effective ACEs only for SYSTEM and Administrators, both full control.
+- Next, `C:\ProgramData` has owner SYSTEM, no reparse, and an effective explicit
+  allow ACE at index4 for Users (`S-1-5-32-545`) with mask278 (`0x116`),
+  ContainerInherit1, propagation flags0 (not inherit-only).
+- That ACE intersects the current forbidden mask `0x500d0042` only at `0x2`.
+  Its full mask is `FILE_ADD_FILE(0x2) | FILE_ADD_SUBDIRECTORY(0x4) |
+  FILE_WRITE_EA(0x10) | FILE_WRITE_ATTRIBUTES(0x100)`. It grants no DELETE,
+  DELETE_CHILD, WRITE_DAC, WRITE_OWNER, GENERIC_WRITE or GENERIC_ALL.
+- The bootstrap file itself is administrator-owned and inherits only SYSTEM
+  and Administrators full control. The guard fails at the ancestor before
+  reaching that file; the bootstrap file is not the cause.
+
+This confirms the earlier create-only ancestor hypothesis. Proposed narrow
+product correction: distinguish inspection of an **existing ancestor
+directory** from a protected application leaf directory/file, so the ancestor's
+create-new-child permission is not mistaken for write access to an existing
+protected child. Preserve strict leaf/file checks and ancestor owner, delete/
+replacement, DACL/owner-change, reparse and binding defenses; do not modify the
+system ProgramData ACL or trust an unprotected application directory. Root
+assignment and a focused regression/review are required before a shipping edit.
+
+The new Windows diagnostic PowerShell actually parsed and ran on the native
+host, but installed updater activation remains unqualified on all three
+targets. This run proves Linux provisioning/restoration and identifies the next
+two blockers; it does not prove successful executable replacement or recovery.

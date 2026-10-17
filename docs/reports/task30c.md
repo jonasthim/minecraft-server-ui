@@ -79,3 +79,30 @@ Local checks run for this addition:
 Expected hosted evidence is the existing installed-manager Linux Ubuntu 22.04/24.04 and Windows Server 2022 workflow, now including three additional scrubbed `PASS recovery ...` lines in its existing `api-assertions.txt`. Root owns workflow dispatch and review. No workflows or lifecycle scripts were changed by this worker.
 
 Native assertions do not cover SSO/policy/role rejection combinations, transaction fault injection, cancellation or commit/close failures; source fixture tests cover those boundaries. They preserve manager account/role/user state rather than claiming game/world recovery. The native snapshot records the actual existing sidecar count; clean shutdown may already have checkpointed/deleted WAL/SHM. The local uncheckpointed-WAL fixture covers that separate copy-consumption case. No hosted execution or native recovery completion claim is made in this appendix.
+
+## Observed installed native run 39033415354 (2026-10-17)
+
+The integrator dispatched [Installed manager smoke 39033415354](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39033415354) with `compare_parent_unit=false` at exact source `23698965ac067a5a0e22decf6a8157a42971438e`. The workflow completed successfully on all three native x64 runners. This appendix records actual scrubbed artifacts inspected by the worker; acceptance/qualification decisions and ledger changes remain integrator-owned.
+
+| Native job | Running-manager refusal | Stopped snapshot | Installed reset and authentication | Final stop and cleanup result |
+| --- | --- | --- | --- | --- |
+| [Ubuntu 22.04 / systemd 249](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39033415354/job/117398371674) | PASS | PASS, 1 existing SQLite file | PASS | Zero-manager assertion; `exit_code: 0` |
+| [Ubuntu 24.04 / systemd 255](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39033415354/job/117398371919) | PASS | PASS, 1 existing SQLite file | PASS | Zero-manager assertion; `exit_code: 0` |
+| [Windows Server 2022 / SCM](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39033415354/job/117398371924) | PASS | PASS, 1 existing SQLite file | PASS | Zero-manager assertion; `failed: false` |
+
+Each platform's actual `api-assertions.txt` contains all of the following, in addition to real empty-database setup and the original stop/start/restart persistence checks:
+
+```text
+PASS recovery running-manager lock refusal; old login/session/token valid
+PASS recovery stopped SQLite snapshot: 1 existing files; exact lock/contention/hashes/integrity
+PASS recovery installed CLI: same admin/new login; old password/session/token rejected; other user/session preserved
+PASS final native stop: zero installed manager processes
+```
+
+These lines were produced only after the corresponding assertions executed against the installed binary and real service. They establish that the running-manager command refused its lock without invalidating existing access; native shutdown left no manager PID; the private copy passed lock contention, source/copy hash comparison, sidecar-set completeness and SQLite integrity checks; the stopped command succeeded; native restart preserved administrator ID/role and another user's identity/password/session; and the recovered account accepted its new password while rejecting its prior password, session and personal token. The token metadata list was empty after recovery. Snapshot deletion in the helper's `finally` completed before the reset stage; the outer native harness also returned a successful cleanup result.
+
+Both Linux `unit-properties.txt` reports show `MainPID=0`, `ActiveState=inactive`, `SubState=dead`, `Result=success` and successful executable exit after final stop. The real process UID/GID reports were unprivileged and the installed unit retained `User=minecraft-ui`. Windows `scm-summary.json` shows `State=Stopped`, `ExitCode=0` and `ServiceSpecificExitCode=0`. Its scrubbed identity report confirms the created account SID, SCM service account SID and actual manager process owner SID matched; the local account alias was resolved correctly.
+
+The reviewed artifacts were `installed-manager-ubuntu-22.04-23698965ac067a5a0e22decf6a8157a42971438e` (artifact ID `12101685727`), `installed-manager-ubuntu-24.04-23698965ac067a5a0e22decf6a8157a42971438e` (`12101158031`) and `installed-manager-windows-2022-23698965ac067a5a0e22decf6a8157a42971438e` (`12101410821`). All three `commit.txt` files match the exact workflow source. The downloaded artifact file lists contain only allowlisted scrubbed `.txt`/`.json` reports, with no credential-bearing database, snapshot, cookie jar, environment file, raw subprocess output or logs.
+
+The observed stopped snapshots each contained **only `manager.db`**: clean SQLite shutdown had removed WAL/SHM. This run therefore proves copying and verifying all files that actually existed after these clean shutdowns; it does not prove a native stopped snapshot with a retained WAL. The separate local helper fixture requires an uncheckpointed WAL and fails without it. No Windows 10/11/Server 2019, other Linux distributions, game/client/world behavior, forced interrupted-SQLite shutdown, SSO recovery, or whole Task30 installer lifecycle qualification is inferred from this run. No owned-source correction was needed, and this monitoring task changed only this report appendix.
