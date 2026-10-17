@@ -32,3 +32,11 @@ The read-only preflight found BFE and MpsSvc running, the firewall provider clas
 This narrows the current provider failure to cases containing an IPv6 address input. It does not show whether the provider rejects `::/0` specifically or all IPv6 input, and it does not identify the rejected parameter. The probe now adds `ipv6_split` with `::/1` plus `8000::/1`, and `ipv4_ranges_ipv6_split` with the original IPv4 ranges plus those two IPv6 prefixes. Its pure normalization fixture verifies that the IPv6 halves merge to exactly `::/0` with no gaps, and that the combined set equals the original ranges plus all IPv6 addresses. These new cases have not yet run on a hosted Windows runner.
 
 The retained schema contains only fixed statuses and booleans for service/provider availability, case labels, booleans, numeric CIM codes, and finite failure categories. It does not retain exception messages or arbitrary fully qualified error IDs. The results remain diagnostic only; they do not justify a shipping firewall change.
+
+## Hosted IPv6 split confirmation
+
+The hosted Windows firewall investigation run [39044756931](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39044756931), job `117431589358`, tested commit `d749c2a4234107256382290a16edcd82d915f61f`. Its retained `firewall-summary.json` is at `/home/thim/.cache/dilla-tmp/firewall-39044756931/windows-firewall-d749c2a4234107256382290a16edcd82d915f61f/`.
+
+The `ipv6_split` case (`::/1` plus `8000::/1`) and the `ipv4_ranges_ipv6_split` case both created successfully, read back an exact normalized address set, and passed cleanup verification. `ipv6_any`, `original`, and `cidr_equivalent` still failed creation with the same bounded CIM values (`HResult=-2146233088`, `NativeErrorCode=1`, `StatusCode=1`) and passed cleanup verification. The summary contains no provider message text.
+
+`deploy/qualification/windows-game.ps1` now uses the two accepted IPv6 halves in place of `::/0`; the original IPv4 ranges and the remaining firewall guards are unchanged. The retained native probe is evidence for this provider input correction and its address-set readback. It does not qualify the full Windows game acceptance run, which remains a separate gate.

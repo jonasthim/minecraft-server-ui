@@ -67,9 +67,10 @@ try {
  $stage = 'firewall'
  if (@(Get-NetFirewallProfile | Where-Object { -not $_.Enabled }).Count -ne 0) { throw 'firewall_disabled' }
  if (Get-NetFirewallRule -Name MinecraftGameAcceptance -ErrorAction SilentlyContinue) { throw 'existing_firewall_rule' }
- # Exclude only IPv4 loopback; all other IPv4 and all IPv6 game/API ingress is
- # blocked before offline authentication is enabled. Private MSMP binds loopback.
- New-NetFirewallRule -Name MinecraftGameAcceptance -DisplayName MinecraftGameAcceptance -Direction Inbound -Action Block -Protocol TCP -LocalPort 25565,8080 -RemoteAddress @('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/0') -Profile Any | Out-Null
+ # The native provider rejects ::/0; the two CIDRs cover the same complete
+ # IPv6 range and were accepted with exact normalized readback. Exclude only
+ # IPv4 loopback; all other IPv4 and IPv6 ingress stays blocked.
+ New-NetFirewallRule -Name MinecraftGameAcceptance -DisplayName MinecraftGameAcceptance -Direction Inbound -Action Block -Protocol TCP -LocalPort 25565,8080 -RemoteAddress @('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/1','8000::/1') -Profile Any | Out-Null
  $firewallCreated = $true
  Assert-True ((Get-NetFirewallRule -Name MinecraftGameAcceptance).Enabled -eq 'True') 'firewall_rule_disabled'
  $stage = 'account'
