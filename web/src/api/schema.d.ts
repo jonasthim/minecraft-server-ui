@@ -1453,6 +1453,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{instanceId}/updates/previews/{previewId}/pack/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Administrator and PAT admin only. Bounded raw official member bytes for exact unresolved path in actor-owned target preview. Receipt must be supplied in a new typed preview; no capability or live selection changes. */
+        post: operations["stageInstanceUpdatePackMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2886,6 +2903,10 @@ export interface components {
             /** @description Defaults to 300 seconds; explicit zero is preserved. */
             countdown_seconds?: number;
             pack?: components["schemas"]["ModpackRequest"];
+            /** @description Manual mode only; installed content ID to owned verified upload receipt. Each key requires an exact content_selections entry; administrator and PAT admin required. */
+            content_manual?: {
+                [key: string]: string;
+            };
         };
         UpdateSnapshot: {
             instance_revision: string;
@@ -2940,6 +2961,10 @@ export interface components {
             countdown_seconds: number;
             /** Format: date-time */
             expires_at: string;
+            pack?: components["schemas"]["ModpackPreview"];
+            content_manual_required?: {
+                [key: string]: components["schemas"]["UpdateContentManualItem"];
+            };
         };
         UpdateApplyRequest: {
             /** @constant */
@@ -2989,6 +3014,21 @@ export interface components {
         };
         UpdateJobResponse: {
             job: components["schemas"]["Job"];
+        };
+        UpdatePackMemberReceipt: {
+            path: string;
+            receipt_id: string;
+            sha256: string;
+            size: number;
+        };
+        UpdateContentManualItem: {
+            selection: components["schemas"]["ContentSelection"];
+            filename: string;
+            official_url: string;
+            hashes: {
+                [key: string]: string;
+            };
+            reason: string;
         };
     };
     responses: never;
@@ -9841,6 +9881,89 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpdatePlan"];
+                };
+            };
+            /** @description Structured operation error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Structured operation error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    stageInstanceUpdatePackMember: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["UpdateInstanceId"];
+                previewId: components["parameters"]["UpdatePreviewId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Verified exact member receipt */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatePackMemberReceipt"];
                 };
             };
             /** @description Structured operation error */

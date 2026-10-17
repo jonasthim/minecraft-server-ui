@@ -14,18 +14,20 @@ type executionIdentity struct {
 	service           *Service
 	owner             *Execution
 	jobID, instanceID string
+	kind              string
+	requester         int64
 	ctx               context.Context
 	accepting         bool
 	mutationDone      chan struct{}
 	mutationErr       error
 }
 
-func (s *Service) bindExecution(ctx context.Context, id string, job domain.Job, payload []byte) *Execution {
+func (s *Service) bindExecution(ctx context.Context, id string, job Job, payload []byte) *Execution {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current := s.running[id]
-	identity := &executionIdentity{service: s, jobID: id, instanceID: current.instance, ctx: ctx, accepting: true}
-	e := &Execution{Job: job, Payload: payload, service: s, secrets: payloadSecrets(payload), identity: identity}
+	identity := &executionIdentity{service: s, jobID: id, instanceID: current.instance, kind: job.Kind, requester: job.RequestedBy, ctx: ctx, accepting: true}
+	e := &Execution{Job: job.Job, Payload: payload, service: s, secrets: payloadSecrets(payload), identity: identity}
 	identity.owner = e
 	current.execution = identity
 	s.running[id] = current

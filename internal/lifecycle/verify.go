@@ -26,6 +26,15 @@ func (s *Service) VerifyRunningAfterReconcile(ctx context.Context) error {
 	}
 	for _, detail := range all {
 		id := detail.Instance.ID
+		if s.deferAutostart != nil {
+			hold, err := s.deferAutostart(ctx, id)
+			if err != nil {
+				return err
+			}
+			if hold {
+				continue
+			}
+		}
 		identity, err := s.native.Identity(ctx, id)
 		if os.IsNotExist(err) {
 			continue

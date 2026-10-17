@@ -574,6 +574,15 @@ func (s *Service) AutostartPlans(ctx context.Context) (map[string]domain.LaunchS
 	}
 	out := map[string]domain.LaunchSpec{}
 	for _, id := range ids {
+		if s.deferAutostart != nil {
+			deferStart, checkErr := s.deferAutostart(ctx, id)
+			if checkErr != nil {
+				return nil, checkErr
+			}
+			if deferStart {
+				continue
+			}
+		}
 		var active int
 		if err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE instance_id=? AND state IN('queued','running')`, id).Scan(&active); err != nil {
 			return nil, err

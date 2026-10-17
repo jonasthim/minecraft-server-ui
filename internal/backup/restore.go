@@ -113,83 +113,9 @@ func (s *Service) runRestore(ctx context.Context, e *jobs.Execution) (result err
 		if err != nil {
 			return err
 		}
-		backups, err := openSource(dirs.Backups)
+		journal, err := s.stageRestoreJournal(ctx, dirs, download.File, record.SizeBytes, manifest, operationID, input.BackupID, safety.ID, c.job, c.id)
 		if err != nil {
 			return err
-		}
-		defer backups.Close()
-		opDir := ".restore-" + operationID
-		if err = backups.root.Mkdir(opDir, 0700); err != nil {
-			return err
-		}
-		operation, err := openSource(filepath.Join(dirs.Backups, opDir))
-		if err != nil {
-			return err
-		}
-		defer operation.Close()
-		for _, name := range []string{"new", "preimage"} {
-			if err = operation.root.Mkdir(name, 0700); err != nil {
-				return err
-			}
-		}
-		stage, err := openSource(filepath.Join(dirs.Backups, opDir, "new"))
-		if err != nil {
-			return err
-		}
-		defer stage.Close()
-		if _, err = extractArchive(ctx, download.File, record.SizeBytes, stage, defaultLimits); err != nil {
-			return err
-		}
-		for _, root := range manifest.Roots {
-			if _, err := stage.root.Lstat(root); os.IsNotExist(err) {
-				if err = stage.root.Mkdir(root, 0700); err != nil {
-					return err
-				}
-			}
-		}
-		if err = syncTree(ctx, stage.root, 0); err != nil {
-			return err
-		}
-		if err = errors.Join(syncDir(operation.root, "."), syncDir(backups.root, ".")); err != nil {
-			return err
-		}
-		server, err := openSource(dirs.Server)
-		if err != nil {
-			return err
-		}
-		defer server.Close()
-		names := append([]string(nil), manifest.Roots...)
-		if manifest.Kind == domain.BackupFull {
-			entries, err := boundedReadDir(server.root, defaultLimits.entries)
-			if err != nil {
-				return err
-			}
-			for _, entry := range entries {
-				if !excluded(entry.Name()) {
-					names = append(names, entry.Name())
-				}
-			}
-		}
-		sort.Strings(names)
-		journal := restoreJournal{OperationID: operationID, BackupID: input.BackupID, SafetyID: safety.ID, JobID: c.job, InstanceID: c.id, Manifest: manifest, Moves: []restoreMove{}}
-		seen := map[string]bool{}
-		for _, name := range names {
-			if seen[strings.ToLower(name)] {
-				continue
-			}
-			if safePath(name) != nil || strings.Contains(name, "/") || excluded(name) {
-				return errCorrupt
-			}
-			seen[strings.ToLower(name)] = true
-			oldDigest, _, err := treeDigest(ctx, server.root, name)
-			if err != nil {
-				return err
-			}
-			newDigest, _, err := treeDigest(ctx, stage.root, name)
-			if err != nil {
-				return err
-			}
-			journal.Moves = append(journal.Moves, restoreMove{name, oldDigest, newDigest, "pending"})
 		}
 		raw, _ := json.Marshal(journal)
 		if _, err = s.db.ExecContext(ctx, `INSERT INTO backup_restores(id,instance_id,backup_id,safety_id,job_id,state,journal_json,updated_at)VALUES(?,?,?,?,?,'prepared',?,?)`, operationID, c.id, input.BackupID, safety.ID, c.job, string(raw), stamp()); err != nil {
@@ -246,6 +172,130 @@ func (s *Service) finishRestore(ctx context.Context, session *instance.StoppedSe
 	if err = verifyRestoreMarker(state, journal); err != nil {
 		return err
 	}
+	if err = s.replaceRestoreMoves(ctx, dirs, journal, s.journalRestore); err != nil {
+		return err
+	}
+	// Materialization may change server.properties and eula.txt from the archive;
+	// record data replacement before this separately recoverable finalization.
+	journal.DataReplaced = true
+	if err = s.journalRestore(ctx, journal, "materializing"); err != nil {
+		return err
+	}
+	if err = s.failAt("restore_materialize"); err != nil {
+		return err
+	}
+	if err = session.MaterializeRestoredProperties(ctx); err != nil {
+		return err
+	}
+	if err = state.verify(); err != nil {
+		return err
+	}
+	if err = verifyRestoreMarker(state, journal); err != nil {
+		return err
+	}
+	if err = s.journalRestore(ctx, journal, "committed"); err != nil {
+		return err
+	}
+	if err = state.root.Remove("backup-restore.json"); err != nil {
+		return err
+	}
+	if err = syncDir(state.root, "."); err != nil {
+		return err
+	}
+	if err = s.journalRestore(ctx, journal, "complete"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// stageRestoreJournal validates/extracts into private staging and records exact
+// old/new digests. It neither changes live files nor creates restore authority.
+func (s *Service) stageRestoreJournal(ctx context.Context, dirs instance.Directories, file *os.File, size int64, manifest Manifest, operationID, backupID, safetyID, jobID, instanceID string) (restoreJournal, error) {
+	backups, err := openSource(dirs.Backups)
+	if err != nil {
+		return restoreJournal{}, err
+	}
+	defer backups.Close()
+	opDir := ".restore-" + operationID
+	if err = backups.root.Mkdir(opDir, 0700); err != nil {
+		return restoreJournal{}, err
+	}
+	operation, err := openSource(filepath.Join(dirs.Backups, opDir))
+	if err != nil {
+		return restoreJournal{}, err
+	}
+	defer operation.Close()
+	for _, name := range []string{"new", "preimage"} {
+		if err = operation.root.Mkdir(name, 0700); err != nil {
+			return restoreJournal{}, err
+		}
+	}
+	stage, err := openSource(filepath.Join(dirs.Backups, opDir, "new"))
+	if err != nil {
+		return restoreJournal{}, err
+	}
+	defer stage.Close()
+	if _, err = extractArchive(ctx, file, size, stage, defaultLimits); err != nil {
+		return restoreJournal{}, err
+	}
+	for _, root := range manifest.Roots {
+		if _, err := stage.root.Lstat(root); os.IsNotExist(err) {
+			if err = stage.root.Mkdir(root, 0700); err != nil {
+				return restoreJournal{}, err
+			}
+		}
+	}
+	if err = syncTree(ctx, stage.root, 0); err != nil {
+		return restoreJournal{}, err
+	}
+	if err = errors.Join(syncDir(operation.root, "."), syncDir(backups.root, ".")); err != nil {
+		return restoreJournal{}, err
+	}
+	server, err := openSource(dirs.Server)
+	if err != nil {
+		return restoreJournal{}, err
+	}
+	defer server.Close()
+	names := append([]string(nil), manifest.Roots...)
+	if manifest.Kind == domain.BackupFull {
+		entries, err := boundedReadDir(server.root, defaultLimits.entries)
+		if err != nil {
+			return restoreJournal{}, err
+		}
+		for _, entry := range entries {
+			if !excluded(entry.Name()) {
+				names = append(names, entry.Name())
+			}
+		}
+	}
+	sort.Strings(names)
+	journal := restoreJournal{OperationID: operationID, BackupID: backupID, SafetyID: safetyID, JobID: jobID, InstanceID: instanceID, Manifest: manifest, Moves: []restoreMove{}}
+	seen := map[string]bool{}
+	for _, name := range names {
+		if seen[strings.ToLower(name)] {
+			continue
+		}
+		if safePath(name) != nil || strings.Contains(name, "/") || excluded(name) {
+			return restoreJournal{}, errCorrupt
+		}
+		seen[strings.ToLower(name)] = true
+		oldDigest, _, err := treeDigest(ctx, server.root, name)
+		if err != nil {
+			return restoreJournal{}, err
+		}
+		newDigest, _, err := treeDigest(ctx, stage.root, name)
+		if err != nil {
+			return restoreJournal{}, err
+		}
+		journal.Moves = append(journal.Moves, restoreMove{name, oldDigest, newDigest, "pending"})
+	}
+	return journal, nil
+}
+
+// replaceRestoreMoves is the shared digest/CAS/rename/sync engine. Its caller
+// owns consent, marker verification and the durable journal namespace. It does
+// not materialize configuration, change manager pointers or clear a blocker.
+func (s *Service) replaceRestoreMoves(ctx context.Context, dirs instance.Directories, journal *restoreJournal, checkpoint func(context.Context, *restoreJournal, string) error) error {
 	server, err := openSource(dirs.Server)
 	if err != nil {
 		return err
@@ -301,7 +351,7 @@ func (s *Service) finishRestore(ctx context.Context, session *instance.StoppedSe
 			if move.OldDigest != "" {
 				if exists && current == move.OldDigest && !hasOld {
 					move.Phase = "moving_old"
-					if err = s.journalRestore(ctx, journal, "replacing"); err != nil {
+					if err = checkpoint(ctx, journal, "replacing"); err != nil {
 						return err
 					}
 					if err = server.verify(); err != nil {
@@ -328,14 +378,14 @@ func (s *Service) finishRestore(ctx context.Context, session *instance.StoppedSe
 				return domain.E(domain.CodeConflict, "unexpected data at restore target")
 			}
 			move.Phase = "old_moved"
-			if err = s.journalRestore(ctx, journal, "replacing"); err != nil {
+			if err = checkpoint(ctx, journal, "replacing"); err != nil {
 				return err
 			}
 		}
 		if move.NewDigest != "" {
 			if !exists && hasNext {
 				move.Phase = "moving_new"
-				if err = s.journalRestore(ctx, journal, "replacing"); err != nil {
+				if err = checkpoint(ctx, journal, "replacing"); err != nil {
 					return err
 				}
 				if err = server.verify(); err != nil {
@@ -360,42 +410,13 @@ func (s *Service) finishRestore(ctx context.Context, session *instance.StoppedSe
 			return domain.E(domain.CodeConflict, "restore removal is ambiguous; manual repair required")
 		}
 		move.Phase = "done"
-		if err = s.journalRestore(ctx, journal, "replacing"); err != nil {
+		if err = checkpoint(ctx, journal, "replacing"); err != nil {
 			return err
 		}
 	}
-	// Materialization may change server.properties and eula.txt from the archive;
-	// record data replacement before this separately recoverable finalization.
-	journal.DataReplaced = true
-	if err = s.journalRestore(ctx, journal, "materializing"); err != nil {
-		return err
-	}
-	if err = s.failAt("restore_materialize"); err != nil {
-		return err
-	}
-	if err = session.MaterializeRestoredProperties(ctx); err != nil {
-		return err
-	}
-	if err = state.verify(); err != nil {
-		return err
-	}
-	if err = verifyRestoreMarker(state, journal); err != nil {
-		return err
-	}
-	if err = s.journalRestore(ctx, journal, "committed"); err != nil {
-		return err
-	}
-	if err = state.root.Remove("backup-restore.json"); err != nil {
-		return err
-	}
-	if err = syncDir(state.root, "."); err != nil {
-		return err
-	}
-	if err = s.journalRestore(ctx, journal, "complete"); err != nil {
-		return err
-	}
 	return nil
 }
+
 func verifyRestoreMarker(state *source, journal *restoreJournal) error {
 	file, err := state.open("backup-restore.json", 1024)
 	if err != nil {

@@ -38,26 +38,37 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 	if e != nil {
 		return Preview{}, e
 	}
+	out, e := s.previewForTuple(ctx, id, m, actor, manifest, manifest.Tuple, true, false, func(items []Installed) ([]Installed, []string, error) {
+		return s.PreparePackCandidate(ctx, id, manifest.Tuple, items)
+	})
+	return out.Preview, e
+}
+
+// previewForTuple keeps the observed old manifest distinct from compatibility
+// target. Ordinary Preview uses the current tuple and persists its own preview;
+// coordinated update preparation defers the complete graph until all changes exist.
+func (s *Service) previewForTuple(ctx context.Context, id string, m Mutation, actor domain.User, manifest Manifest, target Tuple, persist, deferGraph bool, prepare func([]Installed) ([]Installed, []string, error)) (privatePreview, error) {
+	var e error
 	if m.Action == "install" || m.Action == "update" || m.Action == "enable" {
 		detail, e := s.instances.Get(ctx, id)
 		if e != nil {
-			return Preview{}, e
+			return privatePreview{}, e
 		}
 		if detail.Provisioning != "installed" {
-			return Preview{}, conflict("install the selected server and loader before activating content")
+			return privatePreview{}, conflict("install the selected server and loader before activating content")
 		}
 	}
 	var count int
 	if e = s.db.QueryRowContext(ctx, "SELECT count(*) FROM content_previews WHERE instance_id=?", id).Scan(&count); e != nil {
-		return Preview{}, e
+		return privatePreview{}, e
 	}
 	if count >= 32 {
-		return Preview{}, conflict("preview limit reached; discard unused previews")
+		return privatePreview{}, conflict("preview limit reached; discard unused previews")
 	}
-	p := privatePreview{Preview: Preview{ID: newID(), InstanceID: id, Tuple: manifest.Tuple, Revision: manifest.Revision, Action: m.Action, Changes: []OwnedFile{}, Blockers: []string{}, Dependencies: []catalog.Dependency{}}, Mutation: m, ActorID: actor.ID, Operations: []fileOperation{}}
+	p := privatePreview{Preview: Preview{ID: newID(), InstanceID: id, Tuple: target, Revision: manifest.Revision, Action: m.Action, Changes: []OwnedFile{}, Blockers: []string{}, Dependencies: []catalog.Dependency{}}, Mutation: m, ActorID: actor.ID, Operations: []fileOperation{}}
 	root, e := s.openServer(ctx, id)
 	if e != nil {
-		return p.Preview, e
+		return p, e
 	}
 	defer root.Close()
 	var previous *Installed
@@ -70,35 +81,35 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 	switch m.Action {
 	case "install", "update":
 		if m.Action == "update" && previous == nil {
-			return p.Preview, domain.NotFound("installed content")
+			return p, domain.NotFound("installed content")
 		}
 		if m.Action == "install" && len(manifest.Items) >= 2048 {
-			return p.Preview, conflict("installed content limit reached")
+			return p, conflict("installed content limit reached")
 		}
 		if m.Kind != catalog.Mod && m.Kind != catalog.Plugin {
-			return p.Preview, invalid("choose mod or plugin")
+			return p, invalid("choose mod or plugin")
 		}
 		if previous != nil && previous.Kind != m.Kind {
-			return p.Preview, invalid("updates must retain content kind")
+			return p, invalid("updates must retain content kind")
 		}
-		if m.Kind == catalog.Plugin && manifest.Tuple.Loader != "paper" || m.Kind == catalog.Mod && !contains([]string{"fabric", "forge", "neoforge"}, manifest.Tuple.Loader) {
-			return p.Preview, invalid("content kind is incompatible with the installed server type")
+		if m.Kind == catalog.Plugin && target.Loader != "paper" || m.Kind == catalog.Mod && !contains([]string{"fabric", "forge", "neoforge"}, target.Loader) {
+			return p, invalid("content kind is incompatible with the installed server type")
 		}
 		var upload Upload
 		var descriptor Descriptor
 		if m.Selection != nil {
 			if s.catalog == nil {
-				return p.Preview, domain.E(domain.CodeUnavailable, "catalog unavailable")
+				return p, domain.E(domain.CodeUnavailable, "catalog unavailable")
 			}
 			project, err := s.catalog.Project(ctx, m.Selection.Provider, m.Selection.ProjectID)
 			if err != nil {
-				return p.Preview, domain.E(domain.CodeUpstreamError, "publisher project lookup failed")
+				return p, domain.E(domain.CodeUpstreamError, "publisher project lookup failed")
 			}
 			if project.Kind != m.Kind {
-				return p.Preview, invalid("publisher project kind differs from selection")
+				return p, invalid("publisher project kind differs from selection")
 			}
 			if previous != nil && previous.Selection != nil && (previous.Selection.Provider != m.Selection.Provider || previous.Selection.ProjectID != m.Selection.ProjectID) {
-				return p.Preview, invalid("update cannot replace the recorded publisher project")
+				return p, invalid("update cannot replace the recorded publisher project")
 			}
 			var v catalog.Version
 			var f catalog.File
@@ -112,7 +123,7 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 					}
 				}
 				if f.ID == "" {
-					return p.Preview, domain.NotFound("publisher file")
+					return p, domain.NotFound("publisher file")
 				}
 				upload, _, e = s.uploadMetadata(ctx, id, m.UploadID, actor.ID)
 				if e == nil {
@@ -120,14 +131,14 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 				}
 			}
 			if e != nil {
-				return p.Preview, e
+				return p, e
 			}
 			p.Metadata = metadataDigest(v)
 			p.Preview.Dependencies = v.Dependencies
 			if p.Preview.Dependencies == nil {
 				p.Preview.Dependencies = []catalog.Dependency{}
 			}
-			if !contains(v.Compatibility.Minecraft, manifest.Tuple.Minecraft) || !contains(v.Compatibility.Loaders, manifest.Tuple.Loader) || v.Compatibility.ServerSide == "unsupported" || v.Compatibility.Environment == "client" || v.Compatibility.Environment == "client_only" {
+			if !contains(v.Compatibility.Minecraft, target.Minecraft) || !contains(v.Compatibility.Loaders, target.Loader) || v.Compatibility.ServerSide == "unsupported" || v.Compatibility.Environment == "client" || v.Compatibility.Environment == "client_only" {
 				p.Preview.Blockers = append(p.Preview.Blockers, "Publisher compatibility does not establish this exact server tuple.")
 			}
 			if upload.ID == "" {
@@ -136,16 +147,16 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 				break
 			}
 			if upload.ID != "" && f.Size > 0 && upload.Size != f.Size {
-				return p.Preview, conflict("manual file size differs from publisher metadata")
+				return p, conflict("manual file size differs from publisher metadata")
 			}
 			p.Filename = f.Filename
 		} else {
 			if m.UploadID == "" {
-				return p.Preview, invalid("choose publisher selection or administrator upload")
+				return p, invalid("choose publisher selection or administrator upload")
 			}
 			upload, _, e = s.uploadMetadata(ctx, id, m.UploadID, actor.ID)
 			if e != nil {
-				return p.Preview, e
+				return p, e
 			}
 			p.Filename = upload.Filename
 			p.Preview.Unknown = true
@@ -155,29 +166,29 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 		}
 		_, f, e := s.openStage(ctx, id, upload.ID)
 		if e != nil {
-			return p.Preview, e
+			return p, e
 		}
 		descriptor, e = inspectArchive(f, upload.Size)
 		f.Close()
 		if e != nil {
-			return p.Preview, e
+			return p, e
 		}
 		if descriptor.ClientOnly {
-			return p.Preview, invalid("client-only content is refused")
+			return p, invalid("client-only content is refused")
 		}
-		if descriptor.Loader != "" && descriptor.Loader != manifest.Tuple.Loader {
-			return p.Preview, invalid("descriptor loader mismatch")
+		if descriptor.Loader != "" && descriptor.Loader != target.Loader {
+			return p, invalid("descriptor loader mismatch")
 		}
 		if descriptor.Unknown && !p.Preview.Unknown {
 			p.Preview.Blockers = append(p.Preview.Blockers, "Publisher artifact lacks a supported descriptor; use explicit unknown upload trial.")
 		}
 		if !portable(p.Filename) || !strings.HasSuffix(strings.ToLower(p.Filename), ".jar") {
-			return p.Preview, invalid("publisher filename is not a portable JAR filename")
+			return p, invalid("publisher filename is not a portable JAR filename")
 		}
 		p.StageID = upload.ID
 		next := Installed{ID: newID(), Kind: m.Kind, Name: p.Filename, Version: descriptor.Version, Selection: m.Selection, SHA256: upload.SHA256, Enabled: true, Pinned: true, Unknown: p.Preview.Unknown, Descriptor: descriptor, Dependencies: p.Preview.Dependencies}
 		if next.Unknown {
-			t := manifest.Tuple
+			t := target
 			next.TrialTuple = &t
 		}
 		if previous != nil {
@@ -185,7 +196,7 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 			next.Enabled = previous.Enabled
 			next.Pinned = previous.Pinned
 			if previous.Descriptor.ID != "" && descriptor.ID != previous.Descriptor.ID {
-				return p.Preview, invalid("update descriptor identity differs from installed content")
+				return p, invalid("update descriptor identity differs from installed content")
 			}
 		}
 		destination := "mods/" + p.Filename
@@ -200,19 +211,19 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 		if previous != nil {
 			for _, owned := range previous.Files {
 				if e = s.addOperation(ctx, root, id, actor.ID, &p, owned.Path, owned.SHA256, "", ""); e != nil {
-					return p.Preview, e
+					return p, e
 				}
 			}
 		}
 		if e = s.checkCollision(ctx, root, destination, previous); e != nil {
-			return p.Preview, e
+			return p, e
 		}
 		if e = s.addOperation(ctx, root, id, actor.ID, &p, destination, "", upload.SHA256, upload.ID); e != nil {
-			return p.Preview, e
+			return p, e
 		}
 	case "disable", "enable", "uninstall":
 		if previous == nil {
-			return p.Preview, domain.NotFound("installed content")
+			return p, domain.NotFound("installed content")
 		}
 		if m.Action != "enable" {
 			for _, item := range manifest.Items {
@@ -243,7 +254,7 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 		next.Files = []OwnedFile{}
 		for _, owned := range previous.Files {
 			if e = s.addOperation(ctx, root, id, actor.ID, &p, owned.Path, owned.SHA256, "", ""); e != nil {
-				return p.Preview, e
+				return p, e
 			}
 			if m.Action == "uninstall" {
 				continue
@@ -258,11 +269,11 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 				continue
 			}
 			if e = s.checkCollision(ctx, root, destination, previous); e != nil {
-				return p.Preview, e
+				return p, e
 			}
 			stage := p.Operations[len(p.Operations)-1].BeforeStage
 			if e = s.addOperation(ctx, root, id, actor.ID, &p, destination, "", owned.SHA256, stage); e != nil {
-				return p.Preview, e
+				return p, e
 			}
 			next.Files = append(next.Files, OwnedFile{destination, owned.SHA256})
 		}
@@ -271,54 +282,60 @@ func (s *Service) Preview(ctx context.Context, id string, m Mutation, actor doma
 		}
 	case "config_write":
 		if !configPath(m.ConfigPath) || !validText([]byte(m.Text)) || len(m.ExpectedSHA256) != 64 {
-			return p.Preview, invalid("config edit requires an allowlisted UTF-8 file and expected SHA-256")
+			return p, invalid("config edit requires an allowlisted UTF-8 file and expected SHA-256")
 		}
 		existing, e := readFile(ctx, root, m.ConfigPath, MaxConfigBytes)
 		if e != nil {
-			return p.Preview, e
+			return p, e
 		}
 		if !validText(existing) {
-			return p.Preview, invalid("existing configuration is not bounded UTF-8 text")
+			return p, invalid("existing configuration is not bounded UTF-8 text")
 		}
 		current, _, e := currentHash(ctx, root, m.ConfigPath, MaxConfigBytes)
 		if e != nil {
-			return p.Preview, e
+			return p, e
 		}
 		if current != m.ExpectedSHA256 {
-			return p.Preview, conflict("configuration changed; reload before editing")
+			return p, conflict("configuration changed; reload before editing")
 		}
 		u, e := s.stage(ctx, id, actor.ID, path.Base(m.ConfigPath), strings.NewReader(m.Text), int64(len(m.Text)))
 		if e != nil {
-			return p.Preview, e
+			return p, e
 		}
 		if e = s.addOperation(ctx, root, id, actor.ID, &p, m.ConfigPath, m.ExpectedSHA256, u.SHA256, u.ID); e != nil {
-			return p.Preview, e
+			return p, e
 		}
 		p.Mutation.Text = ""
 	default:
-		return p.Preview, invalid("unknown content action")
+		return p, invalid("unknown content action")
 	}
 	if p.Next != nil {
-		next, _, err := s.PreparePackCandidate(ctx, id, manifest.Tuple, []Installed{*p.Next})
+		next, _, err := prepare([]Installed{*p.Next})
 		if err != nil {
-			return p.Preview, err
+			return p, err
 		}
 		p.Next = &next[0]
 	}
-	p.Preview.Blockers = append(p.Preview.Blockers, proposedEnabledBlockers(manifest.Tuple, manifest.Items, p)...)
+	if !deferGraph {
+		p.Preview.Blockers = append(p.Preview.Blockers, proposedEnabledBlockers(target, manifest.Items, p)...)
+	}
 	for _, operation := range p.Operations {
 		p.Preview.Changes = append(p.Preview.Changes, OwnedFile{operation.Path, operation.After})
 	}
 	if len(p.Preview.Dependencies) > 128 {
 		p.Preview.Blockers = append(p.Preview.Blockers, "Publisher dependency node limit exceeded.")
 	}
+	if !persist {
+		return p, nil
+	}
 	raw, e := json.Marshal(p)
 	if e != nil {
-		return p.Preview, e
+		return p, e
 	}
 	_, e = s.db.ExecContext(ctx, "INSERT INTO content_previews(id,instance_id,actor_id,private_json,created_at) VALUES(?,?,?,?,?)", p.Preview.ID, id, actor.ID, string(raw), time.Now().UTC().Format(time.RFC3339Nano))
-	return p.Preview, e
+	return p, e
 }
+
 func dependencyLabel(d catalog.Dependency) string {
 	if d.ProjectID != "" {
 		return d.ProjectID

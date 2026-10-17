@@ -8811,6 +8811,119 @@
           }
         }
       }
+    },
+    "/api/v1/instances/{instanceId}/updates/previews/{previewId}/pack/members": {
+      "post": {
+        "operationId": "stageInstanceUpdatePackMember",
+        "description": "Administrator and PAT admin only. Bounded raw official member bytes for exact unresolved path in actor-owned target preview. Receipt must be supplied in a new typed preview; no capability or live selection changes.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UpdateInstanceId"
+          },
+          {
+            "$ref": "#/components/parameters/UpdatePreviewId"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured operation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Verified exact member receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatePackMemberReceipt"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -14517,6 +14630,15 @@
           },
           "pack": {
             "$ref": "#/components/schemas/ModpackRequest"
+          },
+          "content_manual": {
+            "type": "object",
+            "maxProperties": 2048,
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{32}$"
+            },
+            "description": "Manual mode only; installed content ID to owned verified upload receipt. Each key requires an exact content_selections entry; administrator and PAT admin required."
           }
         },
         "required": [
@@ -14726,6 +14848,16 @@
           "expires_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "pack": {
+            "$ref": "#/components/schemas/ModpackPreview"
+          },
+          "content_manual_required": {
+            "type": "object",
+            "maxProperties": 2048,
+            "additionalProperties": {
+              "$ref": "#/components/schemas/UpdateContentManualItem"
+            }
           }
         },
         "required": [
@@ -14937,6 +15069,62 @@
         },
         "required": [
           "job"
+        ]
+      },
+      "UpdatePackMemberReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "receipt_id": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "path",
+          "receipt_id",
+          "sha256",
+          "size"
+        ]
+      },
+      "UpdateContentManualItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "selection": {
+            "$ref": "#/components/schemas/ContentSelection"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "official_url": {
+            "type": "string"
+          },
+          "hashes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "selection",
+          "filename",
+          "official_url",
+          "hashes",
+          "reason"
         ]
       }
     },

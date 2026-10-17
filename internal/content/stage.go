@@ -211,6 +211,9 @@ func (s *Service) StageUpload(ctx context.Context, id, name string, r io.Reader,
 		defer cancel()
 		return Upload{}, errors.Join(e, s.removeStage(cleanup, id, u.ID))
 	}
+	if _, e = s.actor(ctx, actor.ID, true); e != nil {
+		return Upload{}, e
+	}
 	if e = s.audit(ctx, id, actor, "upload", u.ID, "staged"); e != nil {
 		return u, e
 	}

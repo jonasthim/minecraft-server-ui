@@ -85,7 +85,7 @@ func TestStartupSchedulesReconcileBeforeAutostartAndDispatch(t *testing.T) {
 				schedules = nil
 			}
 			operations := lifecycle.New(lifecycle.Config{DB: database, DataDir: dir, Instances: instances, Jobs: queue, Native: native})
-			err = reconcileStartup(t.Context(), queue, native, instances, operations, world.New(database, instances, paths, queue), startupBackupStub{}, startupContentStub{}, startupContentStub{}, schedules, guard, slog.New(slog.NewTextHandler(io.Discard, nil)), true)
+			err = reconcileStartup(t.Context(), queue, native, instances, operations, world.New(database, instances, paths, queue), startupBackupStub{}, startupContentStub{}, startupContentStub{}, startupContentStub{}, schedules, guard, slog.New(slog.NewTextHandler(io.Discard, nil)), true)
 			if failure != "" {
 				if err == nil {
 					t.Fatal("failed or missing schedule recovery admitted startup")

@@ -89,3 +89,17 @@ func TestSupersessionRefusesMalformedTerminalHandoffs(t *testing.T) {
 		})
 	}
 }
+
+func TestSupersessionRefusesCycleEvenWhenAllRowsTerminal(t *testing.T) {
+	database := supersessionFixture(t)
+	if _, err := database.ExecContext(t.Context(), "UPDATE update_transactions SET state='superseded',superseded_by=? WHERE kind='instance_rollback'", strings.Repeat("a", 32)); err != nil {
+		t.Fatal(err)
+	}
+	var active int
+	if err := database.QueryRowContext(t.Context(), "SELECT count(*) FROM update_transactions WHERE state NOT IN ('complete','rolled_back','superseded')").Scan(&active); err != nil || active != 0 {
+		t.Fatalf("cycle fixture has active rows=%d err=%v", active, err)
+	}
+	if err := ValidateSupersession(t.Context(), database); err == nil {
+		t.Fatal("terminal ownership cycle authorized drain")
+	}
+}

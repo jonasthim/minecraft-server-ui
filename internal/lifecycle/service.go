@@ -39,6 +39,9 @@ type Runtime interface {
 	Get(context.Context, string) (domain.JavaRuntime, error)
 }
 type Config struct {
+	DeferAutostart func(context.Context, string) (bool, error)
+	// VerifyAndSeal is a native verification seam; nil retains the production verifier.
+	VerifyAndSeal func(context.Context, string, domain.LaunchSpec) error
 	// StopIntent cancels pending crash recovery before a deliberate stop/uninstall is admitted.
 	StopIntent func(context.Context, string, domain.User) error
 	DB         *sql.DB
@@ -51,20 +54,21 @@ type Config struct {
 	Console    *console.Service
 }
 type Service struct {
-	stopIntent func(context.Context, string, domain.User) error
-	db         *sql.DB
-	dataDir    string
-	instances  *instance.Service
-	queue      *jobs.Service
-	native     Native
-	runtime    Runtime
-	providers  map[domain.Flavor]domain.DistributionProvider
-	control    *console.Service
-	seal       func(context.Context, string, domain.LaunchSpec) error
+	deferAutostart func(context.Context, string) (bool, error)
+	stopIntent     func(context.Context, string, domain.User) error
+	db             *sql.DB
+	dataDir        string
+	instances      *instance.Service
+	queue          *jobs.Service
+	native         Native
+	runtime        Runtime
+	providers      map[domain.Flavor]domain.DistributionProvider
+	control        *console.Service
+	seal           func(context.Context, string, domain.LaunchSpec) error
 }
 
 func New(c Config) *Service {
-	s := &Service{stopIntent: c.StopIntent, db: c.DB, dataDir: c.DataDir, instances: c.Instances, queue: c.Jobs, native: c.Native, runtime: c.Runtime, providers: map[domain.Flavor]domain.DistributionProvider{}, control: c.Console}
+	s := &Service{deferAutostart: c.DeferAutostart, stopIntent: c.StopIntent, db: c.DB, dataDir: c.DataDir, instances: c.Instances, queue: c.Jobs, native: c.Native, runtime: c.Runtime, providers: map[domain.Flavor]domain.DistributionProvider{}, control: c.Console}
 	for _, p := range c.Providers {
 		s.providers[p.Flavor()] = p
 	}
@@ -82,6 +86,9 @@ func New(c Config) *Service {
 		}
 		defer root.Close()
 		return syncDirectory(root)
+	}
+	if c.VerifyAndSeal != nil {
+		s.seal = c.VerifyAndSeal
 	}
 	return s
 }

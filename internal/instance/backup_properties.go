@@ -89,23 +89,29 @@ func (s *StoppedSession) MaterializeRestoredProperties(ctx context.Context) erro
 	defer release()
 	operation, cancel := sessionContext(ctx, scope.ctx)
 	defer cancel()
-	detail, err := scope.service.Get(operation, scope.id)
+	return scope.service.materializeRestoredProperties(operation, scope.id)
+}
+
+// materializeRestoredProperties is shared by ordinary restore and a retained
+// coordinator scope, after its pointer transaction has closed.
+func (s *Service) materializeRestoredProperties(ctx context.Context, id string) error {
+	detail, err := s.Get(ctx, id)
 	if err != nil {
 		return err
 	}
-	dirs, err := scope.service.paths.For(scope.id)
+	dirs, err := s.paths.For(id)
 	if err != nil {
 		return err
 	}
-	root, err := safepath.OpenRoot(operation, dirs.Root)
+	root, err := safepath.OpenRoot(ctx, dirs.Root)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	if err = scope.service.verifyOwner(operation, scope.id, root); err != nil {
+	if err = s.verifyOwner(ctx, id, root); err != nil {
 		return err
 	}
-	server, err := safepath.OpenRoot(operation, dirs.Server)
+	server, err := safepath.OpenRoot(ctx, dirs.Server)
 	if err != nil {
 		return err
 	}
@@ -122,7 +128,7 @@ func (s *StoppedSession) MaterializeRestoredProperties(ctx context.Context) erro
 	if err != nil {
 		return err
 	}
-	result, err := scope.service.db.ExecContext(operation, `UPDATE instances SET config_json=?,updated_at=? WHERE id=? AND updated_at=?`, string(raw), time.Now().UTC().Format(time.RFC3339Nano), scope.id, detail.Instance.UpdatedAt.Format(time.RFC3339Nano))
+	result, err := s.db.ExecContext(ctx, `UPDATE instances SET config_json=?,updated_at=? WHERE id=? AND updated_at=?`, string(raw), time.Now().UTC().Format(time.RFC3339Nano), id, detail.Instance.UpdatedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return err
 	}
@@ -133,5 +139,5 @@ func (s *StoppedSession) MaterializeRestoredProperties(ctx context.Context) erro
 	if n != 1 {
 		return domain.E(domain.CodeConflict, "instance settings changed during backup restore")
 	}
-	return scope.service.materialize(operation, scope.id)
+	return s.materialize(ctx, id)
 }

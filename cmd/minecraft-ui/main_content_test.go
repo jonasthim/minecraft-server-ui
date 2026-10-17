@@ -38,8 +38,8 @@ func (n *contentStartupNative) WithStopped(ctx context.Context, id string, fn fu
 	}
 	return n.startupTestNative.WithStopped(ctx, id, fn)
 }
-func TestStartupContentOrderingFailureAndRetainedJob(t *testing.T) {
-	for _, failure := range []string{"", "content", "missing-content"} {
+func TestStartupContentAndUpdateOrderingFailureAndRetainedJob(t *testing.T) {
+	for _, failure := range []string{"", "content", "missing-content", "pack", "missing-pack", "update", "missing-update"} {
 		t.Run(failure, func(t *testing.T) {
 			database, e := db.OpenMemory(t.Context())
 			if e != nil {
@@ -104,23 +104,63 @@ func TestStartupContentOrderingFailureAndRetainedJob(t *testing.T) {
 			if failure == "missing-content" {
 				contents = nil
 			}
+			var packs startupContent = startupContentStub{reconcile: func(ctx context.Context) error {
+				if !reflect.DeepEqual(steps, []string{"leases", "restores", "content"}) {
+					t.Fatalf("pack recovery outside startup order: %v", steps)
+				}
+				steps = append(steps, "pack")
+				if failure == "pack" {
+					return errors.New("injected pack recovery failure")
+				}
+				return nil
+			}}
+			var updates startupContent = startupContentStub{reconcile: func(ctx context.Context) error {
+				if !reflect.DeepEqual(steps, []string{"leases", "restores", "content", "pack"}) {
+					t.Fatalf("update repair must precede instance materialization: %v", steps)
+				}
+				if native.autostartCalls != 1 {
+					t.Fatal("update recovery followed game autostart")
+				}
+				if err := queue.WithPausedInstance(ctx, "alpha", func() error { return nil }); err != nil {
+					t.Fatal("update recovery ran outside paused queue", err)
+				}
+				if _, err := os.Stat(orphan); err != nil {
+					t.Fatal("export recovery preceded update repair", err)
+				}
+				select {
+				case <-dispatched:
+					t.Fatal("retained job dispatched before update recovery")
+				default:
+				}
+				steps = append(steps, "update")
+				if failure == "update" {
+					return errors.New("injected update recovery failure")
+				}
+				return nil
+			}}
+			if failure == "missing-pack" {
+				packs = nil
+			}
+			if failure == "missing-update" {
+				updates = nil
+			}
 			operations := lifecycle.New(lifecycle.Config{DB: database, DataDir: dir, Instances: instances, Jobs: queue, Native: native})
 			worlds := world.New(database, instances, paths, queue)
 			log := slog.New(slog.NewTextHandler(io.Discard, nil))
-			e = reconcileStartup(t.Context(), queue, native, instances, operations, worlds, backups, contents, startupContentStub{}, startupContentStub{}, guard, log, true)
+			e = reconcileStartup(t.Context(), queue, native, instances, operations, worlds, backups, contents, packs, updates, startupContentStub{}, guard, log, true)
 			if failure != "" {
 				if e == nil {
-					t.Fatal("failed content recovery admitted startup")
+					t.Fatal("failed file recovery admitted startup")
 				}
 				if native.autostartCalls != 1 || native.starts != 0 || native.stops != 0 {
 					t.Fatal("failed recovery changed native lifecycle", native)
 				}
 				if e = queue.WithPausedInstance(t.Context(), "alpha", func() error { return nil }); e != nil {
-					t.Fatal("queue resumed after failed content recovery", e)
+					t.Fatal("queue resumed after failed file recovery", e)
 				}
 				for _, step := range steps {
 					if step == "instance" {
-						t.Fatal("instance reconciliation followed failed content recovery")
+						t.Fatal("instance reconciliation followed failed file recovery")
 					}
 				}
 				if _, e = os.Stat(orphan); e != nil {
@@ -135,7 +175,7 @@ func TestStartupContentOrderingFailureAndRetainedJob(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
-				if len(steps) < 4 || steps[0] != "leases" || steps[1] != "restores" || steps[2] != "content" || steps[3] != "instance" {
+				if len(steps) < 6 || !reflect.DeepEqual(steps[:6], []string{"leases", "restores", "content", "pack", "update", "instance"}) {
 					t.Fatal("startup order", steps)
 				}
 				if _, e = os.Stat(orphan); !os.IsNotExist(e) {

@@ -148,7 +148,7 @@ func (s *Service) Discard(ctx context.Context, id, preview string, actor domain.
 	return s.cleanupStages(ctx, id, false)
 }
 func (s *Service) cleanupStages(ctx context.Context, id string, expired bool) error {
-	query := "SELECT id FROM modpack_stages WHERE instance_id=? AND NOT EXISTS(SELECT 1 FROM modpack_previews WHERE instr(private_json,modpack_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM modpack_journals WHERE instr(private_json,modpack_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM modpack_archives WHERE id=modpack_stages.id)"
+	query := "SELECT id FROM modpack_stages WHERE instance_id=? AND NOT EXISTS(SELECT 1 FROM modpack_previews WHERE instr(private_json,modpack_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM modpack_journals WHERE instr(private_json,modpack_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM modpack_archives WHERE id=modpack_stages.id) AND NOT EXISTS(SELECT 1 FROM update_previews WHERE instance_id=modpack_stages.instance_id AND instr(private_json,modpack_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM update_transactions WHERE instance_id=modpack_stages.instance_id AND instr(journal_json,modpack_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM jobs WHERE instance_id=modpack_stages.instance_id AND state IN ('queued','running') AND kind IN ('instance_update_prepare','instance_update','instance_rollback') AND instr(payload,modpack_stages.id)>0)"
 	args := []any{id}
 	if expired {
 		query += " AND created_at<?"

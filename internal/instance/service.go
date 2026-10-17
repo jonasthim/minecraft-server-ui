@@ -46,6 +46,7 @@ type Detail struct {
 	Settings     SettingsProjection    `json:"settings"`
 }
 type Service struct {
+	reconcileHold func(context.Context, string) (bool, error)
 	db            *sql.DB
 	paths         Paths
 	guard         MutationGuard

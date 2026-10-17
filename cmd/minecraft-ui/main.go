@@ -35,6 +35,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/server/paper"
 	"github.com/jonasthim/minecraft-server-ui/internal/server/vanilla"
 	"github.com/jonasthim/minecraft-server-ui/internal/supervisor"
+	"github.com/jonasthim/minecraft-server-ui/internal/update"
 	"github.com/jonasthim/minecraft-server-ui/internal/world"
 	"github.com/jonasthim/minecraft-server-ui/web"
 	"io"
@@ -149,12 +150,19 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	}()
 	guard := &stoppedMutationGuard{queue: queue, native: native}
 	activation := &activationCoordinator{}
-	instances := instance.New(database, paths, guard, instance.WithJobMutationGuard(guard), instance.WithActivationCoordinator(activation), instance.WithRecoveryMutationGuard(guard))
+	var instanceUpdates *update.Service
+	deferUpdate := func(ctx context.Context, id string) (bool, error) {
+		if instanceUpdates == nil {
+			return false, domain.E(domain.CodeUnavailable, "update startup coordination unavailable")
+		}
+		return instanceUpdates.StartupBlocked(ctx, id)
+	}
+	instances := instance.New(database, paths, guard, instance.WithJobMutationGuard(guard), instance.WithActivationCoordinator(activation), instance.WithRecoveryMutationGuard(guard), instance.WithReconcileHold(deferUpdate))
 	control := console.New(database, paths, native, instances, queue)
 	playerService := players.New(database, paths, instances, control, queue, native)
 	gameEvents := game.New(database, control, instances)
 	var schedules *scheduler.Service
-	operations := lifecycle.New(lifecycle.Config{StopIntent: func(ctx context.Context, id string, actor domain.User) error {
+	operations := lifecycle.New(lifecycle.Config{DeferAutostart: deferUpdate, StopIntent: func(ctx context.Context, id string, actor domain.User) error {
 		if schedules == nil {
 			return domain.E(domain.CodeUnavailable, "crash recovery coordination unavailable")
 		}
@@ -181,7 +189,23 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	if err != nil {
 		return err
 	}
-	schedules = scheduler.New(scheduler.Config{DB: database, Commands: control, Backups: backups, Restarts: operations, Native: native, Lifecycle: operations, Jobs: queue, Log: log, OnCrash: func(ctx context.Context, event scheduler.CrashEvent) error {
+	instanceUpdates, err = update.New(update.Config{DB: database, Paths: paths, Instances: instances, Jobs: queue, Lifecycle: operations, Backups: backups, Content: contents, Packs: packs, BeginUpdateStop: func(ctx context.Context, execution *jobs.Execution, actor domain.User) (int64, lifecycle.RecoveryStartGuard, error) {
+		if schedules == nil {
+			return 0, nil, domain.E(domain.CodeUnavailable, "update stop coordination unavailable")
+		}
+		return schedules.BeginUpdateStop(ctx, execution, actor)
+	}})
+	if err != nil {
+		return err
+	}
+	rollback, err := update.NewRollbackCoordinator(instanceUpdates)
+	if err != nil {
+		return err
+	}
+	if err := instanceUpdates.SetRollbackCoordinator(rollback); err != nil {
+		return err
+	}
+	schedules = scheduler.New(scheduler.Config{DB: database, Commands: control, Backups: backups, Restarts: operations, Updates: instanceUpdates, Native: native, Lifecycle: operations, Jobs: queue, Log: log, OnCrash: func(ctx context.Context, event scheduler.CrashEvent) error {
 		return notificationService.EnqueueServerCrash(ctx, event.ID, event.InstanceID, event.OccurredAt)
 	}})
 	if err := packs.Register(); err != nil {
@@ -190,6 +214,11 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	if err := schedules.RegisterJobs(); err != nil {
 		return err
 	}
+	if err := instanceUpdates.Register(); err != nil {
+		return err
+	}
+	guard.updateReady = instanceUpdates.CheckReady
+	guard.updateJobReady = instanceUpdates.CheckJobReady
 	guard.ready = func(ctx context.Context, id string) error {
 		if err := backups.CheckReady(ctx, id); err != nil {
 			return err
@@ -211,7 +240,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	if err := operations.RegisterJobs(); err != nil {
 		return err
 	}
-	if err := reconcileStartup(ctx, queue, native, instances, operations, worlds, backups, contents, packs, schedules, guard, log, runtime.GOOS == "windows"); err != nil {
+	if err := reconcileStartup(ctx, queue, native, instances, operations, worlds, backups, contents, packs, instanceUpdates, schedules, guard, log, runtime.GOOS == "windows"); err != nil {
 		return err
 	}
 	var ready atomic.Bool
@@ -236,6 +265,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 			api.MountCatalog(r, catalogs)
 			api.MountContent(r, contents)
 			api.MountModpacks(r, packs)
+			api.MountUpdates(r, instanceUpdates)
 			api.MountSchedules(r, schedules)
 			api.MountMetrics(r, metricService)
 			api.MountNotifications(r, notificationService)
@@ -354,6 +384,10 @@ type stoppedMutationGuard struct {
 	}
 	blocked error
 	ready   func(context.Context, string) error
+	// Ordinary backup/content/pack readiness always runs first. Only the update
+	// gate may recognize the original separately confirmed rollback execution.
+	updateReady    func(context.Context, string) error
+	updateJobReady func(context.Context, *jobs.Execution, string) error
 }
 
 func (g *stoppedMutationGuard) WithStopped(ctx context.Context, id string, fn func() error) error {
@@ -364,6 +398,11 @@ func (g *stoppedMutationGuard) WithStopped(ctx context.Context, id string, fn fu
 		return g.withNativeStopped(ctx, id, func() error {
 			if g.ready != nil {
 				if err := g.ready(ctx, id); err != nil {
+					return err
+				}
+			}
+			if g.updateReady != nil {
+				if err := g.updateReady(ctx, id); err != nil {
 					return err
 				}
 			}
@@ -382,6 +421,15 @@ func (g *stoppedMutationGuard) WithStoppedForJob(ctx context.Context, execution 
 		return g.withNativeStopped(ctx, id, func() error {
 			if g.ready != nil {
 				if err := g.ready(ctx, id); err != nil {
+					return err
+				}
+			}
+			if g.updateJobReady != nil {
+				if err := g.updateJobReady(ctx, execution, id); err != nil {
+					return err
+				}
+			} else if g.updateReady != nil {
+				if err := g.updateReady(ctx, id); err != nil {
 					return err
 				}
 			}
@@ -447,7 +495,7 @@ type startupBackups interface {
 
 type startupContent interface{ Reconcile(context.Context) error }
 
-func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNative, instances *instance.Service, operations *lifecycle.Service, worlds *world.Service, backups startupBackups, contents, packs, schedules startupContent, guard *stoppedMutationGuard, log *slog.Logger, windows bool) error {
+func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNative, instances *instance.Service, operations *lifecycle.Service, worlds *world.Service, backups startupBackups, contents, packs, updates, schedules startupContent, guard *stoppedMutationGuard, log *slog.Logger, windows bool) error {
 	// Recover durable work without dispatch until files and previous processes
 	// have been reconciled. Linux games keep running across manager restarts.
 	if err := queue.StartPaused(ctx); err != nil {
@@ -476,6 +524,14 @@ func reconcileStartup(ctx context.Context, queue *jobs.Service, native startupNa
 	}
 	if err := packs.Reconcile(ctx); err != nil {
 		return fmt.Errorf("modpack recovery: %w", err)
+	}
+	// Instance reconciliation materializes selected server files. Complete update
+	// repair first so it cannot overwrite evidence needed by the update journal.
+	if updates == nil {
+		return domain.E(domain.CodeUnavailable, "update startup recovery is unavailable")
+	}
+	if err := updates.Reconcile(ctx); err != nil {
+		return fmt.Errorf("update recovery: %w", err)
 	}
 	reconciled, reconcileErr := instances.Reconcile(ctx)
 	for _, pending := range reconciled.Deferred {

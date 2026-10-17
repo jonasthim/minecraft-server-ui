@@ -133,6 +133,13 @@ func (s *Service) CancelRecovery(ctx context.Context, id string, actor domain.Us
 	lock := s.recoveryLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	_, err := s.cancelRecoveryLocked(ctx, id, actor)
+	return err
+}
+
+// cancelRecoveryLocked preserves deliberate-stop semantics and returns exactly
+// the epoch committed under the caller-held per-instance recovery mutex.
+func (s *Service) cancelRecoveryLocked(ctx context.Context, id string, actor domain.User) (int64, error) {
 	suppressed := ""
 	if s.config.Native != nil {
 		if identity, e := s.config.Native.Identity(ctx, id); e == nil && identity.InstanceID == id && identity.PID > 0 && identity.StartIdentity != "" && !identity.StartedAt.IsZero() {
@@ -148,16 +155,16 @@ func (s *Service) CancelRecovery(ctx context.Context, id string, actor domain.Us
 	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
-		return e
+		return 0, e
 	}
 	defer tx.Rollback()
 	_, e = tx.ExecContext(ctx, `INSERT INTO crash_recovery(instance_id,enabled,actor_id,epoch,last_generation,reason,updated_at) VALUES(?,0,?,1,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET enabled=CASE WHEN excluded.last_generation='' THEN 0 ELSE crash_recovery.enabled END,epoch=crash_recovery.epoch+1,last_generation=excluded.last_generation,reason=excluded.reason,updated_at=excluded.updated_at`, id, actor.ID, suppressed, reason, stamp(s.now()))
 	if e != nil {
-		return e
+		return 0, e
 	}
 	rows, e := tx.QueryContext(ctx, `SELECT job_id,id,actor_id FROM crash_attempts WHERE instance_id=? AND state IN('pending','queued','admitted')`, id)
 	if e != nil {
-		return e
+		return 0, e
 	}
 	type cancellation struct {
 		job, attempt string
@@ -168,18 +175,22 @@ func (s *Service) CancelRecovery(ctx context.Context, id string, actor domain.Us
 		var item cancellation
 		if e = rows.Scan(&item.job, &item.attempt, &item.requester); e != nil {
 			rows.Close()
-			return e
+			return 0, e
 		}
 		ids = append(ids, item)
 	}
 	if e = errors.Join(rows.Err(), rows.Close()); e != nil {
-		return e
+		return 0, e
 	}
 	if _, e = tx.ExecContext(ctx, `UPDATE crash_attempts SET state='cancelled',reason='Deliberate operator stop.' WHERE instance_id=? AND state IN('pending','queued','admitted')`, id); e != nil {
-		return e
+		return 0, e
+	}
+	var epoch int64
+	if e = tx.QueryRowContext(ctx, "SELECT epoch FROM crash_recovery WHERE instance_id=?", id).Scan(&epoch); e != nil {
+		return 0, e
 	}
 	if e = tx.Commit(); e != nil {
-		return e
+		return 0, e
 	}
 	for _, item := range ids {
 		if cancel, ok := s.recoveryCancels.Load(item.attempt); ok {
@@ -191,12 +202,13 @@ func (s *Service) CancelRecovery(ctx context.Context, id string, actor domain.Us
 				cancelActor = owner
 			}
 			if err := s.config.Jobs.Cancel(ctx, item.job, cancelActor); err != nil && domain.AsError(err).Code != domain.CodeForbidden {
-				return err
+				return 0, err
 			}
 		}
 	}
-	return nil
+	return epoch, nil
 }
+
 func (s *Service) retryDelay(ctx context.Context, id string, now time.Time) (time.Duration, bool, error) {
 	var count int
 	e := s.db.QueryRowContext(ctx, `SELECT count(*) FROM crash_attempts WHERE instance_id=? AND admitted_at!='' AND admitted_at>=?`, id, stamp(now.Add(-10*time.Minute))).Scan(&count)

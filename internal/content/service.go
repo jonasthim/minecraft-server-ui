@@ -179,7 +179,7 @@ func (s *Service) expire(ctx context.Context, id string) error {
 	return s.cleanupStages(ctx, id, 0, true)
 }
 func (s *Service) cleanupStages(ctx context.Context, id string, actor int64, expired bool) error {
-	query := "SELECT id FROM content_stages WHERE instance_id=? AND NOT EXISTS(SELECT 1 FROM content_previews WHERE instance_id=? AND instr(private_json,content_stages.id)>0)"
+	query := "SELECT id FROM content_stages WHERE instance_id=? AND NOT EXISTS(SELECT 1 FROM content_previews WHERE instance_id=? AND instr(private_json,content_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM update_previews WHERE instance_id=content_stages.instance_id AND instr(private_json,content_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM update_transactions WHERE instance_id=content_stages.instance_id AND instr(journal_json,content_stages.id)>0) AND NOT EXISTS(SELECT 1 FROM jobs WHERE instance_id=content_stages.instance_id AND state IN ('queued','running') AND kind IN ('instance_update_prepare','instance_update','instance_rollback') AND instr(payload,content_stages.id)>0)"
 	args := []any{id, id}
 	if actor > 0 {
 		query += " AND actor_id=?"

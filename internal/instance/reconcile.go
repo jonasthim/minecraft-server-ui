@@ -78,6 +78,16 @@ func (s *Service) Reconcile(ctx context.Context) (ReconcileResult, error) {
 			continue
 		}
 		id := d.Instance.ID
+		if s.reconcileHold != nil {
+			hold, holdErr := s.reconcileHold(ctx, id)
+			if holdErr != nil {
+				return result, holdErr
+			}
+			if hold {
+				result.Deferred = append(result.Deferred, ReconcileDeferred{id, domain.CodeInstanceBusy, "Instance update retained for explicit administrator recovery"})
+				continue
+			}
+		}
 		if err = handle(id, func() error { return s.materialize(ctx, id) }); err != nil {
 			return result, err
 		}

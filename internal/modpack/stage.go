@@ -3,6 +3,7 @@ package modpack
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"github.com/jonasthim/minecraft-server-ui/internal/safepath"
@@ -44,7 +45,10 @@ func (s *Service) stageRoot(ctx context.Context, id string) (*os.Root, error) {
 }
 
 // Caller holds service.mu. Reservations precede bytes and survive interruption.
-func (s *Service) stage(ctx context.Context, id string, actor int64, r io.Reader, size int64) (out stage, result error) {
+func (s *Service) stage(ctx context.Context, id string, actor int64, r io.Reader, size int64) (stage, error) {
+	return s.stageChecked(ctx, id, actor, r, size, nil)
+}
+func (s *Service) stageChecked(ctx context.Context, id string, actor int64, r io.Reader, size int64, check func(context.Context, *sql.Tx, stage) error) (out stage, result error) {
 	if size < 0 || size > MaxFileBytes {
 		return out, invalid("pack stage size exceeds bound")
 	}
@@ -102,8 +106,25 @@ func (s *Service) stage(ctx context.Context, id string, actor int64, r io.Reader
 		return out, e
 	}
 	out.SHA256 = hex.EncodeToString(h.Sum(nil))
-	if _, e = s.db.ExecContext(ctx, "UPDATE modpack_stages SET sha256=? WHERE id=?", out.SHA256, out.ID); e != nil {
-		return out, e
+	if check == nil {
+		if _, e = s.db.ExecContext(ctx, "UPDATE modpack_stages SET sha256=? WHERE id=?", out.SHA256, out.ID); e != nil {
+			return out, e
+		}
+	} else {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return out, err
+		}
+		defer tx.Rollback()
+		if err = check(ctx, tx, out); err != nil {
+			return out, err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE modpack_stages SET sha256=? WHERE id=?", out.SHA256, out.ID); err != nil {
+			return out, err
+		}
+		if err = tx.Commit(); err != nil {
+			return out, err
+		}
 	}
 	keep = true
 	return out, nil

@@ -94,27 +94,37 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 	if detail.Provisioning != "installed" {
 		return Preview{}, conflict("install exact server tuple before pack application")
 	}
+	out, e := s.previewForTarget(ctx, id, request, actor, manifest, manifest.Items, manifest.Tuple, true, func(items []content.Installed) ([]content.Installed, []string, error) {
+		return s.content.PreparePackCandidate(ctx, id, manifest.Tuple, items)
+	})
+	return out.Preview, e
+}
+
+// previewForTarget keeps the observed manifest/three-way baseline unchanged
+// while validating a separately verified target tuple for coordinated updates.
+func (s *Service) previewForTarget(ctx context.Context, id string, request Request, actor domain.User, manifest content.Manifest, base []content.Installed, target content.Tuple, persist bool, prepare func([]content.Installed) ([]content.Installed, []string, error)) (privatePreview, error) {
+	var e error
 	var count int
 	if e = s.db.QueryRowContext(ctx, "SELECT count(*) FROM modpack_previews WHERE instance_id=?", id).Scan(&count); e != nil {
-		return Preview{}, e
+		return privatePreview{}, e
 	}
 	if count >= 16 {
-		return Preview{}, conflict("discard unused pack previews before creating another")
+		return privatePreview{}, conflict("discard unused pack previews before creating another")
 	}
 	previous, e := s.Snapshot(ctx, id)
 	if e != nil {
-		return Preview{}, e
+		return privatePreview{}, e
 	}
 	baseline := Baseline{Files: map[string]string{}, Selections: map[string]Selection{}, Content: map[string]string{}}
 	if previous.Baseline != nil {
 		baseline = *previous.Baseline
 		if baseline.Source.Selection.Provider != request.Pack.Provider || baseline.Source.Selection.ProjectID != request.Pack.ProjectID {
-			return Preview{}, invalid("pack update must retain original publisher project")
+			return privatePreview{}, invalid("pack update must retain original publisher project")
 		}
 	}
 	original, artifactVersion, actual, e := s.resolvePackMetadata(ctx, request.Pack)
 	if e != nil {
-		return Preview{}, e
+		return privatePreview{}, e
 	}
 	var artifact catalog.VerifiedArtifact
 	if request.ArchiveReceiptID != "" {
@@ -124,25 +134,36 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 	}
 	if e != nil {
 		if request.ArchiveReceiptID != "" || ctx.Err() != nil {
-			return Preview{}, e
+			return privatePreview{}, e
 		}
-		return s.archivePreview(ctx, id, request, actor, manifest, baseline, original, artifactVersion, actual)
+		if persist {
+			public, err := s.archivePreview(ctx, id, request, actor, manifest, baseline, original, artifactVersion, actual)
+			if err != nil {
+				return privatePreview{}, err
+			}
+			return s.loadPreview(ctx, id, public.ID, actor.ID)
+		}
+		file, err := exactArchiveFile(artifactVersion, actual)
+		if err != nil {
+			return privatePreview{}, err
+		}
+		return privatePreview{Preview: Preview{ID: newID(), InstanceID: id, Tuple: target, Revision: manifest.Revision, BaselineRevision: baseline.Revision, Blockers: []string{"Required exact official pack archive unavailable"}, Manual: []ManualFile{}, Changes: []Change{}, Selections: map[string]Selection{}, Excluded: []string{}, ArchiveManual: &ArchiveManual{Selection: actual, Filename: file.Filename, Size: file.Size, Hashes: file.Hashes, OfficialURL: file.OfficialURL, Reason: "Verified exact official archive required"}}, Manifest: manifest, Request: request, ActorID: actor.ID, Metadata: packMetadataHash(original, artifactVersion)}, nil
 	}
 	f, e := s.openPackArtifact(ctx, id, artifact, request.ArchiveReceiptID)
 	if e != nil {
-		return Preview{}, e
+		return privatePreview{}, e
 	}
 	defer f.Close()
 	fi, e := f.Stat()
 	if e != nil || !fi.Mode().IsRegular() || fi.Size() != artifact.File.Size {
-		return Preview{}, invalid("verified pack artifact differs")
+		return privatePreview{}, invalid("verified pack artifact differs")
 	}
 	h := sha256.New()
 	if _, e = io.Copy(h, contextReader{ctx, f}); e != nil {
-		return Preview{}, e
+		return privatePreview{}, e
 	}
 	if hex.EncodeToString(h.Sum(nil)) != artifact.SHA256 {
-		return Preview{}, conflict("verified pack artifact changed")
+		return privatePreview{}, conflict("verified pack artifact changed")
 	}
 	format := "modrinth"
 	if request.Pack.Provider == catalog.CurseForge {
@@ -150,13 +171,13 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 	}
 	pack, e := ParseArchive(ctx, f, fi.Size(), format)
 	if e != nil {
-		return Preview{}, e
+		return privatePreview{}, e
 	}
 	if format == "curseforge-server" {
 		pack.Blockers = nil
-		pack.Minecraft = manifest.Tuple.Minecraft
-		pack.Loader = manifest.Tuple.Loader
-		pack.LoaderVersion = manifest.Tuple.LoaderVersion
+		pack.Minecraft = target.Minecraft
+		pack.Loader = target.Loader
+		pack.LoaderVersion = target.LoaderVersion
 		if !member(artifactVersion.Compatibility.Minecraft, pack.Minecraft) || !member(artifactVersion.Compatibility.Loaders, pack.Loader) {
 			pack.Blockers = append(pack.Blockers, "Official server-pack metadata does not prove installed Minecraft and loader")
 		}
@@ -164,13 +185,13 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 	if request.PreviousPreviewID != "" {
 		parent, e := s.loadPreview(ctx, id, request.PreviousPreviewID, actor.ID)
 		if e != nil {
-			return Preview{}, e
+			return privatePreview{}, e
 		}
 		if live, e := s.liveJob(ctx, id, parent.Preview.ID); e != nil || live != "" {
-			return Preview{}, conflict("parent preview owned by live job")
+			return privatePreview{}, conflict("parent preview owned by live job")
 		}
 		if parent.Request.Pack != request.Pack || (parent.Preview.ArchiveManual == nil && parent.Preview.Source.SHA256 != artifact.SHA256) || parent.Preview.Source.ArtifactSelection != artifact.Selection || parent.Metadata != packMetadataHash(original, artifactVersion) {
-			return Preview{}, conflict("parent preview pack metadata differs")
+			return privatePreview{}, conflict("parent preview pack metadata differs")
 		}
 		if request.Manual == nil {
 			request.Manual = map[string]string{}
@@ -182,8 +203,8 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 		}
 	}
 	source := Source{ArtifactSelection: artifact.Selection, Selection: request.Pack, OfficialURL: original.OfficialURL, Name: original.Name, SHA256: artifact.SHA256, Provenance: artifact.Provenance}
-	p := privatePreview{Preview: Preview{ID: newID(), InstanceID: id, Tuple: manifest.Tuple, Revision: manifest.Revision, BaselineRevision: baseline.Revision, Source: source, Changes: []Change{}, Selections: map[string]Selection{}, Manual: []ManualFile{}, Blockers: append([]string{}, pack.Blockers...), Excluded: pack.Excluded}, Request: request, ActorID: actor.ID, Metadata: packMetadataHash(original, artifactVersion), Manifest: manifest, Baseline: Baseline{Source: source, Files: map[string]string{}, Selections: map[string]Selection{}, Content: map[string]string{}}, Operations: []operation{}, Members: pack.Files}
-	if pack.Minecraft != manifest.Tuple.Minecraft || pack.Loader != manifest.Tuple.Loader || pack.LoaderVersion != manifest.Tuple.LoaderVersion {
+	p := privatePreview{Preview: Preview{ID: newID(), InstanceID: id, Tuple: target, Revision: manifest.Revision, BaselineRevision: baseline.Revision, Source: source, Changes: []Change{}, Selections: map[string]Selection{}, Manual: []ManualFile{}, Blockers: append([]string{}, pack.Blockers...), Excluded: pack.Excluded}, Request: request, ActorID: actor.ID, Metadata: packMetadataHash(original, artifactVersion), Manifest: manifest, Baseline: Baseline{Source: source, Files: map[string]string{}, Selections: map[string]Selection{}, Content: map[string]string{}}, Operations: []operation{}, Members: pack.Files}
+	if pack.Minecraft != target.Minecraft || pack.Loader != target.Loader || pack.LoaderVersion != target.LoaderVersion {
 		p.Preview.Blockers = append(p.Preview.Blockers, "Pack requires a different exact Minecraft/loader tuple")
 	}
 	if original.Compatibility.ServerSide == "unsupported" {
@@ -191,7 +212,7 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 	}
 	root, e := s.openServer(ctx, id)
 	if e != nil {
-		return p.Preview, e
+		return p, e
 	}
 	defer root.Close()
 	stages := map[string]stage{}
@@ -228,7 +249,7 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 		}
 		selection.Optional = file.Server == "optional"
 		if !selection.Optional && !selection.Selected && !selection.Excluded {
-			return p.Preview, invalid("required server files must be selected or explicitly excluded")
+			return p, invalid("required server files must be selected or explicitly excluded")
 		}
 		p.Preview.Selections[name] = selection
 		p.Baseline.Selections[name] = selection
@@ -242,13 +263,13 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 			} else {
 				z, ze := zip.NewReader(f, fi.Size())
 				if ze != nil {
-					return p.Preview, ze
+					return p, ze
 				}
 				for _, entry := range z.File {
 					if entry.Name == file.ArchiveEntry {
 						r, re := entry.Open()
 						if re != nil {
-							return p.Preview, re
+							return p, re
 						}
 						st, e = s.stage(ctx, id, actor.ID, r, file.Size)
 						r.Close()
@@ -263,7 +284,7 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 			if lookup == nil && owner == actor.ID {
 				rf, re := s.openStage(ctx, id, receipt)
 				if re != nil {
-					return p.Preview, re
+					return p, re
 				}
 				e = verifyPackMember(ctx, rf, receipt.Size, file)
 				rf.Close()
@@ -286,29 +307,29 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 			continue
 		}
 		if st.ID == "" {
-			return p.Preview, invalid("pack file has no staged bytes")
+			return p, invalid("pack file has no staged bytes")
 		}
 		if e = s.validateDestinationStage(ctx, id, name, st); e != nil {
-			return p.Preview, e
+			return p, e
 		}
 		stages[name] = st
 		p.Baseline.Files[name] = st.SHA256
 	}
 	for name := range request.Selections {
 		if _, ok := pack.Files[name]; !ok {
-			return p.Preview, invalid("selection path is not a server pack member")
+			return p, invalid("selection path is not a server pack member")
 		}
 	}
 	for name := range request.Manual {
 		if _, ok := pack.Files[name]; !ok {
-			return p.Preview, invalid("manual upload is not bound to a server pack member")
+			return p, invalid("manual upload is not bound to a server pack member")
 		}
 	}
 	local := map[string]string{}
 	for name := range baseline.Files {
 		hash, _, e := currentHash(ctx, root, physicalPath(name, baseline.Selections[name]), MaxFileBytes)
 		if e != nil {
-			return p.Preview, e
+			return p, e
 		}
 		local[name] = hash
 	}
@@ -316,7 +337,7 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 		if _, ok := local[name]; !ok {
 			hash, _, e := currentHash(ctx, root, physicalPath(name, p.Preview.Selections[name]), MaxFileBytes)
 			if e != nil {
-				return p.Preview, e
+				return p, e
 			}
 			local[name] = hash
 		}
@@ -329,10 +350,10 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 	}
 	p.Preview.Changes, e = Compare(baseline.Files, local, p.Baseline.Files, p.Preview.Selections, request.Choices)
 	if e != nil {
-		return p.Preview, invalid(e.Error())
+		return p, invalid(e.Error())
 	}
 	candidate := map[string]content.Installed{}
-	for _, item := range manifest.Items {
+	for _, item := range base {
 		candidate[item.ID] = item
 	}
 	changes := 0
@@ -370,20 +391,20 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 		if change.Before != "" {
 			file, e := openChecked(root, actual, MaxFileBytes)
 			if e != nil {
-				return p.Preview, e
+				return p, e
 			}
 			info, e := file.Stat()
 			if e != nil {
 				file.Close()
-				return p.Preview, e
+				return p, e
 			}
 			before, e = s.stage(ctx, id, actor.ID, file, info.Size())
 			file.Close()
 			if e != nil {
-				return p.Preview, e
+				return p, e
 			}
 			if before.SHA256 != change.Before {
-				return p.Preview, conflict("local bytes changed during preview")
+				return p, conflict("local bytes changed during preview")
 			}
 		}
 		after := stages[name]
@@ -394,12 +415,12 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 		if strings.HasPrefix(name, "mods/") && change.Action != "delete" {
 			file, e := s.openStage(ctx, id, after)
 			if e != nil {
-				return p.Preview, e
+				return p, e
 			}
 			descriptor, e := content.InspectPackReader(ctx, file, after.Size)
 			file.Close()
 			if e != nil {
-				return p.Preview, e
+				return p, e
 			}
 			itemID := baseline.Content[name]
 			if itemID == "" {
@@ -416,15 +437,19 @@ func (s *Service) Preview(ctx context.Context, id string, request Request, actor
 	}
 	sort.Slice(p.Candidate, func(i, j int) bool { return p.Candidate[i].ID < p.Candidate[j].ID })
 	var packBlockers []string
-	p.Candidate, packBlockers, e = s.content.PreparePackCandidate(ctx, id, manifest.Tuple, p.Candidate)
+	p.Candidate, packBlockers, e = prepare(p.Candidate)
 	if e != nil {
-		return p.Preview, e
+		return p, e
 	}
 	p.Preview.Blockers = append(p.Preview.Blockers, packBlockers...)
 	p.Preview.Summary = fmt.Sprintf("%d proposed file changes; %d preserved customizations; %d manual files; %d excluded client/control entries", changes, len(customized), len(p.Preview.Manual), len(p.Preview.Excluded))
 	p.Baseline.Revision = metadataHash(p.Baseline)
-	return s.storePreview(ctx, p)
+	if persist {
+		_, e = s.storePreview(ctx, p)
+	}
+	return p, e
 }
+
 func physicalPath(name string, s Selection) string {
 	if s.Disabled && strings.HasPrefix(name, "mods/") {
 		return name + ".disabled"

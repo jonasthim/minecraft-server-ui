@@ -290,7 +290,7 @@ func (s *Service) run(ctx context.Context, id string, handler Handler) {
 		var payload []byte
 		payload, err = s.payload(ctx, id)
 		if err == nil {
-			e := s.bindExecution(ctx, id, j.Job, payload)
+			e := s.bindExecution(ctx, id, j, payload)
 			err = invoke(ctx, handler, e)
 		}
 	}
