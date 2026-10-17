@@ -187,13 +187,132 @@ jobs:
           $source = [System.IO.File]::ReadAllText($EntryScript)
           $initNeedle = '$ErrorActionPreference = ''Stop'''
           if (($source.Split(@($initNeedle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 source init diagnostic seam drift' }
-          $source = $source.Replace($initNeedle,$initNeedle+[Environment]::NewLine+'$script:OUTER_DIAGNOSTIC_STAGE = ''entry_start''')
+          $source = $source.Replace($initNeedle,$initNeedle+[Environment]::NewLine+'$script:OUTER_DIAGNOSTIC_STAGE = ''entry_start'''+[Environment]::NewLine+'$script:OUTER_DIAGNOSTIC_BOUND = $false')
           $createNeedle = 'function New-PrivateScratchFile([string]$Name) {'
           if (($source.Split(@($createNeedle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 scratch create diagnostic seam drift' }
           $source = $source.Replace($createNeedle,$createNeedle+[Environment]::NewLine+'    $script:OUTER_DIAGNOSTIC_STAGE = ''new_private_scratch_file''')
           $initializeNeedle = '        Initialize-PrivateIO'
           if (($source.Split(@($initializeNeedle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 private IO diagnostic seam drift' }
           $source = $source.Replace($initializeNeedle,'        $script:OUTER_DIAGNOSTIC_STAGE = ''initialize_private_io'''+[Environment]::NewLine+$initializeNeedle)
+          $childDeleteReplacement = @(
+              '                if ($ownedFiles.ContainsKey($name)) {'
+              '                    if ($name -ceq ''trust.json'') { $script:OUTER_DIAGNOSTIC_STAGE = ''delete_child_trust'' }'
+              '                    elseif ($name -ceq ''minecraft-ui-bootstrap.exe'') { $script:OUTER_DIAGNOSTIC_STAGE = ''delete_child_binary'' }'
+              '                    elseif ($name -ceq ''result.json'') { $script:OUTER_DIAGNOSTIC_STAGE = ''delete_child_result'' }'
+              '                    elseif ($name -ceq ''error.txt'') { $script:OUTER_DIAGNOSTIC_STAGE = ''delete_child_error'' }'
+              '                    else { $script:OUTER_DIAGNOSTIC_STAGE = ''delete_child_unknown'' }'
+              '                    [MinecraftUiOuter.PrivateIO]::DeleteOwned([System.IO.Path]::Combine($scratch,$name),$ownedFiles[$name],$fileSDDL,$false)'
+              '                }'
+          ) -join [Environment]::NewLine
+          $cleanupSeams = @(
+              @{ needle = '    foreach ($retained in @($binaryWriter,$trustFile,$file,$resultFile,$errorFile)) {'; replacement = '    $script:OUTER_DIAGNOSTIC_STAGE = ''close_handles'''+[Environment]::NewLine+'    foreach ($retained in @($binaryWriter,$trustFile,$file,$resultFile,$errorFile)) {' },
+              @{ needle = '            Assert-Scratch $scratch $scratchIdentity'; replacement = '            $script:OUTER_DIAGNOSTIC_STAGE = ''verify_scratch'''+[Environment]::NewLine+'            Assert-Scratch $scratch $scratchIdentity' },
+              @{ needle = '            [MinecraftUiOuter.PrivateIO]::AssertBound($scratchHandle,$scratchID,$directorySDDL,$true)'; replacement = '            [MinecraftUiOuter.PrivateIO]::AssertBound($scratchHandle,$scratchID,$directorySDDL,$true)'+[Environment]::NewLine+'            $script:OUTER_DIAGNOSTIC_BOUND = $true' },
+              @{ needle = '                if ($ownedFiles.ContainsKey($name)) { [MinecraftUiOuter.PrivateIO]::DeleteOwned([System.IO.Path]::Combine($scratch,$name),$ownedFiles[$name],$fileSDDL,$false) }'; replacement = $childDeleteReplacement },
+              @{ needle = '            $scratchHandle.Dispose(); $scratchHandle = $null'; replacement = '            $script:OUTER_DIAGNOSTIC_STAGE = ''close_handles'''+[Environment]::NewLine+'            $scratchHandle.Dispose(); $scratchHandle = $null' },
+              @{ needle = '            [MinecraftUiOuter.PrivateIO]::DeleteOwned($scratch,$scratchID,$directorySDDL,$true)'; replacement = '            $script:OUTER_DIAGNOSTIC_STAGE = ''delete_directory'''+[Environment]::NewLine+'            [MinecraftUiOuter.PrivateIO]::DeleteOwned($scratch,$scratchID,$directorySDDL,$true)' }
+          )
+          foreach ($seam in $cleanupSeams) {
+              if (($source.Split(@($seam.needle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 cleanup diagnostic seam drift' }
+              $source = $source.Replace($seam.needle,$seam.replacement)
+          }
+          $cleanupCatchNeedle = "        } catch { `$cleanupRefused = `$true; [Console]::Error.WriteLine('private bootstrap scratch cleanup refused') }"
+          if (($source.Split(@($cleanupCatchNeedle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 cleanup catch diagnostic seam drift' }
+          $cleanupCatchReplacement = @(
+              '        } catch {'
+              '            $cleanupRefused = $true'
+              '            $cleanupException = $_.Exception'
+              '            $cleanupType = switch ($cleanupException.GetType().FullName) {'
+              '                ''System.Management.Automation.RuntimeException'' { ''runtime'' }'
+              '                ''System.Management.Automation.MethodInvocationException'' { ''method_invocation'' }'
+              '                ''System.IO.IOException'' { ''io'' }'
+              '                ''System.UnauthorizedAccessException'' { ''unauthorized'' }'
+              '                ''System.InvalidOperationException'' { ''invalid_operation'' }'
+              '                ''System.Security.SecurityException'' { ''security'' }'
+              '                ''System.ComponentModel.Win32Exception'' { ''win32'' }'
+              '                ''System.Exception'' { ''exception'' }'
+              '                default { ''other'' }'
+              '            }'
+              '            $cleanupInnerType = ''none''; $cleanupInnerWin32 = -1'
+              '            $innerException = $cleanupException.InnerException'
+              '            for ($depth = 0; $depth -lt 3 -and $null -ne $innerException; $depth++) {'
+              '                if ($cleanupInnerType -eq ''none'') {'
+              '                    $cleanupInnerType = switch ($innerException.GetType().FullName) {'
+              '                        ''System.Management.Automation.RuntimeException'' { ''runtime'' }'
+              '                        ''System.Management.Automation.MethodInvocationException'' { ''method_invocation'' }'
+              '                        ''System.IO.IOException'' { ''io'' }'
+              '                        ''System.UnauthorizedAccessException'' { ''unauthorized'' }'
+              '                        ''System.InvalidOperationException'' { ''invalid_operation'' }'
+              '                        ''System.Security.SecurityException'' { ''security'' }'
+              '                        ''System.ComponentModel.Win32Exception'' { ''win32'' }'
+              '                        ''System.Exception'' { ''exception'' }'
+              '                        default { ''other'' }'
+              '                    }'
+              '                }'
+              '                if ($innerException -is [System.ComponentModel.Win32Exception] -and $cleanupInnerWin32 -eq -1) { try { $candidateCode = [int]$innerException.NativeErrorCode; if ($candidateCode -ge 0 -and $candidateCode -le 65535) { $cleanupInnerWin32 = $candidateCode } } catch {} }'
+              '                try { $innerException = $innerException.InnerException } catch { $innerException = $null }'
+              '            }'
+              '            $cleanupLine = 0'
+              '            try { $candidateLine = [int]$_.InvocationInfo.ScriptLineNumber; if ($candidateLine -ge 1 -and $candidateLine -le 5000) { $cleanupLine = $candidateLine } } catch {}'
+              '            $cleanupHResult = ''00000000'''
+              '            try { $cleanupHResult = ''{0:X8}'' -f ([long]$cleanupException.HResult -band 4294967295) } catch {}'
+              '            $cleanupWin32 = -1'
+              '            if ($cleanupException -is [System.ComponentModel.Win32Exception]) { try { $candidateCode = [int]$cleanupException.NativeErrorCode; if ($candidateCode -ge 0 -and $candidateCode -le 65535) { $cleanupWin32 = $candidateCode } } catch {} }'
+              '            $cleanupDiagnostic = [ordered]@{ stage=$script:OUTER_DIAGNOSTIC_STAGE; type=$cleanupType; inner_type=$cleanupInnerType; line=$cleanupLine; hresult=$cleanupHResult; win32=$cleanupWin32; inner_win32=$cleanupInnerWin32; bound=$script:OUTER_DIAGNOSTIC_BOUND }'
+              '            try { [System.IO.File]::WriteAllText($env:OUTER_TEST_CLEANUP_DIAGNOSTICS,(ConvertTo-Json -InputObject $cleanupDiagnostic -Compress)) } catch {}'
+              '            [Console]::Error.WriteLine(''private bootstrap scratch cleanup refused'')'
+              '        }'
+          ) -join [Environment]::NewLine
+          $source = $source.Replace($cleanupCatchNeedle,$cleanupCatchReplacement)
+          $handleCatchNeedle = "catch { `$cleanupRefused = `$true; [Console]::Error.WriteLine('private bootstrap handle cleanup refused') }"
+          if (($source.Split(@($handleCatchNeedle),[System.StringSplitOptions]::None)).Count -ne 3) { throw 'PowerShell 5.1 handle cleanup diagnostic seam drift' }
+          $handleCatchReplacement = @(
+              'catch {'
+              '    $cleanupRefused = $true'
+              '    $script:OUTER_DIAGNOSTIC_STAGE = ''close_handles'''
+              '    $cleanupException = $_.Exception'
+              '    $cleanupType = switch ($cleanupException.GetType().FullName) {'
+              '        ''System.Management.Automation.RuntimeException'' { ''runtime'' }'
+              '        ''System.Management.Automation.MethodInvocationException'' { ''method_invocation'' }'
+              '        ''System.IO.IOException'' { ''io'' }'
+              '        ''System.UnauthorizedAccessException'' { ''unauthorized'' }'
+              '        ''System.InvalidOperationException'' { ''invalid_operation'' }'
+              '        ''System.Security.SecurityException'' { ''security'' }'
+              '        ''System.ComponentModel.Win32Exception'' { ''win32'' }'
+              '        ''System.Exception'' { ''exception'' }'
+              '        default { ''other'' }'
+              '    }'
+              '    $cleanupInnerType = ''none''; $cleanupInnerWin32 = -1'
+              '    $innerException = $cleanupException.InnerException'
+              '    for ($depth = 0; $depth -lt 3 -and $null -ne $innerException; $depth++) {'
+              '        if ($cleanupInnerType -eq ''none'') {'
+              '            $cleanupInnerType = switch ($innerException.GetType().FullName) {'
+              '                ''System.Management.Automation.RuntimeException'' { ''runtime'' }'
+              '                ''System.Management.Automation.MethodInvocationException'' { ''method_invocation'' }'
+              '                ''System.IO.IOException'' { ''io'' }'
+              '                ''System.UnauthorizedAccessException'' { ''unauthorized'' }'
+              '                ''System.InvalidOperationException'' { ''invalid_operation'' }'
+              '                ''System.Security.SecurityException'' { ''security'' }'
+              '                ''System.ComponentModel.Win32Exception'' { ''win32'' }'
+              '                ''System.Exception'' { ''exception'' }'
+              '                default { ''other'' }'
+              '            }'
+              '        }'
+              '        if ($innerException -is [System.ComponentModel.Win32Exception] -and $cleanupInnerWin32 -eq -1) { try { $candidateCode = [int]$innerException.NativeErrorCode; if ($candidateCode -ge 0 -and $candidateCode -le 65535) { $cleanupInnerWin32 = $candidateCode } } catch {} }'
+              '        try { $innerException = $innerException.InnerException } catch { $innerException = $null }'
+              '    }'
+              '    $cleanupLine = 0'
+              '    try { $candidateLine = [int]$_.InvocationInfo.ScriptLineNumber; if ($candidateLine -ge 1 -and $candidateLine -le 5000) { $cleanupLine = $candidateLine } } catch {}'
+              '    $cleanupHResult = ''00000000'''
+              '    try { $cleanupHResult = ''{0:X8}'' -f ([long]$cleanupException.HResult -band 4294967295) } catch {}'
+              '    $cleanupWin32 = -1'
+              '    if ($cleanupException -is [System.ComponentModel.Win32Exception]) { try { $candidateCode = [int]$cleanupException.NativeErrorCode; if ($candidateCode -ge 0 -and $candidateCode -le 65535) { $cleanupWin32 = $candidateCode } } catch {} }'
+              '    $cleanupDiagnostic = [ordered]@{ stage=$script:OUTER_DIAGNOSTIC_STAGE; type=$cleanupType; inner_type=$cleanupInnerType; line=$cleanupLine; hresult=$cleanupHResult; win32=$cleanupWin32; inner_win32=$cleanupInnerWin32; bound=$script:OUTER_DIAGNOSTIC_BOUND }'
+              '    try { [System.IO.File]::WriteAllText($env:OUTER_TEST_CLEANUP_DIAGNOSTICS,(ConvertTo-Json -InputObject $cleanupDiagnostic -Compress)) } catch {}'
+              '    [Console]::Error.WriteLine(''private bootstrap handle cleanup refused'')'
+              '}'
+          ) -join [Environment]::NewLine
+          $source = $source.Replace($handleCatchNeedle,$handleCatchReplacement)
           $catchNeedle = '    [Console]::Error.WriteLine(''bootstrap preparation refused; check platform, arguments, trust and verified release availability'')'
           if (($source.Split(@($catchNeedle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 outer catch diagnostic seam drift' }
           $catchReplacement = @(
@@ -228,12 +347,76 @@ jobs:
           $testSource = $testSource.Replace($sourceRead,$sourceReadReplacement)
           $aclPathLine = '        $env:OUTER_TEST_ACLS = [System.IO.Path]::Combine($root,($mode+''.acls''))'
           if (($testSource.Split(@($aclPathLine),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 diagnostic path seam drift' }
-          $testSource = $testSource.Replace($aclPathLine,$aclPathLine+[Environment]::NewLine+'        $env:OUTER_TEST_DIAGNOSTICS = [System.IO.Path]::Combine($root,($mode+''.diagnostics''))')
+          $testSource = $testSource.Replace($aclPathLine,$aclPathLine+[Environment]::NewLine+'        $env:OUTER_TEST_DIAGNOSTICS = [System.IO.Path]::Combine($root,($mode+''.diagnostics''))'+[Environment]::NewLine+'        $env:OUTER_TEST_CLEANUP_DIAGNOSTICS = [System.IO.Path]::Combine($root,($mode+''.cleanup-diagnostics''))')
+          $loopNeedle = '    foreach ($mode in $cases) {'
+          if (($testSource.Split(@($loopNeedle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 assertion diagnostic helper seam drift' }
+          $diagnosticHelper = @'
+          function Write-OuterAssertionDiagnostic([string]$Mode,[object]$ExitCode,[string]$Captured,[string]$Reason) {
+              $knownModes = @('good','tamper','oversize','truncate','error','malicious-version','foreign-child','changed-child-owner','development-without-flag','owner-with-flag')
+              $modeLabel = 'unknown'
+              if ($Mode -cin $knownModes) { $modeLabel = $Mode }
+              $boundedExit = -1
+              if ($ExitCode -is [int] -and $ExitCode -ge 0 -and $ExitCode -le 255) { $boundedExit = $ExitCode }
+              $scratchExists = $false; $scratchPathReadable = $false; $aclReadable = $false; $aclProtected = $false; $ownerMatches = $false
+              $entryCount = 0; $entryOverflow = $false; $residualTrust = $false; $residualBinary = $false; $residualResult = $false; $residualError = $false; $residualUnknown = $false; $residualReadFailed = $false; $aclReadFailed = $false
+              try {
+                  if (Test-Path -LiteralPath $env:OUTER_TEST_SCRATCH) {
+                      $scratchPathReadable = $true
+                      $scratch = [System.IO.File]::ReadAllText($env:OUTER_TEST_SCRATCH)
+                      $scratchExists = Test-Path -LiteralPath $scratch
+                      if ($scratchExists) {
+                          try {
+                              $acl = Get-Acl -LiteralPath $scratch -ErrorAction Stop
+                              $aclReadable = $true
+                              $aclProtected = [bool]$acl.AreAccessRulesProtected
+                              $currentSID = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+                              $ownerSID = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+                              $ownerMatches = ($ownerSID -ceq $currentSID)
+                          } catch { $aclReadFailed = $true }
+                          try {
+                              $enumerator = [System.IO.Directory]::EnumerateFileSystemEntries($scratch).GetEnumerator()
+                              try {
+                                  while ($entryCount -lt 33 -and $enumerator.MoveNext()) {
+                                      $entryCount++
+                                      $entryName = [System.IO.Path]::GetFileName($enumerator.Current)
+                                      if ($entryName -ceq 'trust.json') { $residualTrust = $true }
+                                      elseif ($entryName -ceq 'minecraft-ui-bootstrap.exe') { $residualBinary = $true }
+                                      elseif ($entryName -ceq 'result.json') { $residualResult = $true }
+                                      elseif ($entryName -ceq 'error.txt') { $residualError = $true }
+                                      else { $residualUnknown = $true }
+                                  }
+                                  if ($entryCount -gt 32) { $entryCount = 32; $entryOverflow = $true }
+                              } finally { if ($null -ne $enumerator) { $enumerator.Dispose() } }
+                          } catch { $residualReadFailed = $true }
+                      }
+                  }
+              } catch { $residualReadFailed = $true }
+              $cleanupStage = 'unavailable'; $cleanupType = 'unavailable'; $cleanupInnerType = 'unavailable'; $cleanupLine = 0; $cleanupHResult = '00000000'; $cleanupWin32 = -1; $cleanupInnerWin32 = -1; $cleanupBound = $false
+              if (Test-Path -LiteralPath $env:OUTER_TEST_CLEANUP_DIAGNOSTICS) {
+                  try {
+                      $cleanup = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($env:OUTER_TEST_CLEANUP_DIAGNOSTICS))
+                      if ($cleanup.stage -cin @('close_handles','verify_scratch','delete_child_trust','delete_child_binary','delete_child_result','delete_child_error','delete_child_unknown','delete_directory')) { $cleanupStage = $cleanup.stage }
+                      if ($cleanup.type -cin @('runtime','method_invocation','io','unauthorized','invalid_operation','security','win32','exception','other')) { $cleanupType = $cleanup.type }
+                      if ($cleanup.inner_type -cin @('none','runtime','method_invocation','io','unauthorized','invalid_operation','security','win32','exception','other')) { $cleanupInnerType = $cleanup.inner_type }
+                      try { $candidateCleanupLine = [int]$cleanup.line; if ($candidateCleanupLine -ge 0 -and $candidateCleanupLine -le 5000) { $cleanupLine = $candidateCleanupLine } } catch {}
+                      if ([string]$cleanup.hresult -cmatch '^[0-9A-F]{8}$') { $cleanupHResult = $cleanup.hresult }
+                      try { $candidateCleanupWin32 = [int]$cleanup.win32; if ($candidateCleanupWin32 -ge -1 -and $candidateCleanupWin32 -le 65535) { $cleanupWin32 = $candidateCleanupWin32 } } catch {}
+                      try { $candidateCleanupInnerWin32 = [int]$cleanup.inner_win32; if ($candidateCleanupInnerWin32 -ge -1 -and $candidateCleanupInnerWin32 -le 65535) { $cleanupInnerWin32 = $candidateCleanupInnerWin32 } } catch {}
+                      if ($cleanup.bound -is [bool]) { $cleanupBound = $cleanup.bound }
+                  } catch { $cleanupType = 'unavailable' }
+              }
+              $scratchRefused = $Captured.Contains('private bootstrap scratch cleanup refused')
+              $handleRefused = $Captured.Contains('private bootstrap handle cleanup refused')
+              $reasonLabel = 'unknown'
+              if ($Reason -cin @('unexpected_exit','scratch_leak')) { $reasonLabel = $Reason }
+              [Console]::Error.WriteLine(('PowerShell 5.1 assertion diagnostic: mode='+$modeLabel+' reason='+$reasonLabel+' exit='+$boundedExit+' scratch_exists='+$scratchExists+' scratch_path_readable='+$scratchPathReadable+' acl_readable='+$aclReadable+' acl_read_failed='+$aclReadFailed+' acl_protected='+$aclProtected+' owner_matches='+$ownerMatches+' residual_count='+$entryCount+' residual_overflow='+$entryOverflow+' residual_trust='+$residualTrust+' residual_binary='+$residualBinary+' residual_result='+$residualResult+' residual_error='+$residualError+' residual_unknown='+$residualUnknown+' residual_read_failed='+$residualReadFailed+' scratch_cleanup_refused='+$scratchRefused+' handle_cleanup_refused='+$handleRefused+' cleanup_stage='+$cleanupStage+' cleanup_type='+$cleanupType+' cleanup_inner_type='+$cleanupInnerType+' cleanup_line='+$cleanupLine+' cleanup_hresult='+$cleanupHResult+' cleanup_win32='+$cleanupWin32+' cleanup_inner_win32='+$cleanupInnerWin32+' bound='+$cleanupBound))
+          }
+          '@
+          $testSource = $testSource.Replace($loopNeedle,$diagnosticHelper+$loopNeedle)
           $needle = "if ((`$exit -eq 0) -ne `$success) { throw ('unexpected result for '+`$mode) }"
           if (($testSource.Split(@($needle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 diagnostic seam drift' }
           $replacement = @'
           if (($exit -eq 0) -ne $success) {
-              if ($mode -eq 'good') {
                   $stage = 'child_exit_unclassified'
                   $argvStatus = 'unavailable'
                   if (Test-Path -LiteralPath $env:OUTER_TEST_ARGS) {
@@ -259,13 +442,24 @@ jobs:
                           if ($failure.win32 -is [int] -and $failure.win32 -ge -1 -and $failure.win32 -le 65535) { $failureWin32 = $failure.win32 }
                       } catch { $failureType = 'unavailable' }
                   }
-                  [Console]::Error.WriteLine(('PowerShell 5.1 good-child diagnostic: exit='+$exitCode+' stage='+$stage+' argv='+$argvStatus+' type='+$failureType+' line='+$failureLine+' hresult='+$failureHResult+' win32='+$failureWin32))
-              }
+                  $diagnosticMode = 'unknown'
+                  if ($mode -cin @('good','tamper','oversize','truncate','error','malicious-version','foreign-child','changed-child-owner','development-without-flag','owner-with-flag')) { $diagnosticMode = $mode }
+                  [Console]::Error.WriteLine(('PowerShell 5.1 child diagnostic: mode='+$diagnosticMode+' exit='+$exitCode+' stage='+$stage+' argv='+$argvStatus+' type='+$failureType+' line='+$failureLine+' hresult='+$failureHResult+' win32='+$failureWin32))
+                  Write-OuterAssertionDiagnostic $mode $exit $captured 'unexpected_exit'
               throw ('unexpected result for '+$mode)
           }
           '@
           $diagnosticTestPath = Join-Path $env:RUNNER_TEMP 'windows_behavior_test_diagnostic.ps1'
           $patchedSource = $testSource.Replace($needle,$replacement)
+          $leakNeedle = "            } elseif (Test-Path -LiteralPath `$scratch) { throw 'owned scratch leaked' }"
+          if (($patchedSource.Split(@($leakNeedle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 scratch leak diagnostic seam drift' }
+          $leakReplacement = @'
+              } elseif (Test-Path -LiteralPath $scratch) {
+                  Write-OuterAssertionDiagnostic $mode $exit $captured 'scratch_leak'
+                  throw 'owned scratch leaked'
+              }
+          '@
+          $patchedSource = $patchedSource.Replace($leakNeedle,$leakReplacement.TrimEnd())
           [System.IO.File]::WriteAllText($diagnosticTestPath,$patchedSource,[System.Text.UTF8Encoding]::new($false))
           & $diagnosticTestPath -EntryScript (Join-Path $env:GITHUB_WORKSPACE 'outer-output\minecraft-ui-prepare.ps1') -PayloadPath (Join-Path $env:GITHUB_WORKSPACE 'outer-output\minecraft-ui-bootstrap-windows-amd64.exe') -Development
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
