@@ -3,6 +3,7 @@
 package launcher
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,31 +16,98 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+type windowsProcessIdentityOps struct {
+	openProcess func(uint32, bool, uint32) (windows.Handle, error)
+	closeHandle func(windows.Handle) error
+	wait        func(windows.Handle, uint32) (uint32, error)
+	getTimes    func(windows.Handle, *windows.Filetime, *windows.Filetime, *windows.Filetime, *windows.Filetime) error
+	queryImage  func(windows.Handle, uint32, *uint16, *uint32) error
+	bootID      func() (windows.GUID, error)
+	afterWait   func(windows.Handle)
+}
+
+func nativeWindowsProcessIdentityOps() windowsProcessIdentityOps {
+	return windowsProcessIdentityOps{
+		openProcess: windows.OpenProcess,
+		closeHandle: windows.CloseHandle,
+		wait:        windows.WaitForSingleObject,
+		getTimes:    windows.GetProcessTimes,
+		queryImage:  windows.QueryFullProcessImageName,
+		bootID:      windowsBootIdentifier,
+	}
+}
+
 func processIdentity(pid int) (start, exe, cwd string, err error) {
+	return processIdentityWithOps(pid, nativeWindowsProcessIdentityOps())
+}
+
+func processIdentityWithOps(pid int, ops windowsProcessIdentityOps) (start, exe, cwd string, err error) {
 	if pid <= 0 {
 		return "", "", "", fmt.Errorf("invalid PID")
 	}
-	h, e := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, uint32(pid))
+	h, e := ops.openProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, uint32(pid))
 	if e != nil {
 		return "", "", "", e
 	}
-	defer windows.CloseHandle(h)
-	state, e := windows.WaitForSingleObject(h, 0)
+	defer ops.closeHandle(h)
+	state, e := ops.wait(h, 0)
 	if e != nil {
-		return "", "", "", e
+		return "", "", "", &processWaitUnavailable{cause: e}
 	}
-	if state != uint32(windows.WAIT_TIMEOUT) {
+	if state == uint32(windows.WAIT_OBJECT_0) {
 		return "", "", "", os.ErrNotExist
 	}
+	if state != uint32(windows.WAIT_TIMEOUT) {
+		return "", "", "", fmt.Errorf("unexpected process wait state 0x%08x", state)
+	}
+	if ops.afterWait != nil {
+		ops.afterWait(h)
+	}
 	var creation, exit, kernel, user windows.Filetime
-	if e = windows.GetProcessTimes(h, &creation, &exit, &kernel, &user); e != nil {
-		return "", "", "", e
+	if e = ops.getTimes(h, &creation, &exit, &kernel, &user); e != nil {
+		return "", "", "", processMetadataError(h, e, ops.wait)
 	}
 	var buffer [32768]uint16
 	n := uint32(len(buffer))
-	if e = windows.QueryFullProcessImageName(h, 0, &buffer[0], &n); e != nil {
-		return "", "", "", e
+	if e = ops.queryImage(h, 0, &buffer[0], &n); e != nil {
+		return "", "", "", processMetadataError(h, e, ops.wait)
 	}
+	bootID, e := ops.bootID()
+	if e != nil {
+		return "", "", "", fmt.Errorf("boot identity: %w", e)
+	}
+	if bootID == (windows.GUID{}) {
+		return "", "", "", fmt.Errorf("missing boot identity")
+	}
+	return fmt.Sprintf("%s:%08x%08x", bootID.String(), creation.HighDateTime, creation.LowDateTime), windows.UTF16ToString(buffer[:n]), "", nil
+}
+
+// A process may exit after the initial zero-time wait and before a metadata
+// query completes. Only a signaled result from that same held process handle
+// proves exit; every failed or ambiguous recheck preserves the metadata error.
+func processMetadataError(handle windows.Handle, metadataErr error, wait func(windows.Handle, uint32) (uint32, error)) error {
+	state, waitErr := wait(handle, 0)
+	if waitErr == nil && state == uint32(windows.WAIT_OBJECT_0) {
+		return os.ErrNotExist
+	}
+	return &processMetadataUnavailable{cause: metadataErr}
+}
+
+type processMetadataUnavailable struct {
+	cause error
+}
+
+func (e *processMetadataUnavailable) Error() string { return e.cause.Error() }
+func (e *processMetadataUnavailable) Unwrap() error { return e.cause }
+
+type processWaitUnavailable struct {
+	cause error
+}
+
+func (e *processWaitUnavailable) Error() string { return e.cause.Error() }
+func (e *processWaitUnavailable) Unwrap() error { return e.cause }
+
+func windowsBootIdentifier() (windows.GUID, error) {
 	// BootIdentifier is a kernel-generated GUID. Fail closed if this system
 	// information class is unavailable; never approximate boot time from a clock.
 	var boot struct {
@@ -48,13 +116,10 @@ func processIdentity(pid int) (start, exe, cwd string, err error) {
 		BootFlags    uint64
 	}
 	var size uint32
-	if e = windows.NtQuerySystemInformation(windows.SystemBootEnvironmentInformation, unsafe.Pointer(&boot), uint32(unsafe.Sizeof(boot)), &size); e != nil {
-		return "", "", "", fmt.Errorf("boot identity: %w", e)
+	if err := windows.NtQuerySystemInformation(windows.SystemBootEnvironmentInformation, unsafe.Pointer(&boot), uint32(unsafe.Sizeof(boot)), &size); err != nil {
+		return windows.GUID{}, err
 	}
-	if boot.Identifier == (windows.GUID{}) {
-		return "", "", "", fmt.Errorf("missing boot identity")
-	}
-	return fmt.Sprintf("%s:%08x%08x", boot.Identifier.String(), creation.HighDateTime, creation.LowDateTime), windows.UTF16ToString(buffer[:n]), "", nil
+	return boot.Identifier, nil
 }
 
 // Windows does not expose remote cwd through a stable documented Win32 API.
@@ -158,6 +223,14 @@ func configureStdin(f *os.File) error {
 }
 func writeStdin(f *os.File, p []byte) (int, error) { return f.Write(p) }
 func IsMissingProcess(err error) bool {
+	var metadataErr *processMetadataUnavailable
+	if errors.As(err, &metadataErr) {
+		return false
+	}
+	var waitErr *processWaitUnavailable
+	if errors.As(err, &waitErr) {
+		return false
+	}
 	return os.IsNotExist(err) || err == windows.ERROR_INVALID_PARAMETER
 }
 
