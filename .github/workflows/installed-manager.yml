@@ -1,0 +1,101 @@
+name: Installed manager smoke
+on:
+  workflow_dispatch:
+    inputs:
+      compare_parent_unit:
+        description: Record pre-fix manager-unit helper/NoNewPrivs baseline on Linux
+        type: boolean
+        default: true
+permissions:
+  contents: read
+jobs:
+  installed-manager:
+    name: Installed manager ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            goos: linux
+            extension: ''
+          - os: ubuntu-24.04
+            goos: linux
+            extension: ''
+          - os: windows-2022
+            goos: windows
+            extension: .exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: x64
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Record exact native candidate
+        shell: bash
+        env:
+          EXPECTED_GOOS: ${{ matrix.goos }}
+        run: |
+          test "$RUNNER_ARCH" = X64
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(go env GOHOSTOS)" = "$EXPECTED_GOOS"
+          test "$(go env GOOS)" = "$EXPECTED_GOOS"
+          test "$(go env GOARCH)" = amd64
+          mkdir -p native-smoke-results bin
+          git rev-parse HEAD > native-smoke-results/commit.txt
+          go version > native-smoke-results/go-version.txt
+          echo "$RUNNER_OS $RUNNER_ARCH $ImageOS $ImageVersion" > native-smoke-results/runner.txt
+      - name: Build exact source with embedded frontend
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          BINARY_EXTENSION: ${{ matrix.extension }}
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+          go build -trimpath -ldflags '-s -w -X main.version=0.0.0-dev' -o "bin/minecraft-ui$BINARY_EXTENSION" ./cmd/minecraft-ui
+      - name: Prepare fixed pre-fix unit observation
+        if: runner.os == 'Linux' && inputs.compare_parent_unit
+        shell: bash
+        run: |
+          git show 6ffb25b:deploy/linux/minecraft-ui.service > "$RUNNER_TEMP/minecraft-ui-before-task28.service"
+      - name: Install and exercise Linux manager and actual restricted helper
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 12
+        env:
+          COMPARE_PARENT: ${{ inputs.compare_parent_unit }}
+        run: |
+          args=("$GITHUB_WORKSPACE/bin/minecraft-ui" "$GITHUB_WORKSPACE/native-smoke-results")
+          if [ "$COMPARE_PARENT" = true ]; then
+            args+=("$RUNNER_TEMP/minecraft-ui-before-task28.service")
+          fi
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT bash deploy/qualification/linux-manager.sh "${args[@]}"
+      - name: Install and exercise Windows manager through real SCM
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          & ./deploy/qualification/windows-manager.ps1 -Binary (Join-Path $env:GITHUB_WORKSPACE 'bin\minecraft-ui.exe') -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE 'native-smoke-results')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain allowlisted scrubbed diagnostics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-manager-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            native-smoke-results/*.txt
+            native-smoke-results/*.json
+          if-no-files-found: error
+          retention-days: 14

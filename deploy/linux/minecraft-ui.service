@@ -19,14 +19,15 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/minecraft-ui
 PrivateTmp=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
 ProtectControlGroups=true
-RestrictSUIDSGID=true
-# NoNewPrivileges is intentionally absent: the only sudo grant is the fixed,
-# root-owned unitctl and separately installed signed-update helper. Games have
-# NoNewPrivileges=true in their own units.
+# Mount-only protection preserves the fixed sudo helper on systemd 249/252.
+ReadOnlyPaths=/proc/sys /sys
+InaccessiblePaths=-/dev/kmsg -/proc/kmsg
+# ProtectKernelTunables/Modules/Logs and RestrictSUIDSGID implicitly enable
+# NoNewPrivileges for User= services on older systemd via seccomp. Do not add
+# them (or NoNewPrivileges) here: the fixed root-owned helper requires setuid
+# sudo. The unprivileged manager retains filesystem isolation above; game
+# units retain their full seccomp, namespace and NoNewPrivileges restrictions.
 
 [Install]
 WantedBy=multi-user.target
