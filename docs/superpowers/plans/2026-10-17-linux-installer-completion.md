@@ -33,6 +33,8 @@ Each packet requires independent source review and integrator verification befor
 - Read-only check may report the current verified terminal updater receipt when it supersedes the installer inventory's manager image. The database schema and every other owned deployment asset must still match; operator-managed optional updater trust is separately validated.
 - Asset copies must remain anonymous until their verified inode and content are durably recorded. Use Linux `O_TMPFILE` in the destination filesystem, record before linking the fixed staging name, then perform the existing exact publication checks. This closes the reproduced worker-kill window before ownership recording. Unsupported filesystems fail safely without a named-copy fallback; unknown existing scratch remains untouched and prevents a terminal success claim.
 
+- Failed reinstall rollback from a validated `uninstalled` inventory restores an intentionally absent manager executable. A separate Linux installer receipt operation may then restore its retained receipt under the actual updater/data locks, stopped-service proof, exact session-owned current receipt and protected-root/binary-absence checks. Ordinary receipt CAS continues to require a matching executable. The driver selects this operation only from the validated immutable prior inventory; foreign replacements and uncertain publication still require repair.
+
 ## Current acceptance
 
 The common coordinator, manager-side drain/readiness hooks, authenticated input importer, receipt CAS and offline manager-state commands already have reviewed evidence in `docs/IMPLEMENTATION.md`. This plan adds Linux integration; it does not reset or reimplement accepted packages.

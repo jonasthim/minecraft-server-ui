@@ -805,7 +805,7 @@ func (d *linuxInstallDriver) Rollback(ctx context.Context, tx transaction) error
 	}
 	if tx.Mode == modeApply && intent.Target != nil {
 		if intent.Prior != nil {
-			if err := d.restoreReceipt(ctx, *intent.Prior); err != nil {
+			if err := d.restoreReceiptAfterRollback(ctx, tx, intent); err != nil {
 				return err
 			}
 		}
@@ -912,6 +912,24 @@ func (d *linuxInstallDriver) restoreReceipt(ctx context.Context, prior Image) er
 		return nil
 	}
 	return d.session.CompareAndSwapInstalled(ctx, receipt, toInstalled(prior))
+}
+
+func (d *linuxInstallDriver) restoreReceiptAfterRollback(ctx context.Context, tx transaction, intent linuxIntent) error {
+	if intent.Prior == nil || intent.Target == nil || tx.Mode != modeApply {
+		return errors.New("captured prior and target images are required for receipt rollback")
+	}
+	if intent.PriorInventory != nil && intent.PriorInventory.Status == "uninstalled" {
+		// An uninstalled prior intentionally has no canonical manager executable.
+		// Keep the normal executable-verified CAS for installed priors; only this
+		// authenticated uninstalled layout may restore its retained receipt via
+		// the Linux installer bridge after rollbackAssets restored binary absence.
+		receipt, err := d.session.Receipt(ctx)
+		if err != nil {
+			return err
+		}
+		return d.session.RestoreRetainedInstalledForRollback(ctx, receipt, toInstalled(*intent.Target), toInstalled(*intent.Prior))
+	}
+	return d.restoreReceipt(ctx, *intent.Prior)
 }
 
 func (d *linuxInstallDriver) restorePriorInventory(ctx context.Context, tx transaction, intent linuxIntent) error {

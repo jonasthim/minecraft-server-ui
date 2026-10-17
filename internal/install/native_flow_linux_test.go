@@ -27,10 +27,15 @@ import (
 )
 
 type nativeFlowSession struct {
-	statePath  string
-	locked     bool
-	snapshots  int
-	reconciles int
+	statePath            string
+	locked               bool
+	snapshots            int
+	reconciles           int
+	retainedRestoreCalls int
+	retainedExpected     selfupdate.Installed
+	retainedImage        selfupdate.Installed
+	compareAndSwapCalls  int
+	retainedRestore      func(context.Context, *selfupdate.MaintenanceReceipt, selfupdate.Installed, selfupdate.Installed) error
 }
 
 func (s *nativeFlowSession) OpenState(context.Context) (*os.Root, error) {
@@ -50,9 +55,19 @@ func (s *nativeFlowSession) Receipt(context.Context) (*selfupdate.MaintenanceRec
 	return nil, nil
 }
 func (s *nativeFlowSession) CompareAndSwapInstalled(context.Context, *selfupdate.MaintenanceReceipt, selfupdate.Installed) error {
+	s.compareAndSwapCalls++
 	return nil
 }
 func (s *nativeFlowSession) RemoveInstalledForRollback(context.Context, *selfupdate.MaintenanceReceipt, selfupdate.Installed) error {
+	return nil
+}
+func (s *nativeFlowSession) RestoreRetainedInstalledForRollback(ctx context.Context, captured *selfupdate.MaintenanceReceipt, expected, retained selfupdate.Installed) error {
+	s.retainedRestoreCalls++
+	s.retainedExpected = expected
+	s.retainedImage = retained
+	if s.retainedRestore != nil {
+		return s.retainedRestore(ctx, captured, expected, retained)
+	}
 	return nil
 }
 func (s *nativeFlowSession) Close() error { return nil }
@@ -347,6 +362,177 @@ func (i *nativeFlowInputs) OpenMember(ctx context.Context, name string) (*os.Fil
 	return os.Open(path)
 }
 func (i *nativeFlowInputs) Close() error { i.closed = true; return nil }
+
+func TestRollbackFromUninstalledRestoresRetainedReceiptAfterAssetRemoval(t *testing.T) {
+	ctx := withLinuxServiceTestHooks(context.Background(), linuxServiceTestHooks{
+		run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			t.Fatalf("unexpected host service command in receipt rollback fixture: %s %v", name, args)
+			return nil, errors.New("unexpected host service command")
+		},
+	})
+	d, prior, closeFixture := newLinuxInventoryRestoreDriver(t, "uninstalled")
+	defer closeFixture()
+	base := t.TempDir()
+	operationPath := filepath.Join(base, "operation")
+	if err := os.Mkdir(operationPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := os.OpenRoot(operationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.operation = operation
+	defer d.operation.Close()
+
+	intent, tx := managedLinuxApplyFixture()
+	intent.ID = strings.Repeat("6", 64)
+	tx.ID, tx.Phase = intent.ID, phaseRollingBack
+	prior.OperationID = strings.Repeat("5", 64)
+	priorOriginal := cloneLinuxInventoryFixture(prior)
+	intent.PriorInventory = &prior
+	intent.Prior = imagePointer(prior.Image)
+	intent.Principal = &prior.Principal
+	intent.ServiceWasActive, intent.ServiceWasEnabled = false, false
+	tx.Prior = imagePointer(prior.Image)
+	intent.Assets = linuxAssetPlans()
+	managerBody := []byte("candidate manager image for retained receipt rollback")
+	for i := range intent.Assets {
+		plan := &intent.Assets[i]
+		before, err := currentLinuxAsset(ctx, d.assets[plan.Role])
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan.Before = before
+		plan.After = before
+		plan.After.Device, plan.After.Inode = 0, 0
+		if plan.Role == linuxAssetUpdateTrust {
+			plan.After = linuxAssetState{}
+			continue
+		}
+		if plan.Role == linuxAssetBootstrapTrust {
+			continue
+		}
+		body := []byte("candidate deployment asset: " + string(plan.Role))
+		if plan.Role == linuxAssetManager {
+			body = managerBody
+		}
+		for _, spec := range fixedLinuxAssets {
+			if spec.Role != plan.Role {
+				continue
+			}
+			if err := os.WriteFile(d.assets[plan.Role].path, body, os.FileMode(spec.Mode)); err != nil {
+				t.Fatalf("write candidate %s: %v", plan.Role, err)
+			}
+			if err := os.Chmod(d.assets[plan.Role].path, os.FileMode(spec.Mode)); err != nil {
+				t.Fatal(err)
+			}
+			plan.After = linuxAssetNext(body, spec.Mode)
+			break
+		}
+		candidate, err := inspectLinuxAsset(ctx, plan.Role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if candidate.State().SHA256 != plan.After.SHA256 || candidate.State().Size != plan.After.Size || candidate.State().Mode != plan.After.Mode {
+			_ = candidate.Close()
+			t.Fatalf("candidate state for %s differs from rollback intent", plan.Role)
+		}
+		_ = d.replaceAssetSnapshot(plan.Role, candidate)
+	}
+	managerIndex := linuxAssetIndex(linuxAssetManager)
+	if managerIndex < 0 {
+		t.Fatal("manager asset plan is missing")
+	}
+	intent.Prior = imagePointer(prior.Image)
+	tx.Prior = imagePointer(prior.Image)
+	target := *intent.Target
+	target.SHA256 = intent.Assets[managerIndex].After.SHA256
+	intent.Target, tx.Target = &target, &target
+	d.intent, d.tx, d.session = &intent, &tx, &nativeFlowSession{}
+	if err := d.writeInitialEffects(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, plan := range intent.Assets {
+		if plan.Role == linuxAssetUpdateTrust || plan.Role == linuxAssetBootstrapTrust {
+			continue
+		}
+		actual := d.assets[plan.Role].State()
+		if err := d.recordPublishEffect(ctx, plan.Role, plan.Before, actual); err != nil {
+			t.Fatalf("record candidate %s: %v", plan.Role, err)
+		}
+		if err := d.completeEffect(ctx, plan.Role, "publish", actual); err != nil {
+			t.Fatalf("complete candidate %s: %v", plan.Role, err)
+		}
+	}
+	if err := d.publishInventory(ctx, prior, nil); err != nil {
+		t.Fatalf("publish uninstalled preimage inventory: %v", err)
+	}
+	operationInventory := cloneLinuxInventoryFixture(prior)
+	operationInventory.OperationID = tx.ID
+	operationInventory.Status = "installed"
+	operationInventory.Image = target
+	for i := range operationInventory.Assets {
+		operationInventory.Assets[i].State = d.assets[operationInventory.Assets[i].Role].State()
+	}
+	if err := d.publishInventory(ctx, operationInventory, &prior); err != nil {
+		t.Fatalf("publish operation inventory: %v", err)
+	}
+	session := d.session.(*nativeFlowSession)
+	session.retainedRestore = func(_ context.Context, _ *selfupdate.MaintenanceReceipt, expected, retained selfupdate.Installed) error {
+		manager, err := inspectLinuxAsset(ctx, linuxAssetManager)
+		if err != nil {
+			return err
+		}
+		defer manager.Close()
+		if manager.State().Present {
+			return errors.New("retained receipt bridge ran before candidate executable removal")
+		}
+		if expected != toInstalled(target) || retained != toInstalled(prior.Image) {
+			return errors.New("retained receipt bridge images differ from immutable rollback intent")
+		}
+		return nil
+	}
+	if err := d.rollbackAssets(ctx, tx, intent); err != nil {
+		t.Fatalf("restore captured uninstalled asset layout: %v", err)
+	}
+	manager, err := inspectLinuxAsset(ctx, linuxAssetManager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managerAbsent := !manager.State().Present
+	_ = manager.Close()
+	if !managerAbsent {
+		t.Fatal("candidate manager executable remained after rollbackAssets")
+	}
+	if err := d.restoreReceiptAfterRollback(ctx, tx, intent); err != nil {
+		t.Fatalf("restore retained receipt: %v", err)
+	}
+	if session.retainedRestoreCalls != 1 || session.compareAndSwapCalls != 0 || session.retainedExpected != toInstalled(target) || session.retainedImage != toInstalled(prior.Image) {
+		t.Fatalf("receipt rollback dispatch: retained=%d normalCAS=%d expected=%+v prior=%+v", session.retainedRestoreCalls, session.compareAndSwapCalls, session.retainedExpected, session.retainedImage)
+	}
+	if err := d.restorePriorInventory(ctx, tx, intent); err != nil {
+		t.Fatalf("restore captured uninstalled inventory: %v", err)
+	}
+	after, present, err := d.readInventory(ctx)
+	if err != nil || !present || after.Status != "uninstalled" || !sameImage(after.Image, priorOriginal.Image) {
+		t.Fatalf("final inventory=%+v present=%v err=%v", after, present, err)
+	}
+}
+
+func TestRollbackFromInstalledKeepsExecutableVerifiedReceiptCAS(t *testing.T) {
+	d := &linuxInstallDriver{session: &nativeFlowSession{}}
+	prior := linuxImage("a")
+	target := linuxImage("c")
+	intent := linuxIntent{Prior: &prior, Target: &target, PriorInventory: &linuxInventory{Status: "installed"}}
+	tx := transaction{Mode: modeApply}
+	if err := d.restoreReceiptAfterRollback(context.Background(), tx, intent); err != nil {
+		t.Fatal(err)
+	}
+	session := d.session.(*nativeFlowSession)
+	if session.compareAndSwapCalls != 1 || session.retainedRestoreCalls != 0 {
+		t.Fatalf("installed-prior receipt rollback used wrong bridge: normalCAS=%d retained=%d", session.compareAndSwapCalls, session.retainedRestoreCalls)
+	}
+}
 
 func TestPrepareRefusesActiveGameBeforeCreatingUninstallOperation(t *testing.T) {
 	ctx := withLinuxServiceTestHooks(context.Background(), linuxServiceTestHooks{

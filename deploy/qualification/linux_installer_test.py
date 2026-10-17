@@ -17,6 +17,58 @@ SPEC.loader.exec_module(MODULE)
 
 
 class InstallerHarnessFixtureTests(unittest.TestCase):
+    def test_manager_start_limit_reset_requires_exact_clean_stop_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "out"
+            output.mkdir()
+            qualification = MODULE.Qualification(root / "bootstrap", root / "candidates", output, "lifecycle")
+            clean = (b"ActiveState=inactive\nSubState=dead\nMainPID=0\n"
+                     b"Result=success\nExecMainStatus=0\n")
+            reset = SimpleNamespace(stdout=b"", returncode=0)
+
+            with mock.patch.object(qualification, "command", side_effect=[
+                    SimpleNamespace(stdout=clean, returncode=0), reset]) as command, \
+                    mock.patch.object(MODULE, "manager_main_pid", return_value=0):
+                evidence = qualification.reset_failed_manager_after_clean_stop()
+
+            self.assertEqual(evidence, {
+                "active_state": "inactive", "sub_state": "dead", "main_pid": 0,
+                "result": "success", "exec_main_status": 0,
+            })
+            self.assertEqual(command.call_args_list[0].args[0], [
+                "systemctl", "show", "--property=ActiveState,SubState,MainPID,Result,ExecMainStatus",
+                "minecraft-ui.service",
+            ])
+            self.assertEqual(command.call_args_list[1].args[0], [
+                "systemctl", "reset-failed", "minecraft-ui.service",
+            ])
+
+            refused = [
+                b"ActiveState=active\nSubState=running\nMainPID=15\nResult=success\nExecMainStatus=0\n",
+                b"ActiveState=inactive\nSubState=dead\nMainPID=0\nResult=exit-code\nExecMainStatus=1\n",
+                clean + b"MainPID=0\n",
+                clean.replace(b"ExecMainStatus=0\n", b""),
+                clean.replace(b"MainPID=0", b"MainPID=00"),
+                clean + b"Unknown=private\n",
+                b"uncertain output\n",
+            ]
+            for stdout in refused:
+                with self.subTest(stdout=stdout):
+                    with mock.patch.object(qualification, "command", return_value=SimpleNamespace(
+                            stdout=stdout, returncode=0)) as command, \
+                            mock.patch.object(MODULE, "manager_main_pid", return_value=0):
+                        with self.assertRaisesRegex(RuntimeError, "not confirmed cleanly stopped"):
+                            qualification.reset_failed_manager_after_clean_stop()
+                    self.assertEqual(command.call_count, 1)
+
+            with mock.patch.object(qualification, "command", return_value=SimpleNamespace(
+                    stdout=clean, returncode=0)) as command, \
+                    mock.patch.object(MODULE, "manager_main_pid", return_value=15):
+                with self.assertRaisesRegex(RuntimeError, "not confirmed cleanly stopped"):
+                    qualification.reset_failed_manager_after_clean_stop()
+            self.assertEqual(command.call_count, 1)
+
     def test_updater_evidence_publication_copies_across_exdev_and_retains_sources(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

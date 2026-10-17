@@ -44,6 +44,7 @@ type linuxInstallerSession interface {
 	Receipt(context.Context) (*selfupdate.MaintenanceReceipt, error)
 	CompareAndSwapInstalled(context.Context, *selfupdate.MaintenanceReceipt, selfupdate.Installed) error
 	RemoveInstalledForRollback(context.Context, *selfupdate.MaintenanceReceipt, selfupdate.Installed) error
+	RestoreRetainedInstalledForRollback(context.Context, *selfupdate.MaintenanceReceipt, selfupdate.Installed, selfupdate.Installed) error
 	Close() error
 }
 

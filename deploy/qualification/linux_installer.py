@@ -133,6 +133,31 @@ def safe_check_report(stdout):
         return "unavailable"
 
 
+def cleanly_stopped_manager_state(stdout):
+    """Accept only systemd's exact, bounded stopped-state property tuple."""
+    expected = {
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "MainPID": "0",
+        "Result": "success",
+        "ExecMainStatus": "0",
+    }
+    try:
+        lines = stdout.decode("ascii", "strict").splitlines()
+        observed = {}
+        for line in lines:
+            key, separator, value = line.partition("=")
+            if not separator or key not in expected or key in observed or "=" in value:
+                return None
+            observed[key] = value
+        if observed != expected:
+            return None
+    except (AttributeError, UnicodeDecodeError):
+        return None
+    return {"active_state": "inactive", "sub_state": "dead", "main_pid": 0,
+            "result": "success", "exec_main_status": 0}
+
+
 def failure_source_lines(error):
     """Return bounded line numbers for frames owned by this harness only."""
     lines = []
@@ -182,6 +207,18 @@ class Qualification:
         if expected is not None and result.returncode != expected:
             raise RuntimeError("shipping command returned an unexpected status")
         return result
+
+    def reset_failed_manager_after_clean_stop(self):
+        result = self.command([
+            "systemctl", "show",
+            "--property=ActiveState,SubState,MainPID,Result,ExecMainStatus",
+            "minecraft-ui.service",
+        ], expected=0, timeout=15)
+        evidence = cleanly_stopped_manager_state(result.stdout)
+        if evidence is None or manager_main_pid() != 0:
+            raise RuntimeError("manager unit was not confirmed cleanly stopped")
+        self.command(["systemctl", "reset-failed", "minecraft-ui.service"], expected=0, timeout=15)
+        return evidence
 
     def cli(self, *args, expected=0, timeout=45):
         return self.command([self.bootstrap, *args], expected=expected, timeout=timeout)
@@ -730,12 +767,22 @@ class Qualification:
             raise RuntimeError("installer reapplication changed updater data, trust, or independent unit")
 
         self.command(["systemctl", "stop", "minecraft-ui.service"], expected=0, timeout=180)
+        stopped_manager_state = self.reset_failed_manager_after_clean_stop()
         database_path = Path("/var/lib/minecraft-ui/manager.db")
         database_identity = ordinary_file_identity(database_path)
         database_state = database_snapshot(database_path)
         self.command(["systemctl", "start", "minecraft-ui.service"], expected=0, timeout=90)
         self.health()
-        self.check("installed", True)
+        checkpoint_check = self.check("installed", True)
+        checkpoint_image = checkpoint_check.get("image")
+        if (not isinstance(checkpoint_image, dict) or checkpoint_image.get("version") != "v0.0.2"
+                or checkpoint_image.get("sha256") != expected_hash):
+            raise RuntimeError("manager restart after bounded start-limit reset did not reconcile v2")
+        self.record("manager-restart-after-clean-stop-rate-reset", {
+            "stopped_unit": stopped_manager_state,
+            "restart_succeeded": True,
+            "installer_check_coherent": True,
+        })
         receipt_path = Path("/var/lib/minecraft-ui-update/installed.json")
         installed_receipt = fingerprint(receipt_path)
         uninstalled = self.json_result(self.cli("install", "uninstall", timeout=14 * 60))
