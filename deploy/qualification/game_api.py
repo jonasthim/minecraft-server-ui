@@ -30,18 +30,34 @@ import urllib.error
 import urllib.request
 import uuid
 import zipfile
+from dataclasses import dataclass
+from types import MappingProxyType
 
 from manager_api import control, ready
 
 BASE = "http://127.0.0.1:8080"
 INSTANCE = "game-acceptance"
 PREFIX = "/api/v1/instances/" + INSTANCE
-VERSION = "1.21.9"
 YAW_A, YAW_B = 31.25, 121.25
 DATA = Path(r"C:\ProgramData\MinecraftUI" if os.name == "nt" else "/var/lib/minecraft-ui")
 HERE = Path(__file__).resolve().parent
 IDENTIFIER = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
+@dataclass(frozen=True)
+class QualificationTuple:
+    minecraft_version: str
+    java_major: int
+    scope: str
+    protocol_capabilities: object
+    simulation_distance: object
+
+
+TUPLES = MappingProxyType({
+    "1.12.2": QualificationTuple("1.12.2", 8, "vanilla-1.12.2-real-headless-game",
+                                  MappingProxyType({"player_loaded": False, "chunk_batch": False, "tick_end": False}), None),
+    "1.21.9": QualificationTuple("1.21.9", 21, "vanilla-1.21.9-real-headless-game",
+                                  MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2),
+})
 PROCESS_START_ID = re.compile(
     r"^(?:[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}:[0-9]{1,20}|"
     r"\{[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}\}:[a-fA-F0-9]{16})$"
@@ -58,6 +74,12 @@ class Failure(Exception):
         super().__init__(code)
         self.code = code
         self.evidence = evidence
+
+
+def tuple_for(minecraft_version):
+    value = TUPLES.get(minecraft_version) if isinstance(minecraft_version, str) else None
+    require(value is not None, "tuple_not_allowlisted")
+    return value
 
 
 def require(condition, code):
@@ -364,6 +386,11 @@ class API:
             "Lifecycle process identity failed; inspect job phase and current process state before retrying.": "process_identity_failed",
             "Native stop did not complete cleanly; inspect current process state and launcher recovery details.": "native_stop_unclean",
             "Native stop OS error: unavailable.": "stop_native_os_error_unavailable",
+            "Native stop process API: open_process.": "stop_process_api_open_process",
+            "Native stop process API: wait_process.": "stop_process_api_wait_process",
+            "Native stop process API: get_process_times.": "stop_process_api_get_process_times",
+            "Native stop process API: query_image.": "stop_process_api_query_image",
+            "Native stop process API: boot_identity.": "stop_process_api_boot_identity",
             "Native stop diagnostic: lock_wait_failed.": "stop_lock_wait_failed",
             "Native stop diagnostic: initial_probe_failed.": "stop_initial_probe_failed",
             "Native stop diagnostic: process_probe_failed.": "stop_process_probe_failed",
@@ -458,8 +485,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class GameClient:
-    def __init__(self, mode):
-        self.process = subprocess.Popen(["node", str(HERE / "game-client/client.cjs"), "--mode", mode],
+    def __init__(self, mode, tuple_config):
+        self.tuple_config = tuple_config
+        self.process = subprocess.Popen(["node", str(HERE / "game-client/client.cjs"), "--mode", mode,
+                                         "--version", tuple_config.minecraft_version],
                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
                        encoding="utf-8")
         self.lines = queue.Queue(maxsize=8)
@@ -497,12 +526,25 @@ class GameClient:
             if not isinstance(code, str) or not re.fullmatch(r"client_[a-z_]{1,64}", code):
                 code = "client_unclassified"
             raise Failure(code)
-        require(value.get("event") == "ready" and value.get("version") == VERSION and
-                value.get("protocol_client") == "minecraft-protocol@1.68.0", "client_readiness_invalid")
-        require(all(type(value.get(k)) is int and 0 < value[k] < 100000 for k in
-                    ("chunks", "teleports", "keepalives", "chunk_batches")), "client_packets_missing")
+        require(value.get("event") == "ready" and value.get("version") == self.tuple_config.minecraft_version and
+                value.get("protocol_client") == "minecraft-protocol@1.68.0" and
+                value.get("protocol_data") == "minecraft-data@3.117.0", "client_readiness_invalid")
+        expected_capabilities = dict(self.tuple_config.protocol_capabilities)
+        reported_capabilities = value.get("protocol_capabilities")
+        require(isinstance(reported_capabilities, dict) and set(reported_capabilities) == set(expected_capabilities) and
+                all(type(v) is bool for v in reported_capabilities.values()) and reported_capabilities == expected_capabilities,
+                "client_protocol_capability_mismatch")
+        required_counts = ["chunks", "teleports", "keepalives"]
+        if expected_capabilities["chunk_batch"]:
+            required_counts.append("chunk_batches")
+        require(all(type(value.get(k)) is int and 0 < value[k] < 100000 for k in required_counts), "client_packets_missing")
+        if not expected_capabilities["chunk_batch"]:
+            require("chunk_batches" not in value, "client_protocol_capability_mismatch")
         require(type(value.get("initial_yaw")) in (int, float) and math.isfinite(value["initial_yaw"]), "client_yaw_invalid")
-        return {key: value[key] for key in ("version", "protocol_client", "initial_yaw", "sent_yaw", "chunks", "teleports", "keepalives", "chunk_batches")}
+        keys = ["version", "protocol_client", "protocol_data", "protocol_capabilities", "initial_yaw", "sent_yaw", "chunks", "teleports", "keepalives"]
+        if expected_capabilities["chunk_batch"]:
+            keys.append("chunk_batches")
+        return {key: value[key] for key in keys}
 
     def alive(self):
         require(self.process.poll() is None and self.lines.empty(), "client_not_alive")
@@ -601,7 +643,7 @@ def offline_uuid():
     return str(uuid.UUID(bytes=bytes(value)))
 
 
-def archive_evidence(path, expected_yaw, online):
+def archive_evidence(path, expected_yaw, online, tuple_config):
     """Verify real bytes against shipping manifest, without extracting entries."""
     with zipfile.ZipFile(path) as archive:
         entries = archive.infolist()
@@ -625,7 +667,7 @@ def archive_evidence(path, expected_yaw, online):
         require("backup-manifest.json" in names, "archive_manifest_missing")
         require(archive.getinfo("backup-manifest.json").file_size <= 4 << 20, "archive_manifest_bound")
         manifest = json.loads(archive.read("backup-manifest.json"))
-        require(manifest.get("instance_id") == INSTANCE and manifest.get("minecraft_version") == VERSION and
+        require(manifest.get("instance_id") == INSTANCE and manifest.get("minecraft_version") == tuple_config.minecraft_version and
                 manifest.get("kind") == "full" and manifest.get("world_present") is True, "archive_manifest_identity")
         require(manifest.get("capture_mode") == ("acknowledged_native_save_lease" if online else "stopped_native_admission"), "archive_capture_mode")
         listed = set()
@@ -743,19 +785,22 @@ def native_identity():
             "java_runtime_id": value["java_runtime_id"], "java_sha256": value["java_checksum"]["value"]}
 
 
-def runtime_evidence(detail):
+def runtime_evidence(detail, tuple_config):
     identifier = detail["instance"]["java_runtime_id"]
-    require(re.fullmatch(r"temurin-21-(?:linux|windows)-x64-[a-f0-9]{64}", identifier), "managed_runtime_identifier")
+    major = tuple_config.java_major
+    require(re.fullmatch(rf"temurin-{major}-(?:linux|windows)-x64-[a-f0-9]{{64}}", identifier), "managed_runtime_identifier")
     manifest = bounded_json(DATA / "runtimes" / identifier / ".runtime.json", 8 << 20)
     runtime = manifest["runtime"]
     checksum = manifest["verified_sha256"]
-    require(runtime["id"] == identifier and runtime["vendor"] == "Eclipse Adoptium" and runtime["major"] == 21 and
-            runtime["artifact"]["provider"] == "adoptium" and SHA256.fullmatch(checksum) and
+    require(isinstance(checksum, str) and SHA256.fullmatch(checksum) and identifier.endswith("-" + checksum) and
+            runtime["id"] == identifier and
+            runtime["vendor"] == "Eclipse Adoptium" and runtime["major"] == major and
+            runtime["artifact"]["provider"] == "adoptium" and
             runtime["artifact"]["checksum"] == {"algorithm": "sha256", "value": checksum} and
-            runtime["artifact"]["source_url"].startswith("https://github.com/adoptium/temurin21-binaries/releases/download/"), "managed_runtime_provenance")
+            runtime["artifact"]["source_url"].startswith(f"https://github.com/adoptium/temurin{major}-binaries/releases/download/"), "managed_runtime_provenance")
     require(isinstance(runtime["version"], str) and re.fullmatch(r"[0-9][A-Za-z0-9.+_-]{0,99}", runtime["version"]), "managed_runtime_version")
     datetime.datetime.fromisoformat(manifest["verified_at"].replace("Z", "+00:00"))
-    return {"vendor": runtime["vendor"], "major": 21, "version": runtime["version"], "archive_sha256": checksum,
+    return {"vendor": runtime["vendor"], "major": major, "version": runtime["version"], "archive_sha256": checksum,
             "source": "official-adoptium-metadata-and-publisher-download", "verified_at": manifest["verified_at"]}
 
 
@@ -799,7 +844,7 @@ def wait_game(api):
     raise Failure("game_readiness_timeout", console_diagnostics=api.console_diagnostics())
 
 
-def execute(output, report):
+def execute(output, report, tuple_config):
     api = API()
     client = None
     def phase(name):
@@ -812,7 +857,7 @@ def execute(output, report):
             client.close()
             client = None
             time.sleep(2)  # allow the server's asynchronous disconnect/save task
-        client = GameClient(mode)
+        client = GameClient(mode, tuple_config)
         evidence = client.ready()
         if expected is not None:
             require(yaw_matches(evidence["initial_yaw"], expected), "reconnect_marker_mismatch")
@@ -829,17 +874,20 @@ def execute(output, report):
         require(isinstance(api.csrf, str) and 0 < len(api.csrf) <= 256, "csrf_unavailable")
         require(me["user"]["id"] == setup["user"]["id"], "setup_session_identity")
         phase("instance_create")
-        draft = {"instance": {"id": INSTANCE, "name": "Disposable game acceptance", "flavor": "vanilla", "minecraft_version": VERSION,
-                 "java_major": 21, "memory_mib": 1536, "game_port": 25565}, "accept_eula": True,
-                 "config": {"motd": "Disposable hosted acceptance", "difficulty": "peaceful", "game_mode": "creative", "max_players": 2,
-                 "online_mode": False, "pvp": False, "view_distance": 2, "simulation_distance": 2, "level_name": "world", "level_seed": "33",
-                 "extra": {"spawn-protection": "0", "enforce-secure-profile": "false"}}}
+        game_config = {"motd": "Disposable hosted acceptance", "difficulty": "peaceful", "game_mode": "creative", "max_players": 2,
+                       "online_mode": False, "pvp": False, "view_distance": 2, "level_name": "world", "level_seed": "33",
+                       "extra": {"spawn-protection": "0", "enforce-secure-profile": "false"}}
+        if tuple_config.simulation_distance is not None:
+            game_config["simulation_distance"] = tuple_config.simulation_distance
+        draft = {"instance": {"id": INSTANCE, "name": "Disposable game acceptance", "flavor": "vanilla",
+                 "minecraft_version": tuple_config.minecraft_version, "java_major": tuple_config.java_major,
+                 "memory_mib": 1536, "game_port": 25565}, "accept_eula": True, "config": game_config}
         detail = api.request("/api/v1/instances", draft, 201)["detail"]
         require(detail["eula"]["accepted"] is True, "eula_not_accepted")
         phase("official_resolve_install")
-        preview = api.request(PREFIX + "/lifecycle/preview", {"flavor": "vanilla", "minecraft_version": VERSION})
-        require(preview["selection"] == {"flavor": "vanilla", "minecraft_version": VERSION}, "preview_selection")
-        require(preview["requirements"]["java_major"] == 21, "preview_java")
+        preview = api.request(PREFIX + "/lifecycle/preview", {"flavor": "vanilla", "minecraft_version": tuple_config.minecraft_version})
+        require(preview["selection"] == {"flavor": "vanilla", "minecraft_version": tuple_config.minecraft_version}, "preview_selection")
+        require(preview["requirements"]["java_major"] == tuple_config.java_major, "preview_java")
         preview_id = safe_id(preview["id"])
         artifacts = []
         for artifact in preview["artifacts"]:
@@ -852,7 +900,7 @@ def execute(output, report):
         report["server_artifacts"] = artifacts
         api.lifecycle("install", preview_id=preview_id)
         detail = api.request(PREFIX)["detail"]
-        report["runtime"] = runtime_evidence(detail)
+        report["runtime"] = runtime_evidence(detail, tuple_config)
         phase("native_start_readiness")
         api.lifecycle("start")
         wait_game(api)
@@ -875,7 +923,7 @@ def execute(output, report):
         with tempfile.TemporaryDirectory(prefix="minecraft-game-private-") as scratch:
             archive = Path(scratch) / "online.zip"
             download_archive(api, backup, archive)
-            report["online_backup"] = archive_evidence(archive, YAW_A, True)
+            report["online_backup"] = archive_evidence(archive, YAW_A, True, tuple_config)
             report["online_backup"]["native_identity_unchanged"] = True
             phase("gameplay_marker_b")
             connect("mark-b")
@@ -891,7 +939,7 @@ def execute(output, report):
             require(len(safety) == 1 and safety[0]["protected"] is True and safety[0]["state"] == "ready", "fresh_restore_safety_missing")
             safety_path = Path(scratch) / "safety.zip"
             download_archive(api, safety[0], safety_path)
-            report["restore_safety_backup"] = archive_evidence(safety_path, YAW_B, False)
+            report["restore_safety_backup"] = archive_evidence(safety_path, YAW_B, False, tuple_config)
             require(report["restore_safety_backup"]["sha256"] != report["online_backup"]["sha256"], "safety_archive_not_distinct")
         phase("restored_reconnect")
         api.lifecycle("start")
@@ -932,17 +980,20 @@ def execute(output, report):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--minecraft-version", choices=[VERSION], required=True)
+    parser.add_argument("--minecraft-version", choices=tuple(TUPLES), required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     hosted()
+    tuple_config = tuple_for(args.minecraft_version)
     output = safe_directory(args.output)
-    report = {"scope": "vanilla-1.21.9-real-headless-offline-loopback-client", "passed": False,
-              "phase": "preflight", "minecraft_version": VERSION, "os": "windows" if os.name == "nt" else "linux",
+    report = {"scope": tuple_config.scope, "passed": False,
+              "phase": "preflight", "minecraft_version": tuple_config.minecraft_version,
+              "java_major": tuple_config.java_major, "os": "windows" if os.name == "nt" else "linux",
+              "protocol_capabilities": dict(tuple_config.protocol_capabilities),
               "fixtures": ["disposable-empty-canonical-state", "eula-explicitly-accepted", "offline-auth-loopback-firewall", "creative-peaceful-world-seed-33", "player-view-yaw-marker"],
               "not_qualified": ["Microsoft-authenticated-client", "graphical-client", "other-version-flavor-host-tuples", "full-map-addons", "crash-retry-injection"]}
     try:
-        execute(output, report)
+        execute(output, report, tuple_config)
     except Exception as error:
         report["failure"] = {"code": error.code, **error.evidence} if isinstance(error, Failure) else {"code": "unexpected_" + type(error).__name__}
         print("FAIL game acceptance phase=" + report["phase"] + " code=" + report["failure"]["code"], file=sys.stderr)

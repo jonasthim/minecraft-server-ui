@@ -2,20 +2,27 @@
 
 // No Microsoft credentials, chat commands, arbitrary endpoints, or status pings.
 // Protocol plugins own login/configuration and keep_alive replies; this module
-// acknowledges teleports/chunk batches and changes only the player's view yaw.
+// acknowledges supported teleports/chunk batches and changes only view yaw.
 const readline = require('node:readline')
 
-const VERSION = '1.21.9'
 const YAW = Object.freeze({ 'mark-a': 31.25, 'mark-b': 121.25 })
+const PROTOCOL_DATA = 'minecraft-data@3.117.0'
+const VERSION_CAPABILITIES = Object.freeze({
+  '1.12.2': Object.freeze({ playerLoaded: false, chunkBatch: false, tickEnd: false }),
+  '1.21.9': Object.freeze({ playerLoaded: true, chunkBatch: true, tickEnd: true })
+})
 
 function argumentsFor (args) {
-  if (args.length !== 2 || args[0] !== '--mode' || !['observe', 'mark-a', 'mark-b'].includes(args[1])) {
+  if (args.length !== 4 || args[0] !== '--mode' || !['observe', 'mark-a', 'mark-b'].includes(args[1]) ||
+      args[2] !== '--version' || !Object.hasOwn(VERSION_CAPABILITIES, args[3])) {
     throw new Error('client_arguments')
   }
-  return args[1]
+  return Object.freeze({ mode: args[1], version: args[3] })
 }
 
-function attach (client, mode, emit, fail) {
+function attach (client, mode, version, emit, fail) {
+  const capabilities = VERSION_CAPABILITIES[version]
+  if (!Object.hasOwn(VERSION_CAPABILITIES, version) || !['observe', 'mark-a', 'mark-b'].includes(mode)) throw new Error('client_arguments')
   const counts = { chunks: 0, teleports: 0, keepalives: 0, chunk_batches: 0 }
   let initialYaw = null
   let inPlay = false
@@ -25,11 +32,15 @@ function attach (client, mode, emit, fail) {
     try { client.write(name, value) } catch { fail('client_packet_write') }
   }
   const report = () => {
-    if (reported || !inPlay || initialYaw === null || !counts.chunks || !counts.teleports || !counts.keepalives || !counts.chunk_batches) return
+    if (reported || !inPlay || initialYaw === null || !counts.chunks || !counts.teleports || !counts.keepalives ||
+        (capabilities.chunkBatch && !counts.chunk_batches)) return
     if (!marked && mode !== 'observe') return
     reported = true
-    emit({ event: 'ready', version: VERSION, protocol_client: 'minecraft-protocol@1.68.0',
-      initial_yaw: initialYaw, sent_yaw: mode === 'observe' ? null : YAW[mode], ...counts })
+    const { chunk_batches, ...baseCounts } = counts
+    emit({ event: 'ready', version, protocol_client: 'minecraft-protocol@1.68.0', protocol_data: PROTOCOL_DATA,
+      protocol_capabilities: { player_loaded: capabilities.playerLoaded, chunk_batch: capabilities.chunkBatch, tick_end: capabilities.tickEnd },
+      initial_yaw: initialYaw, sent_yaw: mode === 'observe' ? null : YAW[mode], ...baseCounts,
+      ...(capabilities.chunkBatch ? { chunk_batches } : {}) })
   }
   client.on('playerJoin', () => { inPlay = true; report() })
   client.on('position', packet => {
@@ -43,9 +54,11 @@ function attach (client, mode, emit, fail) {
     }
     write('teleport_confirm', { teleportId: packet.teleportId })
     counts.teleports++
-    write('player_loaded', {})
+    if (capabilities.playerLoaded) write('player_loaded', {})
     if (mode !== 'observe') {
-      write('look', { yaw: YAW[mode], pitch: 0, flags: { onGround: false, hasHorizontalCollision: false } })
+      write('look', capabilities.tickEnd
+        ? { yaw: YAW[mode], pitch: 0, flags: { onGround: false, hasHorizontalCollision: false } }
+        : { yaw: YAW[mode], pitch: 0, onGround: false })
       marked = true
     }
     report()
@@ -56,6 +69,7 @@ function attach (client, mode, emit, fail) {
     report()
   })
   client.on('chunk_batch_finished', () => {
+    if (!capabilities.chunkBatch) return fail('client_unexpected_chunk_batch')
     write('chunk_batch_received', { chunksPerTick: 8 })
     counts.chunk_batches++
     report()
@@ -66,14 +80,14 @@ function attach (client, mode, emit, fail) {
   client.on('disconnect', () => fail('client_disconnected'))
   // Mirror a client tick without inventing physics/position. Rotation is the
   // only gameplay mutation, and reconnect/server playerdata proves acceptance.
-  const tick = setInterval(() => { if (inPlay) write('tick_end', {}) }, 50)
-  tick.unref()
-  return { counts, stop: () => clearInterval(tick) }
+  const tick = capabilities.tickEnd ? setInterval(() => { if (inPlay) write('tick_end', {}) }, 50) : null
+  tick?.unref()
+  return { counts, capabilities, stop: () => { if (tick) clearInterval(tick) } }
 }
 
 function main () {
-  let mode
-  try { mode = argumentsFor(process.argv.slice(2)) } catch { process.stderr.write('client_arguments\n'); process.exitCode = 2; return }
+  let config
+  try { config = argumentsFor(process.argv.slice(2)) } catch { process.stderr.write('client_arguments\n'); process.exitCode = 2; return }
   if (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted') {
     process.stderr.write('client_hosted_only\n'); process.exitCode = 2; return
   }
@@ -95,9 +109,9 @@ function main () {
   const mc = require('minecraft-protocol')
   // Fixed loopback target; never accept a caller-controlled address or port.
   const client = mc.createClient({ host: '127.0.0.1', port: 25565, username: 'AcceptanceBot',
-    auth: 'offline', version: VERSION, keepAlive: true, hideErrors: true,
+    auth: 'offline', version: config.version, keepAlive: true, hideErrors: true,
     checkTimeoutInterval: 35000, clientSettings: { viewDistance: 2, enableServerListing: false } })
-  state = attach(client, mode, emit, fail)
+  state = attach(client, config.mode, config.version, emit, fail)
   const timeout = setTimeout(() => fail('client_lifetime_timeout'), 180000)
   client.on('end', () => {
     state.stop()
@@ -118,5 +132,5 @@ function main () {
   input.on('close', () => { if (!closing) fail('client_control_eof') })
 }
 
-module.exports = { argumentsFor, attach, VERSION, YAW }
+module.exports = { argumentsFor, attach, VERSION_CAPABILITIES, YAW, PROTOCOL_DATA }
 if (require.main === module) main()

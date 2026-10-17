@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import queue
 import struct
 import tempfile
 import re
@@ -47,6 +48,88 @@ def launcher_identity():
 
 
 class Helpers(unittest.TestCase):
+    def test_frozen_qualification_tuples_bind_version_java_and_evidence_scope(self):
+        self.assertEqual(set(game.TUPLES), {"1.12.2", "1.21.9"})
+        self.assertEqual(game.TUPLES["1.12.2"].java_major, 8)
+        self.assertEqual(game.TUPLES["1.21.9"].java_major, 21)
+        self.assertEqual(game.TUPLES["1.12.2"].scope, "vanilla-1.12.2-real-headless-game")
+        with self.assertRaises(TypeError):
+            game.TUPLES["1.12.2"] = game.TUPLES["1.21.9"]
+        with self.assertRaises(AttributeError):
+            game.TUPLES["1.12.2"].java_major = 21
+        with self.assertRaises(game.Failure):
+            game.tuple_for("1.16.5")
+        with self.assertRaises(game.Failure):
+            game.tuple_for([])
+
+    def test_runtime_evidence_binds_selected_temurin_major_and_official_source(self):
+        with tempfile.TemporaryDirectory(prefix="game-runtime-tuple-") as tmp:
+            data = Path(tmp)
+            runtime_id = "temurin-8-linux-x64-" + "a" * 64
+            runtime_dir = data / "runtimes" / runtime_id
+            runtime_dir.mkdir(parents=True)
+            checksum = "a" * 64
+            manifest = {"runtime": {"id": runtime_id, "vendor": "Eclipse Adoptium", "major": 8,
+                        "version": "8.0.402+6", "artifact": {"provider": "adoptium", "checksum": {"algorithm": "sha256", "value": checksum},
+                        "source_url": "https://github.com/adoptium/temurin8-binaries/releases/download/test/archive.tar.gz"}},
+                        "verified_sha256": checksum, "verified_at": "2026-10-17T12:00:00Z"}
+            (runtime_dir / ".runtime.json").write_text(json.dumps(manifest))
+            with mock.patch.object(game, "DATA", data):
+                result = game.runtime_evidence({"instance": {"java_runtime_id": runtime_id}}, game.tuple_for("1.12.2"))
+            self.assertEqual(result["major"], 8)
+            self.assertEqual(result["archive_sha256"], checksum)
+            self.assertEqual(result["source"], "official-adoptium-metadata-and-publisher-download")
+            manifest["verified_sha256"] = "b" * 64
+            manifest["runtime"]["artifact"]["checksum"]["value"] = "b" * 64
+            (runtime_dir / ".runtime.json").write_text(json.dumps(manifest))
+            with mock.patch.object(game, "DATA", data), self.assertRaises(game.Failure) as failure:
+                game.runtime_evidence({"instance": {"java_runtime_id": runtime_id}}, game.tuple_for("1.12.2"))
+            self.assertEqual(failure.exception.code, "managed_runtime_provenance")
+            manifest["verified_sha256"] = checksum
+            manifest["runtime"]["artifact"]["checksum"]["value"] = checksum
+            manifest["runtime"]["major"] = 21
+            (runtime_dir / ".runtime.json").write_text(json.dumps(manifest))
+            with mock.patch.object(game, "DATA", data), self.assertRaises(game.Failure) as failure:
+                game.runtime_evidence({"instance": {"java_runtime_id": runtime_id}}, game.tuple_for("1.12.2"))
+            self.assertEqual(failure.exception.code, "managed_runtime_provenance")
+
+    def test_client_ready_requires_tuple_specific_protocol_capabilities(self):
+        for version, capabilities, counts in (
+            ("1.12.2", {"player_loaded": False, "chunk_batch": False, "tick_end": False},
+             {"chunks": 2, "teleports": 1, "keepalives": 1}),
+            ("1.21.9", {"player_loaded": True, "chunk_batch": True, "tick_end": True},
+             {"chunks": 2, "teleports": 1, "keepalives": 1, "chunk_batches": 1}),
+        ):
+            client = game.GameClient.__new__(game.GameClient)
+            client.tuple_config = game.tuple_for(version)
+            client.lines = queue.Queue()
+            client.lines.put({"event": "ready", "version": version, "protocol_client": "minecraft-protocol@1.68.0", "protocol_data": "minecraft-data@3.117.0",
+                              "protocol_capabilities": capabilities, "initial_yaw": 31.25, "sent_yaw": None, **counts})
+            result = client.ready()
+            self.assertEqual(result["version"], version)
+            self.assertEqual(result["protocol_capabilities"], capabilities)
+            self.assertEqual(result["chunks"], 2)
+            self.assertEqual("chunk_batches" in result, version == "1.21.9")
+        legacy = game.GameClient.__new__(game.GameClient)
+        legacy.tuple_config = game.tuple_for("1.12.2")
+        legacy.lines = queue.Queue()
+        legacy.lines.put({"event": "ready", "version": "1.12.2", "protocol_client": "minecraft-protocol@1.68.0", "protocol_data": "minecraft-data@3.117.0",
+                          "protocol_capabilities": {"player_loaded": True, "chunk_batch": False, "tick_end": False},
+                          "initial_yaw": 31.25, "sent_yaw": None, "chunks": 1, "teleports": 1, "keepalives": 1})
+        with self.assertRaises(game.Failure) as failure:
+            legacy.ready()
+        self.assertEqual(failure.exception.code, "client_protocol_capability_mismatch")
+        modern = game.GameClient.__new__(game.GameClient)
+        modern.tuple_config = game.tuple_for("1.21.9")
+        modern.lines = queue.Queue()
+        modern.lines.put({"event": "ready", "version": "1.21.9", "protocol_client": "minecraft-protocol@1.68.0",
+                          "protocol_data": "minecraft-data@3.117.0",
+                          "protocol_capabilities": {"player_loaded": True, "chunk_batch": True, "tick_end": True},
+                          "initial_yaw": 31.25, "sent_yaw": None, "chunks": 1, "teleports": 1, "keepalives": 1})
+        with self.assertRaises(game.Failure) as failure:
+            modern.ready()
+        self.assertEqual(failure.exception.code, "client_packets_missing")
+
     def test_launcher_identity_accepts_exact_linux_and_native_windows_formats(self):
         identity = launcher_identity()
         self.assertTrue(game._valid_process_identity(identity))
@@ -335,6 +418,9 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
             ([{"message": "Native stop OS error: 5."}], ["stop_native_os_error_5"]),
             ([{"message": "Native stop OS error: 65535."}], ["stop_native_os_error_65535"]),
             ([{"message": "Native stop OS error: unavailable."}], ["stop_native_os_error_unavailable"]),
+            ([{"message": "Native stop process API: open_process."}], ["stop_process_api_open_process"]),
+            ([{"message": "Native stop process API: boot_identity."}], ["stop_process_api_boot_identity"]),
+            ([{"message": "Native stop process API: open_process. password=private"}], ["unclassified"]),
             ([{"message": "Native stop OS error: 65536."}], ["unclassified"]),
             ([{"message": "Native stop OS error: 05."}], ["unclassified"]),
             ([{"message": "Native stop OS error: 0."}], ["unclassified"]),
@@ -484,7 +570,7 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
             name = "world/playerdata/" + game.offline_uuid() + ".dat"
             files = {name: player(31.25), "world/level.dat": b"test-only-world"}
             def write(mutate=None, extra=None):
-                manifest = {"instance_id": game.INSTANCE, "minecraft_version": game.VERSION, "kind": "full", "world_present": True,
+                manifest = {"instance_id": game.INSTANCE, "minecraft_version": game.tuple_for("1.21.9").minecraft_version, "kind": "full", "world_present": True,
                             "capture_mode": "acknowledged_native_save_lease", "files": [
                             {"path": n, "size": len(v), "sha256": hashlib.sha256(v).hexdigest()} for n, v in files.items()]}
                 if mutate:
@@ -496,16 +582,16 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
                     if extra:
                         archive.writestr(extra, b"injected")
             write()
-            self.assertEqual(game.archive_evidence(path, 31.25, True)["files_verified"], 2)
+            self.assertEqual(game.archive_evidence(path, 31.25, True, game.tuple_for("1.21.9"))["files_verified"], 2)
             with self.assertRaises(game.Failure):
-                game.archive_evidence(path, 121.25, True)
+                game.archive_evidence(path, 121.25, True, game.tuple_for("1.21.9"))
             write(lambda m: m["files"][0].update(sha256="0" * 64))
             with self.assertRaises(game.Failure):
-                game.archive_evidence(path, 31.25, True)
+                game.archive_evidence(path, 31.25, True, game.tuple_for("1.21.9"))
             for name in ("../escaped", "server/C:/escaped", "server\\escaped", "server/world/extra.dat"):
                 write(extra=name)
                 with self.assertRaises(game.Failure):
-                    game.archive_evidence(path, 31.25, True)
+                    game.archive_evidence(path, 31.25, True, game.tuple_for("1.21.9"))
 
     def test_no_ambient_host_execution_from_client_or_harness_cli(self):
         import subprocess
@@ -513,12 +599,25 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
                                  env={**os.environ, "GITHUB_ACTIONS": "false"}, timeout=10)
         self.assertEqual(harness.returncode, 2)
         self.assertIn(b"hosted_only", harness.stderr)
+        legacy = subprocess.run([os.sys.executable, str(game.HERE / "game_api.py"), "--minecraft-version", "1.12.2", "--output", "/unused"], capture_output=True,
+                                env={**os.environ, "GITHUB_ACTIONS": "false"}, timeout=10)
+        self.assertEqual(legacy.returncode, 2)
+        self.assertIn(b"hosted_only", legacy.stderr)
         invalid = subprocess.run([os.sys.executable, str(game.HERE / "game_api.py"), "--minecraft-version", "1.21.9;evil", "--output", "/unused"], capture_output=True, timeout=10)
         self.assertEqual(invalid.returncode, 2)
-        client = subprocess.run(["node", str(game.HERE / "game-client/client.cjs"), "--mode", "observe"], capture_output=True,
+        client = subprocess.run(["node", str(game.HERE / "game-client/client.cjs"), "--mode", "observe", "--version", "1.21.9"], capture_output=True,
                                 env={**os.environ, "GITHUB_ACTIONS": "false"}, timeout=10)
         self.assertEqual(client.returncode, 2)
         self.assertEqual(client.stderr.strip(), b"client_hosted_only")
+
+    def test_linux_and_windows_wrappers_allow_only_frozen_game_tuples(self):
+        linux = (game.HERE / "linux-game.sh").read_text()
+        windows = (game.HERE / "windows-game.ps1").read_text()
+        self.assertIn("case \"$3\" in 1.12.2|1.21.9)", linux)
+        self.assertIn("[ValidateSet('1.12.2','1.21.9')]", windows)
+        self.assertIn('"scope": "vanilla-" + sys.argv[5] + "-real-headless-game"', linux)
+        self.assertIn("scope=('vanilla-' + $MinecraftVersion + '-real-headless-game')", windows)
+        self.assertNotIn("1.12.1", linux + windows)
 
 
 class LinuxGamePaths(unittest.TestCase):

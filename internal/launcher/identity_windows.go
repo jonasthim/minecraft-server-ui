@@ -47,37 +47,37 @@ func processIdentityWithOps(pid int, ops windowsProcessIdentityOps) (start, exe,
 	}
 	h, e := ops.openProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, uint32(pid))
 	if e != nil {
-		return "", "", "", e
+		return "", "", "", processIdentityStageFailure(processIdentityOpenProcess, e)
 	}
 	defer ops.closeHandle(h)
 	state, e := ops.wait(h, 0)
 	if e != nil {
-		return "", "", "", &processWaitUnavailable{cause: e}
+		return "", "", "", &processWaitUnavailable{cause: processIdentityStageFailure(processIdentityWaitProcess, e)}
 	}
 	if state == uint32(windows.WAIT_OBJECT_0) {
 		return "", "", "", os.ErrNotExist
 	}
 	if state != uint32(windows.WAIT_TIMEOUT) {
-		return "", "", "", fmt.Errorf("unexpected process wait state 0x%08x", state)
+		return "", "", "", processIdentityStageFailure(processIdentityWaitProcess, fmt.Errorf("unexpected process wait state 0x%08x", state))
 	}
 	if ops.afterWait != nil {
 		ops.afterWait(h)
 	}
 	var creation, exit, kernel, user windows.Filetime
 	if e = ops.getTimes(h, &creation, &exit, &kernel, &user); e != nil {
-		return "", "", "", processMetadataError(h, e, ops.wait)
+		return "", "", "", processMetadataError(h, processIdentityStageFailure(processIdentityGetProcessTimes, e), ops.wait)
 	}
 	var buffer [32768]uint16
 	n := uint32(len(buffer))
 	if e = ops.queryImage(h, 0, &buffer[0], &n); e != nil {
-		return "", "", "", processMetadataError(h, e, ops.wait)
+		return "", "", "", processMetadataError(h, processIdentityStageFailure(processIdentityQueryImage, e), ops.wait)
 	}
 	bootID, e := ops.bootID()
 	if e != nil {
-		return "", "", "", fmt.Errorf("boot identity: %w", e)
+		return "", "", "", processIdentityStageFailure(processIdentityBootIdentity, fmt.Errorf("boot identity: %w", e))
 	}
 	if bootID == (windows.GUID{}) {
-		return "", "", "", fmt.Errorf("missing boot identity")
+		return "", "", "", processIdentityStageFailure(processIdentityBootIdentity, fmt.Errorf("missing boot identity"))
 	}
 	return fmt.Sprintf("%s:%08x%08x", bootID.String(), creation.HighDateTime, creation.LowDateTime), windows.UTF16ToString(buffer[:n]), "", nil
 }
@@ -230,6 +230,10 @@ func IsMissingProcess(err error) bool {
 	var waitErr *processWaitUnavailable
 	if errors.As(err, &waitErr) {
 		return false
+	}
+	var stageErr *processIdentityStageError
+	if errors.As(err, &stageErr) && stageErr != nil && stageErr.stage == processIdentityOpenProcess {
+		err = stageErr.cause
 	}
 	return os.IsNotExist(err) || err == windows.ERROR_INVALID_PARAMETER
 }

@@ -95,22 +95,31 @@ func wrapStopFailure(category StopFailureCode, err error) error {
 // StopNativeErrorCode returns a bounded native error number only for a known
 // Stop failure. Error text is never a diagnostic source.
 func StopNativeErrorCode(err error) (uint32, bool) {
-	if StopFailureCategory(err) == StopFailureUnknown {
-		return 0, false
-	}
-	var failure *stopFailure
-	if !errors.As(err, &failure) || failure == nil {
-		return 0, false
-	}
-	cause := failure.err
-	if failure.nativeCause != nil {
-		cause = failure.nativeCause
-	}
 	var code syscall.Errno
-	if !errors.As(cause, &code) || code == 0 || uint64(code) > 65535 {
+	if !errors.As(stopDiagnosticCause(err), &code) || code == 0 || uint64(code) > 65535 {
 		return 0, false
 	}
 	return uint32(code), true
+}
+
+// StopProcessIdentityStage reports only the fixed API stage of the failure
+// responsible for the Stop category, never an earlier transport failure.
+func StopProcessIdentityStage(err error) string {
+	return launcher.ProcessIdentityFailureStage(stopDiagnosticCause(err))
+}
+
+func stopDiagnosticCause(err error) error {
+	if StopFailureCategory(err) == StopFailureUnknown {
+		return nil
+	}
+	var failure *stopFailure
+	if !errors.As(err, &failure) || failure == nil {
+		return nil
+	}
+	if failure.nativeCause != nil {
+		return failure.nativeCause
+	}
+	return failure.err
 }
 
 type Observation struct {

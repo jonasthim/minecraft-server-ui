@@ -245,6 +245,95 @@ func TestWindowsProcessIdentityMetadataErrorsRequireConclusiveRecheck(t *testing
 	}
 }
 
+func TestWindowsProcessIdentityFailureStagesIdentifyNativeAPIs(t *testing.T) {
+	for _, stage := range []string{"open_process", "wait_process", "get_process_times", "query_image", "boot_identity"} {
+		t.Run(stage, func(t *testing.T) {
+			nativeErr := windows.ERROR_ACCESS_DENIED
+			ops := windowsProcessIdentityOps{
+				openProcess: func(uint32, bool, uint32) (windows.Handle, error) {
+					return windows.Handle(17), nil
+				},
+				closeHandle: func(windows.Handle) error { return nil },
+				wait: func(windows.Handle, uint32) (uint32, error) {
+					return uint32(windows.WAIT_TIMEOUT), nil
+				},
+				getTimes: func(_ windows.Handle, creation, exit, kernel, user *windows.Filetime) error {
+					creation.LowDateTime = 1
+					return nil
+				},
+				queryImage: func(_ windows.Handle, _ uint32, buffer *uint16, size *uint32) error {
+					*buffer = 'x'
+					*size = 1
+					return nil
+				},
+				bootID: func() (windows.GUID, error) { return windows.GUID{Data1: 1}, nil },
+			}
+			switch stage {
+			case "open_process":
+				ops.openProcess = func(uint32, bool, uint32) (windows.Handle, error) { return 0, nativeErr }
+			case "wait_process":
+				ops.wait = func(windows.Handle, uint32) (uint32, error) { return 0, nativeErr }
+			case "get_process_times":
+				ops.getTimes = func(windows.Handle, *windows.Filetime, *windows.Filetime, *windows.Filetime, *windows.Filetime) error {
+					return nativeErr
+				}
+			case "query_image":
+				ops.queryImage = func(windows.Handle, uint32, *uint16, *uint32) error { return nativeErr }
+			case "boot_identity":
+				ops.bootID = func() (windows.GUID, error) { return windows.GUID{}, nativeErr }
+			}
+
+			_, _, _, err := processIdentityWithOps(17, ops)
+			if err == nil || !errors.Is(err, nativeErr) || IsMissingProcess(err) {
+				t.Fatalf("native error was not preserved as a live-process failure: %v", err)
+			}
+			if got := ProcessIdentityFailureStage(err); got != stage {
+				t.Fatalf("native process identity stage = %q, want %q", got, stage)
+			}
+		})
+	}
+}
+
+func TestWindowsProcessIdentityFailureStagesPreserveMissingClassification(t *testing.T) {
+	t.Run("open process invalid parameter remains missing", func(t *testing.T) {
+		ops := nativeWindowsProcessIdentityOps()
+		ops.openProcess = func(uint32, bool, uint32) (windows.Handle, error) {
+			return 0, windows.ERROR_INVALID_PARAMETER
+		}
+		_, _, _, err := processIdentityWithOps(17, ops)
+		if !IsMissingProcess(err) || !errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+			t.Fatalf("open process invalid-parameter classification changed: %v", err)
+		}
+	})
+
+	for _, cause := range []error{windows.ERROR_INVALID_PARAMETER, os.ErrNotExist} {
+		t.Run("boot identity does not prove exit: "+cause.Error(), func(t *testing.T) {
+			ops := windowsProcessIdentityOps{
+				openProcess: func(uint32, bool, uint32) (windows.Handle, error) { return windows.Handle(17), nil },
+				closeHandle: func(windows.Handle) error { return nil },
+				wait:        func(windows.Handle, uint32) (uint32, error) { return uint32(windows.WAIT_TIMEOUT), nil },
+				getTimes: func(_ windows.Handle, creation, _, _, _ *windows.Filetime) error {
+					creation.LowDateTime = 1
+					return nil
+				},
+				queryImage: func(_ windows.Handle, _ uint32, buffer *uint16, size *uint32) error {
+					*buffer = 'x'
+					*size = 1
+					return nil
+				},
+				bootID: func() (windows.GUID, error) { return windows.GUID{}, cause },
+			}
+			_, _, _, err := processIdentityWithOps(17, ops)
+			if !errors.Is(err, cause) || IsMissingProcess(err) {
+				t.Fatalf("boot identity error was misclassified as process exit: %v", err)
+			}
+			if ProcessIdentityFailureStage(err) != "boot_identity" {
+				t.Fatalf("boot identity stage was lost: %q", ProcessIdentityFailureStage(err))
+			}
+		})
+	}
+}
+
 func TestWindowsProcessIdentityInitialWaitRequiresKnownResult(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

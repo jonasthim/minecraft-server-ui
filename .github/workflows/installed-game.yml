@@ -8,11 +8,12 @@ on:
         type: boolean
         default: false
       minecraft_version:
-        description: Exact initial Vanilla qualification tuple
+        description: Exact Vanilla qualification tuple
         required: true
         type: choice
         options:
           - '1.21.9'
+          - '1.12.2'
 permissions:
   contents: read
 jobs:

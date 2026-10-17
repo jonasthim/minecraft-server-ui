@@ -3,7 +3,8 @@
 set -euo pipefail
 umask 077
 [[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted && $EUID == 0 ]] || { echo 'FAIL hosted_root_required' >&2; exit 2; }
-[[ $# == 3 && $3 == 1.21.9 ]] || { echo 'FAIL tuple_not_allowlisted' >&2; exit 2; }
+[[ $# == 3 ]] || { echo 'FAIL tuple_not_allowlisted' >&2; exit 2; }
+case "$3" in 1.12.2|1.21.9) ;; *) echo 'FAIL tuple_not_allowlisted' >&2; exit 2 ;; esac
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 repo=$(realpath "$here/../..")
 [[ -f $1 && ! -L $1 && -d $2 && ! -L $2 ]] || exit 2
@@ -117,12 +118,12 @@ cleanup() {
     fi
     restore_hosted_prefix || status=1
     record_permissions after-prefix-restoration || status=1
-    python3 - "$status" "$stage" "$binary_hash" "$scratch/permissions.json" <<'PY' >"$output/result.json"
+    python3 - "$status" "$stage" "$binary_hash" "$scratch/permissions.json" "$3" <<'PY' >"$output/result.json"
 import json
 from pathlib import Path
 import sys
 path = Path(sys.argv[4])
-print(json.dumps({"scope": "vanilla-1.21.9-real-headless-game", "exit_code": int(sys.argv[1]),
+print(json.dumps({"scope": "vanilla-" + sys.argv[5] + "-real-headless-game", "minecraft_version": sys.argv[5], "exit_code": int(sys.argv[1]),
                   "last_stage": sys.argv[2], "manager_sha256": sys.argv[3],
                   "permission_snapshots": json.loads(path.read_text()) if path.exists() else []}))
 PY

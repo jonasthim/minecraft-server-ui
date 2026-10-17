@@ -455,6 +455,9 @@ func (s *Service) stop(ctx context.Context, e *jobs.Execution, in Request) error
 					} else {
 						_ = e.Log(logCtx, "Native stop OS error: unavailable.")
 					}
+					if stage := supervisor.StopProcessIdentityStage(err); stage != "" {
+						_ = e.Log(logCtx, "Native stop process API: "+stage+".")
+					}
 					logCancel()
 				}
 			}
