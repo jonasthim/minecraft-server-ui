@@ -673,6 +673,65 @@ pure_preflight_test() {
     [[ $fixture_json == '{"scope":"linux-updater-capability-preflight","status":"query_failed","installed_exit":1,"loaded_exit":1,"installed_matches":0,"loaded_matches":0,"installed_sentinel_matches":0,"loaded_sentinel_matches":0}' ]] || return 1
 }
 
+write_unit() {
+    local name=$1 variant=$2 path=$unit_dir/$1 expected actual
+    if [[ $name == "$baseline" ]]; then expected=$baseline_file_id; else expected=$control_file_id; fi
+    actual=$(stat -c '%d:%i:%u:%g' -- "$path") || return 1
+    [[ $actual == "$expected" && ! -L $path ]] || return 1
+    cat >>"$path" <<UNIT
+[Unit]
+Description=Task32B disposable updater capability probe ($variant)
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStartPre=/usr/bin/python3 $helper execstartpre
+ExecStart=/usr/bin/python3 $helper execstart
+TimeoutStartSec=45s
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/usr/local/bin /var/lib/minecraft-ui-update /var/lib/minecraft-ui
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+UNIT
+}
+
+append_control_capability_policy() {
+    printf '%s\n' 'AmbientCapabilities=CAP_SETUID' >>"$1"
+}
+
+pure_control_policy_test() {
+    local fixture_root=$1 unit_dir baseline control helper baseline_file_id control_file_id
+    local baseline_common control_common
+    unit_dir=$fixture_root/control-policy
+    mkdir -m 0700 "$unit_dir" || return 1
+    baseline=baseline.service
+    control=control.service
+    helper=$unit_dir/probe.py
+    baseline_file_id=unknown
+    control_file_id=unknown
+    : >"$unit_dir/$baseline" || return 1
+    : >"$unit_dir/$control" || return 1
+    baseline_file_id=$(stat -c '%d:%i:%u:%g' -- "$unit_dir/$baseline") || return 1
+    control_file_id=$(stat -c '%d:%i:%u:%g' -- "$unit_dir/$control") || return 1
+    write_unit "$baseline" baseline || return 1
+    write_unit "$control" control || return 1
+    append_control_capability_policy "$unit_dir/$control" || return 1
+    baseline_common=$(sed '/^Description=/d' "$unit_dir/$baseline") || return 1
+    control_common=$(sed -e '/^Description=/d' -e '/^AmbientCapabilities=/d' "$unit_dir/$control") || return 1
+    [[ $baseline_common == "$control_common" &&
+       $(grep -cx 'AmbientCapabilities=CAP_SETUID' "$unit_dir/$control") == 1 &&
+       $(grep -c '^CapabilityBoundingSet=' "$unit_dir/$control") == 0 ]]
+}
+
 if [[ ${1:-} == --pure-fixture && $# == 1 ]]; then
     fixture_dir=$(mktemp -d)
     trap 'rm -rf -- "$fixture_dir"' EXIT
@@ -680,6 +739,7 @@ if [[ ${1:-} == --pure-fixture && $# == 1 ]]; then
     chmod 0500 "$fixture_dir/probe.py"
     python3 "$fixture_dir/probe.py" --self-test
     pure_preflight_test || { echo 'unit preflight fixtures failed' >&2; exit 1; }
+    pure_control_policy_test "$fixture_dir" || { echo 'unit control policy fixture failed' >&2; exit 1; }
     echo 'linux updater unit preflight pure fixtures passed'
     exit 0
 fi
@@ -773,44 +833,14 @@ mkdir -m 0700 /var/lib/minecraft-ui-update
 state_update_id=$(stat -c '%d:%i:%u:%g' /var/lib/minecraft-ui-update)
 mkdir -m 0700 /var/lib/minecraft-ui
 state_manager_id=$(stat -c '%d:%i:%u:%g' /var/lib/minecraft-ui)
-write_unit() {
-    local name=$1 variant=$2 path=$unit_dir/$1 expected actual
-    if [[ $name == "$baseline" ]]; then expected=$baseline_file_id; else expected=$control_file_id; fi
-    actual=$(stat -c '%d:%i:%u:%g' -- "$path") || return 1
-    [[ $actual == "$expected" && ! -L $path ]] || return 1
-    cat >>"$path" <<UNIT
-[Unit]
-Description=Task32B disposable updater capability probe ($variant)
-[Service]
-Type=oneshot
-User=root
-Group=root
-ExecStartPre=/usr/bin/python3 $helper execstartpre
-ExecStart=/usr/bin/python3 $helper execstart
-TimeoutStartSec=45s
-UMask=0077
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/usr/local/bin /var/lib/minecraft-ui-update /var/lib/minecraft-ui
-PrivateTmp=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-RestrictSUIDSGID=true
-NoNewPrivileges=true
-StandardOutput=journal
-StandardError=journal
-UNIT
-}
 create_unit_file "$baseline" || { echo 'Could not exclusively create baseline unit file.' >&2; exit 2; }
 create_unit_file "$control" || { echo 'Could not exclusively create control unit file.' >&2; exit 2; }
 units_owned=1
 write_unit "$baseline" baseline
 write_unit "$control" control
-    cat >>"$unit_dir/$control" <<'UNIT'
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID
-UNIT
+control_path=$unit_dir/$control
+[[ $(stat -c '%d:%i:%u:%g' -- "$control_path") == "$control_file_id" && ! -L $control_path ]] || { echo 'Control unit identity changed.' >&2; exit 2; }
+append_control_capability_policy "$control_path"
 systemctl daemon-reload
 
 run_probe_unit() {
@@ -835,7 +865,7 @@ run_probe_unit "$control" control
 python3 - "$scratch" "$output/updater-capability-probe-summary.json" <<'PY'
 import json, os, sys
 scratch, destination = sys.argv[1:]
-result = {"probe": "updater_capability_context_v1", "cases": []}
+result = {"probe": "updater_capability_context_v1", "control_kind": "ambient_cap_setuid", "cases": []}
 with open(os.path.join(scratch, "updater-file.json"), "r", encoding="utf-8") as stream:
     result["updater_binary_file"] = json.load(stream)
 for name in ("baseline", "control"):
