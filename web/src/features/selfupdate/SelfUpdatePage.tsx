@@ -104,7 +104,10 @@ export function SelfUpdatePage() {
       }
     } catch (error) {
       if (controller.signal.aborted) return;
-      if (operation === 'apply' && selected && !(error instanceof APIError)) {
+      // The shared client uses request_failed when a gateway returns HTML or
+      // another generic response. That cannot establish application rejection.
+      const ambiguousActivation = !(error instanceof APIError) || !error.code || error.code === 'request_failed';
+      if (operation === 'apply' && selected && ambiguousActivation) {
         setStage(null); reconnect.start(selected.version, true);
       } else {
         setError(message(error));

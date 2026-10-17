@@ -10,12 +10,14 @@ const shots = process.env.TASK32A_SCREENSHOTS ?? '/home/thim/.cache/dilla-tmp/ta
 await mkdir(shots, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const results = [];
+const filter = process.env.TASK32A_FILTER ? new RegExp(process.env.TASK32A_FILTER) : null;
 const hash = 'a'.repeat(64);
 const stage = { id: 'b'.repeat(64), version: 'v1.10.0', platform: 'linux/amd64', schema: 16, binary_sha256: hash, created_at: '2026-10-17T12:00:00Z', expires_at: '2026-11-01T00:00:00Z' };
 const check = { ...stage, published_at: '2026-10-17T12:00:00Z' };
 const release = { version: 'v1.10.0', title: 'Manager release', notes: '<img src=x onerror="window.injected=true">\n**Literal release notes**', notes_truncated: true, published_at: '2026-10-16T12:00:00Z', url: 'https://github.com/example/manager/releases/tag/v1.10.0' };
 
 async function scenario(name, options, test) {
+  if (filter && !filter.test(name)) return;
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
@@ -53,6 +55,12 @@ async function scenario(name, options, test) {
       calls.apply++; assert.deepEqual(route.request().postDataJSON(), { stage_id: stage.id, confirm: true });
       if (fixture.rejectApply) return reject('Native activation was refused');
       fixture.disconnect = true;
+      if (fixture.gatewayStatus) {
+        fixture.current = 'v1.10.0'; fixture.stages = [];
+        return fixture.genericGatewayJSON
+          ? route.fulfill({ status: fixture.gatewayStatus, json: { error: { code: 'request_failed', message: 'Gateway acknowledgement unavailable' } } })
+          : route.fulfill({ status: fixture.gatewayStatus, contentType: 'text/html', body: '<html><body>Gateway acknowledgement unavailable</body></html>' });
+      }
       if (fixture.holdApply) await fixture.holdApply;
       if (fixture.loseApplyResponse) return route.abort('failed');
       return route.fulfill({ status: 204 });
@@ -188,10 +196,54 @@ try {
     releaseHeld();
     await page.getByRole('button', { name: 'Stop waiting', exact: true }).click();
   });
+  for (const gatewayStatus of [502, 504]) {
+    await scenario('gateway HTML ' + gatewayStatus + ' reconciles accepted activation without replay', { staged: true, gatewayStatus }, async ({ page, fixture, calls }) => {
+      await page.getByRole('checkbox', { name: /I confirm/ }).check();
+      await page.getByRole('button', { name: 'Activate manager update' }).click();
+      await page.getByText(/Waiting for the manager to return.*outcome is unknown/).waitFor();
+      assert.equal(fixture.current, 'v1.10.0', 'native fixture accepted activation before losing acknowledgement');
+      assert.equal(await page.getByText(/Manager is responding with installed version/).count(), 0);
+      assert.equal(await page.getByRole('checkbox', { name: /I confirm/ }).count(), 0);
+      const firstPoll = page.waitForRequest(request => request.url().endsWith('/system/update') && request.method() === 'GET');
+      await page.clock.runFor(6000);
+      await firstPoll;
+      assert.equal(calls.apply, 1);
+      assert.equal(await page.getByText(/Manager is responding with installed version/).count(), 0);
+      fixture.disconnect = false;
+      await page.clock.runFor(3000);
+      await page.getByText('Manager is responding with installed version v1.10.0.', { exact: true }).waitFor();
+      assert.equal(calls.apply, 1);
+      const finalReads = calls.status; await page.clock.runFor(6000);
+      assert.equal(calls.status, finalReads, 'reconciliation stops after observing the requested version');
+    });
+  }
+  await scenario('gateway generic JSON reconciles accepted activation without replay', { staged: true, gatewayStatus: 502, genericGatewayJSON: true }, async ({ page, fixture, calls }) => {
+    await page.getByRole('checkbox', { name: /I confirm/ }).check();
+    await page.getByRole('button', { name: 'Activate manager update' }).click();
+    await page.getByText(/Waiting for the manager to return.*outcome is unknown/).waitFor();
+    fixture.disconnect = false;
+    await page.clock.runFor(3000);
+    await page.getByText('Manager is responding with installed version v1.10.0.', { exact: true }).waitFor();
+    assert.equal(calls.apply, 1);
+  });
+  await scenario('gateway ambiguity remains bounded when manager never returns', { staged: true, gatewayStatus: 504 }, async ({ page, calls }) => {
+    await page.getByRole('checkbox', { name: /I confirm/ }).check();
+    await page.getByRole('button', { name: 'Activate manager update' }).click();
+    await page.getByText(/Waiting for the manager to return.*outcome is unknown/).waitFor();
+    await page.clock.runFor(61000);
+    await page.getByRole('alert').filter({ hasText: 'Could not verify v1.10.0 within one minute. No running version could be observed.' }).waitFor();
+    const finalReads = calls.status; await page.clock.runFor(10000);
+    assert.equal(calls.status, finalReads); assert.equal(calls.apply, 1);
+    assert.ok(finalReads < 35, 'status attempts remain bounded');
+    assert.equal(await page.getByText(/Manager is responding with installed version/).count(), 0);
+  });
   await scenario('explicit activation rejection stays visible across refresh', { staged: true, rejectApply: true }, async ({ page, calls }) => {
     await page.getByRole('checkbox', { name: /I confirm/ }).check();
     await page.getByRole('button', { name: 'Activate manager update' }).click();
     await page.getByRole('alert').filter({ hasText: 'Native activation was refused' }).waitFor();
+    const readsBefore = calls.status; await page.clock.runFor(10000);
+    assert.equal(calls.status, readsBefore, 'definitive application rejection must not start reconciliation');
+    assert.equal(await page.getByRole('button', { name: 'Stop waiting', exact: true }).count(), 0);
     await page.getByRole('button', { name: 'Refresh status', exact: true }).click();
     await page.getByRole('alert').filter({ hasText: 'Native activation was refused' }).waitFor();
     assert.equal(calls.apply, 1);
