@@ -7,6 +7,9 @@ Wants=network-online.target
 Type=oneshot
 User=root
 Group=root
+# systemd 255's seccomp setup drops SETUID unless retained in the ambient set.
+# The fixed manager-account probe must drop from root to minecraft-ui.
+AmbientCapabilities=CAP_SETUID
 ExecStart=/usr/local/lib/minecraft-ui/selfupdate run %i
 # 9min operation budget + independent 5min cleanup + service margin.
 TimeoutStartSec=15min

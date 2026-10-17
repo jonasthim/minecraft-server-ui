@@ -9,6 +9,8 @@ Before=minecraft-ui.service
 Type=oneshot
 User=root
 Group=root
+# Retain the capability needed by the fixed unprivileged schema probe.
+AmbientCapabilities=CAP_SETUID
 ExecStart=/usr/local/lib/minecraft-ui/selfupdate recover
 TimeoutStartSec=4min
 UMask=0077
