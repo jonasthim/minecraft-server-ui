@@ -102,8 +102,7 @@ func (s *Service) stage(ctx context.Context, id string, actor int64, name string
 				checked, openErr := openChecked(root, u.ID+".blob", MaxArtifactBytes+1)
 				removeErr = openErr
 				if openErr == nil {
-					removeErr = checked.Chmod(0600)
-					checked.Close()
+					removeErr = checked.Close()
 				}
 				if removeErr == nil {
 					removeErr = root.Remove(u.ID + ".blob")
@@ -252,10 +251,11 @@ func (s *Service) removeStageFile(ctx context.Context, id, stage string) error {
 	if openErr != nil && !os.IsNotExist(openErr) {
 		return openErr
 	}
+	// Root.Remove handles read-only deletion, including Windows' held-handle
+	// fallback. The checked reader lacks attribute-write access on Windows;
+	// keep the stage immutable and close it before the contained removal.
 	if checked != nil {
-		e = checked.Chmod(0600)
-		checked.Close()
-		if e != nil {
+		if e = checked.Close(); e != nil {
 			return e
 		}
 	}

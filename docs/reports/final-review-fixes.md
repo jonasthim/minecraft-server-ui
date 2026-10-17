@@ -102,3 +102,34 @@ Commands executed on this follow-up:
 - `git diff --check` passed.
 
 Final complete changed-package check: `go test -race ./internal/content ./internal/modpack -count=1 -timeout=180s` passed (content 37.012 s; pack 20.764 s). Self-review traced defer ordering, original-context SQL/FS error exits and the cancellation boundary; no further code changes were needed. All six follow-up-owned files are frozen for the integrator's targeted R1 review. No shared contracts, UI, queue, schema, dependencies or unrelated Windows files changed. The integrator owns the narrowly scoped R1 review and the next combined hosted CI run. No additional broad review, staging, commit, push, host/game mutation or vault write was performed.
+
+## Native Windows follow-up: remove redundant chmod from stage deletion
+
+Assigned base: `c55b1aa`. Actual hosted native Windows run `39023970811` failed content cleanup and its composed update consumers. The saved log `/home/thim/.cache/dilla-tmp/minecraft-ui-ci-windows-third.log` reports `chmod ...state/content/<receipt>.blob: Access is denied` in stage expiry/quota, queue-publication, partial-failure, admitted-cancellation and update receipt-retention checks. These are actual Windows test failures; local Linux passes did not qualify this path. I1 policy, R1 ownership lifetime and M1 remain closed and unchanged by this follow-up.
+
+### Diagnosis and minimal correction
+
+`openChecked` returns a validated `Root.Open` reader (`O_RDONLY`). Windows gives that handle read access; `File.Chmod` passes its existing handle to `SetFileInformationByHandle`, which requires `FILE_WRITE_ATTRIBUTES` when clearing the read-only attribute. The handle lacks that capability. The error is not a request to relax retention, ignore permission errors or make staging writable.
+
+The local Go 1.27 implementation was inspected at `$GOROOT/src/os/root_windows.go`, `$GOROOT/src/internal/syscall/windows/at_windows.go` and `$GOROOT/src/internal/poll/fd_windows.go`. `Root.Remove` uses contained `Deleteat` with `FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE` where available. Its older Windows/filesystem fallback obtains attribute-write capability with `ReOpenFile` on the already held deletion handle and clears the read-only attribute on that same object before deletion. It does not reopen an absolute or separately reconstructed file path for attribute mutation. This behavior also explains why the redundant preparatory chmod is unnecessary on supported release-target Windows APIs. On Unix, unlink of an owned private directory entry does not require making file bytes writable.
+
+`internal/content/stage.go` now retains the existing contained `openChecked` type, identity, size and single-link validation, closes the checked reader with error propagation, and calls contained `Root.Remove` directly. The same correction applies to the failed-publication defer, where stage bytes have already been frozen read-only before metadata publication fails. No attribute change is attempted through the read-only validation handle. Staging remains immutable until removal; removal errors remain errors. There is no new dependency, syscall wrapper, platform helper or unchecked pathname operation.
+
+### Focused tests and evidence boundaries
+
+New `internal/content/stage_cleanup_test.go` tests verify:
+
+- A real staged blob is read-only after staging and remains read-only at the final unlink seam; successful removal deletes both bytes and metadata and remains retryable when already absent.
+- A real hardlink causes refusal before mutation. Both linked paths retain their original bytes and read-only state, and the stage receipt remains charged. This does not depend on Windows symlink-creation privileges and introduces no skip.
+- An injected SQLite publication failure after byte freezing preserves the primary error and removes the already read-only artifact and its quota reservation through the failed-stage defer.
+
+The readonly-at-unlink test failed against the prior helper on Linux with `immutable stage became writable before unlink`; the three new focused race checks then passed after correction (1.687 s). The supplied native Windows failure log independently provides the original platform-specific red evidence for `File.Chmod` itself. The new tests and existing retention/cancellation/update assertions were not weakened.
+
+Commands executed:
+
+- Red: `go test ./internal/content -run 'TestStageCleanupRemovesReadOnly|TestStageCleanupRefusesHardlinked|TestStagePublicationFailureReclaims' -count=1 -timeout=30s` failed on the immutable-stage assertion before correction.
+- Green: `go test -race ./internal/content -run 'TestStageCleanupRemovesReadOnly|TestStageCleanupRefusesHardlinked|TestStagePublicationFailureReclaims' -count=1 -timeout=30s` passed (1.687 s).
+- `go vet ./internal/content ./internal/update` passed.
+- `git diff --check` passed.
+
+Complete necessary checks: `go test -race ./internal/content ./internal/update -count=1 -timeout=180s` passed (content 28.927 s; update 28.105 s). `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o /home/thim/.cache/dilla-tmp/minecraft-ui-content-stage-cleanup.test.exe ./internal/content` passed as a build-only check, not native execution. Self-review confirmed both deletion paths retain validation/error propagation and the accepted R1 fence still spans the unlink seam. All three follow-up-owned files are frozen for targeted review. Only the content stage helper, its new focused tests and this report are owned by this follow-up. Native Windows success awaits the next hosted run; no local cross-compilation or Linux check is represented as Windows execution. No other packages/UI/contracts, accepted ownership policy, dependencies, staging/commit/push, host/game services or vault files were changed.
