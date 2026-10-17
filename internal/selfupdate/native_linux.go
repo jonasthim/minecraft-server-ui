@@ -332,28 +332,8 @@ func RunNativeUpdater(ctx context.Context, args []string, out io.Writer) error {
 		worker := activationWorker{state: state}
 		return worker.recordInstalled(ctx, Installed{Format: 1, Version: capability.Version, Schema: capability.Schema, SHA256: hash})
 	}
-	// With no activation journal, boot recovery must not require update trust or a
-	// stable bootstrap receipt: development/unconfigured managers still boot.
 	if len(args) == 1 && args[0] == "recover" {
-		permitted, e := readLaunch(ctx, paths)
-		if e != nil {
-			return e
-		}
-		if permitted {
-			return nil
-		}
-		root, e := openProtectedRoot(ctx, paths.State)
-		if e != nil {
-			return e
-		}
-		_, e = root.Lstat("activation.json")
-		root.Close()
-		if errors.Is(e, os.ErrNotExist) {
-			return nil
-		}
-		if e != nil {
-			return e
-		}
+		return recoverLinux(ctx, paths)
 	}
 	trust, err := LoadNativeTrust(ctx)
 	if err != nil {
@@ -439,11 +419,6 @@ func RunNativeUpdater(ctx context.Context, args []string, out io.Writer) error {
 	}
 	worker := activationWorker{state: state, bin: bin, binary: paths.Binary, driver: linuxDriver{paths}}
 	switch args[0] {
-	case "recover":
-		if len(args) != 1 {
-			return errors.New("invalid recover arguments")
-		}
-		return worker.recover(ctx)
 	case "run":
 		if len(args) != 2 || !validHash(args[1]) {
 			return errors.New("invalid run arguments")

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jonasthim/minecraft-server-ui/internal/launcher"
 	"golang.org/x/sys/unix"
 )
 
@@ -77,28 +78,42 @@ func processStart(pid int) (string, error) {
 	}
 	return fields[19], nil
 }
-func ownsTransactionLock(state *os.Root, pid int) error {
+func transactionLockOwner(state *os.Root) (int, error) {
 	info, err := state.Lstat("manager.lock")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || !info.Mode().IsRegular() {
-		return errors.New("invalid native transaction lock")
+		return 0, errors.New("invalid native transaction lock")
 	}
 	b, err := procRead("/proc/locks", 1<<20)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	device := fmt.Sprintf("%02x:%02x:%d", unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev)), stat.Ino)
-	matches := 0
+	owner, matches := 0, 0
 	for _, line := range strings.Split(string(b), "\n") {
 		f := strings.Fields(line)
-		if len(f) == 8 && f[1] == "FLOCK" && f[2] == "ADVISORY" && f[3] == "WRITE" && f[4] == strconv.Itoa(pid) && f[5] == device && f[6] == "0" && f[7] == "EOF" {
+		if len(f) == 8 && f[1] == "FLOCK" && f[2] == "ADVISORY" && f[3] == "WRITE" && f[5] == device && f[6] == "0" && f[7] == "EOF" {
+			owner, err = strconv.Atoi(f[4])
+			if err != nil || owner < 1 {
+				return 0, errors.New("ambiguous native transaction lock owner")
+			}
 			matches++
 		}
 	}
-	if matches != 1 {
+	if matches > 1 {
+		return 0, errors.New("ambiguous native transaction locks")
+	}
+	return owner, nil
+}
+func ownsTransactionLock(state *os.Root, pid int) error {
+	owner, err := transactionLockOwner(state)
+	if err != nil {
+		return err
+	}
+	if owner != pid {
 		return errors.New("launch worker does not own the native transaction lock")
 	}
 	return nil
@@ -151,27 +166,13 @@ func readLaunch(ctx context.Context, paths nativePaths) (bool, error) {
 		return false, err
 	}
 	defer state.Close()
-	b, err := readChecked(ctx, state, "launch.json", 2048)
-	if errors.Is(err, os.ErrNotExist) {
+	if _, err := state.Lstat("launch.json"); errors.Is(err, os.ErrNotExist) {
 		return false, nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return false, err
 	}
 	if err := protectedFile(state, "launch.json"); err != nil {
 		return false, err
-	}
-	info, err := state.Lstat("launch.json")
-	if err != nil || info.Mode().Perm() != 0600 {
-		return false, errors.New("unsafe native launch permit mode")
-	}
-	var p launchPermit
-	if strictJSON(b, &p) != nil || p.Format != 1 || p.PID < 1 || !validHash(p.StageID) || !validHash(p.Nonce) || !validHash(p.SHA256) || (p.Phase != "candidate" && p.Phase != "rollback" && p.Phase != "aborted") {
-		return false, errors.New("malformed native launch permit")
-	}
-	// A dead worker leaves a recoverable transaction, never an authorization.
-	if _, err := processStart(p.PID); errors.Is(err, os.ErrNotExist) {
-		return false, nil
 	}
 	bin, err := openProtectedRoot(ctx, paths.Bin)
 	if err != nil {
@@ -186,11 +187,150 @@ func readLaunch(ctx context.Context, paths nativePaths) (bool, error) {
 	if err := protectedFile(updater, filepath.Base(paths.Updater)); err != nil {
 		return false, err
 	}
+	return readLaunchAt(ctx, paths, state, bin)
+}
+
+// readLaunchAt is the production permit reader after fixed protected-root and
+// ownership checks. It is shared with recovery selection and file fixtures.
+func readLaunchPermit(ctx context.Context, state *os.Root) (launchPermit, bool, error) {
+	var p launchPermit
+	b, err := readChecked(ctx, state, "launch.json", 2048)
+	if errors.Is(err, os.ErrNotExist) {
+		return p, false, nil
+	}
+	if err != nil {
+		return p, false, err
+	}
+	info, err := state.Lstat("launch.json")
+	if err != nil {
+		return p, false, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if info.Mode().Perm() != 0600 || !ok || stat.Nlink != 1 {
+		return p, false, errors.New("unsafe native launch permit mode or links")
+	}
+	if strictJSON(b, &p) != nil || p.Format != 1 || p.PID < 1 || !validHash(p.StageID) || !validHash(p.Nonce) || !validHash(p.SHA256) || (p.Phase != "candidate" && p.Phase != "rollback" && p.Phase != "aborted") {
+		return p, false, errors.New("malformed native launch permit")
+	}
+	if ticks, err := strconv.ParseUint(p.Start, 10, 64); err != nil || ticks == 0 {
+		return p, false, errors.New("malformed native launch start time")
+	}
+	return p, true, nil
+}
+func readLaunchAt(ctx context.Context, paths nativePaths, state, bin *os.Root) (bool, error) {
+	p, present, err := readLaunchPermit(ctx, state)
+	if err != nil || !present {
+		return false, err
+	}
+	// Proven stale identity denies the bypass but leaves ordinary serialized
+	// recovery available. Inspection failures are still ambiguous and refuse.
+	start, err := processStart(p.PID)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if start != p.Start {
+		return false, nil
+	}
+	actual, err := os.Stat(fmt.Sprintf("/proc/%d/exe", p.PID))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	expected, err := os.Stat(paths.Updater)
+	if err != nil {
+		return false, err
+	}
+	if !os.SameFile(actual, expected) {
+		return false, nil
+	}
+	owner, err := transactionLockOwner(state)
+	if err != nil {
+		return false, err
+	}
+	if owner != p.PID {
+		return false, nil
+	}
 	if err := validateLaunch(ctx, paths, state, bin, p); err != nil {
 		return false, err
 	}
 	return true, nil
 }
+
+func recoverLinux(ctx context.Context, paths nativePaths) error {
+	permitted, err := readLaunch(ctx, paths)
+	if err != nil {
+		return err
+	}
+	if permitted {
+		return nil
+	}
+	state, err := openProtectedRoot(ctx, paths.State)
+	if err != nil {
+		return err
+	}
+	defer state.Close()
+	bin, err := openProtectedRoot(ctx, paths.Bin)
+	if err != nil {
+		return err
+	}
+	defer bin.Close()
+	return recoverLinuxAt(ctx, paths, state, bin, linuxDriver{paths}, func(ctx context.Context) error {
+		if _, err := LoadNativeTrust(ctx); err != nil {
+			return err
+		}
+		if _, err := readInstalled(ctx, state); err != nil {
+			return err
+		}
+		return protectedFile(bin, paths.Binary)
+	})
+}
+
+// recoverLinuxAt serializes ordinary recovery. The production wrapper supplies
+// only checked fixed roots and the unchanged trust/bootstrap verifier.
+func recoverLinuxAt(ctx context.Context, paths nativePaths, state, bin *os.Root, driver nativeDriver, verify func(context.Context) error) error {
+	permitted, err := readLaunchAt(ctx, paths, state, bin)
+	if err != nil {
+		return err
+	}
+	if permitted {
+		return nil
+	}
+	release, err := launcher.AcquireManager(paths.State)
+	if err != nil {
+		return errors.New("another native update operation is active")
+	}
+	defer release()
+	if _, err := state.Lstat("activation.json"); err == nil {
+		if err := verify(ctx); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	worker := activationWorker{state: state, bin: bin, binary: paths.Binary, driver: driver}
+	if err := worker.recover(ctx); err != nil {
+		return err
+	}
+	// Re-read after acquiring ownership and reconciling the journal. Do not
+	// delete malformed/unsafe control state or let deletion/fence errors pass.
+	_, present, err := readLaunchPermit(ctx, state)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return nil
+	}
+	if err := state.Remove("launch.json"); err != nil {
+		return err
+	}
+	return worker.fence(ctx, state)
+}
+
 func (d linuxDriver) startWithPermit(ctx context.Context) (retErr error) {
 	state, err := openProtectedRoot(ctx, d.paths.State)
 	if err != nil {

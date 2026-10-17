@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Badge, Button, Checkbox, Code, Group, Paper, Select, Stack, Text, TextInput, Title } from '@mantine/core';
-import { api } from '../../api/client';
+import { api, APIError } from '../../api/client';
 import type { components } from '../../api/schema';
 
 type Status = components['schemas']['SelfUpdateStatus'];
@@ -15,25 +15,39 @@ export function SelfUpdatePage() {
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [statusError, setStatusError] = useState('');
+  const pendingStageRecovery = useRef<Check | null>(null);
   const [notice, setNotice] = useState('');
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
-    void api<Status>('/system/update', { signal: controller.signal }).then(value => { if (!controller.signal.aborted) { setStatus(value); setStage(previous => value.stages.find(item => item.id === previous?.id) ?? value.stages[0] ?? null); setConfirm(false); setError(''); } }).catch(error => { if (!controller.signal.aborted) setError(message(error)); });
+    void api<Status>('/system/update', { signal: controller.signal }).then(value => {
+      if (controller.signal.aborted) return;
+      setStatus(value); setStatusError('');
+      setStage(previous => value.stages.find(item => item.id === previous?.id) ?? value.stages[0] ?? null);
+      setConfirm(false);
+      const expected = pendingStageRecovery.current;
+      if (expected && value.stages.some(item => item.version === expected.version && item.platform === expected.platform && item.schema === expected.schema && item.binary_sha256 === expected.binary_sha256)) {
+        pendingStageRecovery.current = null;
+        setError('');
+        setNotice(`The staging response was lost, but ${expected.version} was recovered from verified staged status. Activation still requires confirmation.`);
+      }
+    }).catch(error => { if (!controller.signal.aborted) setStatusError(message(error)); });
     return () => controller.abort();
   }, [refresh]);
   const run = async (operation: 'check' | 'stage' | 'apply') => {
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true); setError(''); setNotice(''); pendingStageRecovery.current = null;
     try {
       if (operation === 'check') { setConfirm(false); setChecked(null); setChecked(await api<Check>('/system/update/check', { method: 'POST', body: JSON.stringify({ version } satisfies components['schemas']['SelfUpdateVersionInput']) })); setNotice('Release signature, platform and schema verified.'); }
       if (operation === 'stage') { setStage(await api<Stage>('/system/update/stage', { method: 'POST', body: JSON.stringify({ version } satisfies components['schemas']['SelfUpdateVersionInput']) })); setNotice('Release downloaded and verified. It is staged for native verification.'); }
       if (operation === 'apply' && stage) { await api<void>('/system/update/apply', { method: 'POST', body: JSON.stringify({ stage_id: stage.id, confirm } satisfies components['schemas']['SelfUpdateApplyInput']) }); setNotice('Native activation requested. The manager may disconnect while it restarts. Refresh after it returns to check the installed version.'); setStage(null); setConfirm(false); }
-    } catch (error) { setError(message(error)); }
+    } catch (error) { setError(message(error)); if (operation === 'stage' && !(error instanceof APIError)) pendingStageRecovery.current = checked; }
     finally { setBusy(false); if (operation !== 'check') setRefresh(value => value + 1); }
   };
   return <Stack gap="lg">
     <Group justify="space-between" wrap="wrap"><Title order={1}>Manager updates</Title><Button variant="light" disabled={busy} onClick={() => setRefresh(value => value + 1)}>Refresh status</Button></Group>
     {error && <Alert color="red" role="alert">{error}</Alert>}
+    {statusError && <Alert color="red" role="alert">{statusError}</Alert>}
     {notice && <Alert color="blue" role="status">{notice}</Alert>}
     <Paper withBorder p="lg"><Stack gap="sm"><Text>Installed version: <Code>{status?.current_version || 'Checking…'}</Code></Text><Badge color={status?.activation_available ? 'green' : 'yellow'}>{status?.activation_available ? 'Native updater ready' : 'Activation unavailable'}</Badge>
       {status?.disabled_reason && <Alert color="yellow">{status.disabled_reason}</Alert>}
