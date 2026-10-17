@@ -542,37 +542,156 @@ func TestOutputNoClobberAndPathBinding(t *testing.T) {
 			t.Fatal("original destination cleanup", es, e)
 		}
 	})
-	t.Run("parent substitution detected with retained cleanup", func(t *testing.T) {
-		f := newFixture(t)
-		parent := filepath.Join(t.TempDir(), "parent")
-		if e := os.Mkdir(parent, 0700); e != nil {
-			t.Fatal(e)
+	for _, cancelAfterAttempt := range []bool{false, true} {
+		name := "parent substitution detected with retained cleanup"
+		if cancelAfterAttempt {
+			name = "parent rename cancellation with retained cleanup"
 		}
-		f.o.Output = filepath.Join(parent, "prepared")
-		moved := parent + "-moved"
-		f.hook = func(call string) {
-			if !strings.HasPrefix(call, "archive:") {
-				return
-			}
-			if e := os.Rename(parent, moved); e != nil {
-				t.Fatal(e)
-			}
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			parent := filepath.Join(t.TempDir(), "parent")
 			if e := os.Mkdir(parent, 0700); e != nil {
 				t.Fatal(e)
 			}
-			if e := os.WriteFile(filepath.Join(parent, "retain"), []byte("mine"), 0600); e != nil {
+			originalParent, e := os.Lstat(parent)
+			if e != nil {
 				t.Fatal(e)
 			}
-		}
-		if _, e := Prepare(context.Background(), f.o, f); e == nil {
-			t.Fatal("accepted substituted parent")
-		}
-		assertAbsent(t, filepath.Join(moved, "prepared"))
-		b, e := os.ReadFile(filepath.Join(parent, "retain"))
-		if e != nil || string(b) != "mine" {
-			t.Fatal("replacement touched", e)
-		}
-	})
+			guardPath := filepath.Join(parent, "caller-owned.txt")
+			if e = os.WriteFile(guardPath, []byte("preserve caller data"), 0600); e != nil {
+				t.Fatal(e)
+			}
+			originalGuard, e := os.Lstat(guardPath)
+			if e != nil {
+				t.Fatal(e)
+			}
+			f.o.Output = filepath.Join(parent, "prepared")
+			moved := parent + "-moved"
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			attempted, denied := false, false
+			var originalOutput os.FileInfo
+			f.hook = func(call string) {
+				if !strings.HasPrefix(call, "archive:") {
+					return
+				}
+				attempted = true
+				var err error
+				originalOutput, err = os.Lstat(f.o.Output)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = os.Rename(parent, moved); err != nil {
+					// Windows can reject renaming an ancestor while a descendant
+					// directory handle is retained. Accept only that permission
+					// outcome, and prove below that rename works after release.
+					if runtime.GOOS != "windows" || !os.IsPermission(err) {
+						t.Fatal(err)
+					}
+					denied = true
+					assertAbsent(t, moved)
+					for path, want := range map[string]os.FileInfo{parent: originalParent, f.o.Output: originalOutput, guardPath: originalGuard} {
+						now, statErr := os.Lstat(path)
+						if statErr != nil || !os.SameFile(now, want) {
+							t.Fatalf("denied rename changed identity: %s: %v", path, statErr)
+						}
+					}
+				} else {
+					if err = os.Mkdir(parent, 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err = os.WriteFile(filepath.Join(parent, "retain"), []byte("mine"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if cancelAfterAttempt {
+					cancel()
+				}
+			}
+			receipt, prepareErr := Prepare(ctx, f.o, f)
+			if !attempted {
+				t.Fatal("parent rename was not attempted")
+			}
+			if !denied {
+				if prepareErr == nil {
+					t.Fatal("accepted substituted parent")
+				}
+				assertAbsent(t, filepath.Join(moved, "prepared"))
+				b, err := os.ReadFile(filepath.Join(parent, "retain"))
+				if err != nil || string(b) != "mine" {
+					t.Fatal("replacement touched", err)
+				}
+				guard, err := os.ReadFile(filepath.Join(moved, "caller-owned.txt"))
+				if err != nil || string(guard) != "preserve caller data" {
+					t.Fatal("caller data changed during retained cleanup", err)
+				}
+				return
+			}
+			assertAbsent(t, moved)
+			if cancelAfterAttempt {
+				if prepareErr == nil {
+					t.Fatal("cancelled preparation succeeded after denied rename")
+				}
+				assertAbsent(t, f.o.Output)
+				entries, err := os.ReadDir(parent)
+				if err != nil || len(entries) != 1 || entries[0].Name() != "caller-owned.txt" {
+					t.Fatal("cancelled preparation left owned state", entries, err)
+				}
+			} else {
+				if prepareErr != nil {
+					t.Fatal("denied rename prevented safe preparation", prepareErr)
+				}
+				now, err := os.Lstat(f.o.Output)
+				if err != nil || !os.SameFile(now, originalOutput) {
+					t.Fatal("output identity changed", err)
+				}
+				if receipt.Version != f.o.Version || receipt.ManifestSHA256 != hash(f.body) {
+					t.Fatal("unexpected preparation receipt", receipt)
+				}
+				body, err := os.ReadFile(filepath.Join(f.o.Output, ReceiptName))
+				if err != nil || !bytes.Equal(body, wire(receipt)) {
+					t.Fatal("completion receipt mismatch", err)
+				}
+				entries, err := os.ReadDir(f.o.Output)
+				if err != nil || len(entries) != len(receipt.Members)+1 {
+					t.Fatal("unexpected completed output state", entries, err)
+				}
+				for _, member := range receipt.Members {
+					body, err := os.ReadFile(filepath.Join(f.o.Output, member.Name))
+					if err != nil || hash(body) != member.SHA256 {
+						t.Fatal("prepared member mismatch", member.Name, err)
+					}
+				}
+				assertAbsent(t, filepath.Join(f.o.Output, ".bundle"))
+			}
+			now, err := os.Lstat(parent)
+			if err != nil || !os.SameFile(now, originalParent) {
+				t.Fatal("parent identity changed", err)
+			}
+			now, err = os.Lstat(guardPath)
+			if err != nil || !os.SameFile(now, originalGuard) {
+				t.Fatal("caller file identity changed", err)
+			}
+			guard, err := os.ReadFile(guardPath)
+			if err != nil || string(guard) != "preserve caller data" {
+				t.Fatal("caller data changed after denied rename", err)
+			}
+			// A persistent ACL/privilege denial or leaked handle must not pass:
+			// exactly the same rename must work once Prepare closes its roots.
+			if err = os.Rename(parent, moved); err != nil {
+				t.Fatal("parent rename remained denied after preparation released handles", err)
+			}
+			assertAbsent(t, parent)
+			now, err = os.Lstat(moved)
+			if err != nil || !os.SameFile(now, originalParent) {
+				t.Fatal("post-release rename changed identity", err)
+			}
+			if err = os.Rename(moved, parent); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("Windows refused parent rename while roots were retained; preparation cancel=%t and post-release rename verified", cancelAfterAttempt)
+		})
+	}
 }
 
 func TestCancellationAndLatestFailures(t *testing.T) {

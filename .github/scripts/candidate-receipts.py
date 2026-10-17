@@ -54,6 +54,7 @@ def main():
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--manager", type=Path)
     parser.add_argument("--updater", type=Path)
+    parser.add_argument("--bootstrap", type=Path)
     parser.add_argument("--target", choices=("linux", "windows"))
     args = parser.parse_args()
     require(re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", args.version),
@@ -69,6 +70,8 @@ def main():
             "Receipt generation requires the declared native x64 host")
     observe(args.manager, "minecraft-ui", args.version, args.target)
     observe(args.updater, "minecraft-ui-update", args.version, args.target)
+    if args.bootstrap:
+        observe(args.bootstrap, "minecraft-ui-bootstrap", args.version, args.target)
 
 
 if __name__ == "__main__":
