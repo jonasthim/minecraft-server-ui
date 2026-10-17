@@ -170,3 +170,28 @@ artifacts before accepting Task32B or updating the implementation ledger.
 
 This evidence does not qualify games, real clients, backup/restore, other OS
 versions, production trust/signing/publication, or a stable release.
+
+## Review correction R1 — installer scratch coverage
+
+Independent source review of `8f40508..3b5b629` identified an omitted fixed
+installer path: `/usr/local/bin/minecraft-ui.new`. The Linux harness now includes
+it in the fresh-state inventory, which also drives final absence checks, and
+in the explicit owned executable cleanup command. Refusal still occurs before
+`owned=1`, so a preexisting regular file or dangling symlink is neither claimed
+nor removed. No shipping installer/native product code changed.
+
+Narrow safe regression: `python3 deploy/qualification/updater_paths_test.py -v`
+passes all three tests. It extracts only the static inventory/refusal/final
+check and fixed executable cleanup operands, maps every path into temporary
+fixture directories, and verifies regular-file/symlink refusal with preserved
+contents, detection/removal of owned partial installer output, and empty-state
+acceptance. It never executes the installer or service/account operations and
+never writes canonical host paths.
+
+Before the fix, the regular/symlink refusal cases and final absence check failed.
+With only the inventory corrected, refusal/final detection passed and cleanup
+still failed because `.new` survived. With the removal list corrected, all
+three tests pass (`Ran 3 tests ... OK`). `bash -n
+deploy/qualification/linux-updater.sh` and scoped whitespace checks also pass.
+No broad unchanged suites or native installations were repeated. Hosted updater
+qualification remains pending integrator review and execution.

@@ -20,7 +20,7 @@ for binary in "$initial" "$success" "$updater" "$qualifier" "$negative" "$peer_s
 done
 files=(
  /var/lib/minecraft-ui /var/lib/minecraft-ui-update /etc/minecraft-ui
- /usr/local/bin/minecraft-ui /usr/local/bin/minecraft-ui.next /usr/local/bin/minecraft-ui.previous
+ /usr/local/bin/minecraft-ui /usr/local/bin/minecraft-ui.new /usr/local/bin/minecraft-ui.next /usr/local/bin/minecraft-ui.previous
  /usr/local/lib/minecraft-ui /etc/sudoers.d/minecraft-ui
  /etc/systemd/system/minecraft-ui.service /etc/systemd/system/minecraft-ui.service.d
  /etc/systemd/system/minecraft@.service /etc/systemd/system/minecraft-ui-update@.service
@@ -52,7 +52,7 @@ cleanup() {
         # Catch deleted-image processes too; the Python acceptance covers exact
         # native identity during each activation and before this final cleanup.
         if pgrep -x minecraft-ui >/dev/null; then echo 'FAIL orphan manager during cleanup' >&2; status=1; fi
-        rm -f /usr/local/bin/minecraft-ui /usr/local/bin/minecraft-ui.next /usr/local/bin/minecraft-ui.previous
+        rm -f /usr/local/bin/minecraft-ui /usr/local/bin/minecraft-ui.new /usr/local/bin/minecraft-ui.next /usr/local/bin/minecraft-ui.previous
         rm -f /etc/systemd/system/minecraft-ui.service /etc/systemd/system/minecraft@.service /etc/systemd/system/minecraft-ui-update@.service /etc/systemd/system/minecraft-ui-update-recovery.service /etc/systemd/system/minecraft-ui-qualification-independent.service /etc/sudoers.d/minecraft-ui
         rm -rf /etc/systemd/system/minecraft-ui.service.d /etc/minecraft-ui /usr/local/lib/minecraft-ui /var/lib/minecraft-ui /var/lib/minecraft-ui-update
         systemctl daemon-reload || status=1
