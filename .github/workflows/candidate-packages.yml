@@ -1,0 +1,115 @@
+name: Development candidate packages
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Candidate version stamp only; no release is published
+        type: string
+        required: true
+        default: v0.0.1
+permissions:
+  contents: read
+jobs:
+  native:
+    name: Build candidate on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            goos: linux
+            extension: ''
+          - os: windows-2022
+            goos: windows
+            extension: .exe
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      CANDIDATE_VERSION: ${{ inputs.version }}
+      CANDIDATE_OS: ${{ matrix.goos }}
+      BINARY_EXTENSION: ${{ matrix.extension }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache: true
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: x64
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Validate version and native host before building
+        run: |
+          python .github/scripts/candidate-receipts.py --version "$CANDIDATE_VERSION" --validate-only
+          test "$RUNNER_ARCH" = X64
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(go env GOHOSTOS)" = "$CANDIDATE_OS"
+          test "$(go env GOOS)" = "$CANDIDATE_OS"
+          test "$(go env GOARCH)" = amd64
+      - name: Build embedded UI and stamped native binaries
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+          mkdir -p candidate-input
+          go build -trimpath -ldflags "-s -w -X main.version=$CANDIDATE_VERSION" -o "candidate-input/minecraft-ui-$CANDIDATE_OS-amd64$BINARY_EXTENSION" ./cmd/minecraft-ui
+          go build -trimpath -ldflags "-s -w -X main.version=$CANDIDATE_VERSION" -o "candidate-input/minecraft-ui-update-$CANDIDATE_OS-amd64$BINARY_EXTENSION" ./cmd/minecraft-ui-update
+      - name: Execute native version and schema probes and bind receipts
+        run: |
+          python .github/scripts/candidate-receipts.py --version "$CANDIDATE_VERSION" --target "$CANDIDATE_OS" --manager "candidate-input/minecraft-ui-$CANDIDATE_OS-amd64$BINARY_EXTENSION" --updater "candidate-input/minecraft-ui-update-$CANDIDATE_OS-amd64$BINARY_EXTENSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-input-${{ matrix.goos }}-${{ github.sha }}
+          path: candidate-input/*
+          if-no-files-found: error
+          retention-days: 7
+  package:
+    name: Verify and retain development candidate
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CANDIDATE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache: true
+          cache-dependency-path: go.sum
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: candidate-input-*-${{ github.sha }}
+          merge-multiple: true
+          path: candidate-input
+      - name: Verify producer and shipping verifier regression cases
+        run: go test -count=1 -timeout=5m ./release/...
+      - name: Produce signed development artifacts from native receipts
+        shell: bash
+        run: |
+          candidate_schema=$(python3 -c 'import json; print(json.load(open("candidate-input/minecraft-ui-linux-amd64.version.json"))["schema"])')
+          candidate_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          go run ./release/cmd/package --source . --out candidate-output --version "$CANDIDATE_VERSION" --repository jonasthim/minecraft-server-ui --schema "$candidate_schema" --published-at "$candidate_time" --linux-manager candidate-input/minecraft-ui-linux-amd64 --windows-manager candidate-input/minecraft-ui-windows-amd64.exe --linux-updater candidate-input/minecraft-ui-update-linux-amd64 --windows-updater candidate-input/minecraft-ui-update-windows-amd64.exe --development
+          go run ./release/cmd/verify --artifacts candidate-output --trust-file candidate-output/development-trust.json --repository jonasthim/minecraft-server-ui --version "$CANDIDATE_VERSION" --schema "$candidate_schema"
+          git rev-parse HEAD > candidate-output/source-commit.txt
+          printf 'Native binary version probes and package verification only; not installed/game/release qualification.\n' > candidate-output/evidence-scope.txt
+      - name: Retain development artifacts with public fixture trust only
+        uses: actions/upload-artifact@v4
+        with:
+          name: development-candidate-${{ inputs.version }}-${{ github.sha }}
+          path: candidate-output/*
+          if-no-files-found: error
+          retention-days: 14
+# No tag trigger, production private key, write permission or publication step.

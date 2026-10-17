@@ -3,12 +3,21 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/jonasthim/minecraft-server-ui/internal/selfupdate"
 	"os"
 	"time"
+
+	"github.com/jonasthim/minecraft-server-ui/internal/selfupdate"
 )
 
+var version = "0.0.0-dev"
+
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "version" {
+		if _, err := fmt.Fprintf(os.Stdout, "minecraft-ui-update %s\n", version); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	if len(os.Args) < 2 || os.Args[1] != "service" {
 		cancel()
