@@ -363,6 +363,7 @@ class API:
             "Lifecycle activation failed; inspect job phase and current process state before retrying.": "activation_failed",
             "Lifecycle process identity failed; inspect job phase and current process state before retrying.": "process_identity_failed",
             "Native stop did not complete cleanly; inspect current process state and launcher recovery details.": "native_stop_unclean",
+            "Native stop OS error: unavailable.": "stop_native_os_error_unavailable",
             "Native stop diagnostic: lock_wait_failed.": "stop_lock_wait_failed",
             "Native stop diagnostic: initial_probe_failed.": "stop_initial_probe_failed",
             "Native stop diagnostic: process_probe_failed.": "stop_process_probe_failed",
@@ -396,6 +397,10 @@ class API:
             text = line.get("message") if isinstance(line, dict) else None
             if isinstance(text, str) and len(text) <= 8192 and text in messages:
                 codes.add(messages[text])
+            elif isinstance(text, str) and len(text) <= 32:
+                match = re.fullmatch(r"Native stop OS error: ([1-9][0-9]{0,4})\.", text)
+                if match and int(match.group(1)) <= 65535:
+                    codes.add("stop_native_os_error_" + match.group(1))
         return sorted(codes) or ["unclassified"]
 
     def console_diagnostics(self):

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -261,6 +262,47 @@ func TestStopFailureCategoryIsFiniteAndPreservesCause(t *testing.T) {
 	var nilFailure *stopFailure
 	if got := StopFailureCategory(nilFailure); got != StopFailureUnknown {
 		t.Fatalf("typed nil category mapped to %q", got)
+	}
+}
+
+func TestStopNativeErrorCodeRequiresClassifiedBoundedNativeError(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code uint32
+		ok   bool
+	}{
+		{wrapStopFailure(StopFailureProcessProbe, fmt.Errorf("private detail: %w", syscall.Errno(5))), 5, true},
+		{wrapStopFailure(StopFailureProcessProbe, syscall.Errno(65535)), 65535, true},
+		{wrapStopFailure(StopFailureProcessProbe, syscall.Errno(65536)), 0, false},
+		{wrapStopFailure(StopFailureProcessProbe, syscall.Errno(0)), 0, false},
+		{wrapStopFailure(StopFailureProcessProbe, errors.New("native error 5: password=private")), 0, false},
+		{syscall.Errno(5), 0, false},
+		{nil, 0, false},
+		{(*stopFailure)(nil), 0, false},
+	} {
+		code, ok := StopNativeErrorCode(tc.err)
+		if code != tc.code || ok != tc.ok {
+			t.Fatalf("native code=(%d,%v), want (%d,%v)", code, ok, tc.code, tc.ok)
+		}
+	}
+}
+
+func TestStopDeliveryFailureNativeCodeBelongsToCompletion(t *testing.T) {
+	delivery := syscall.Errno(10060)
+	completion := wrapStopFailure(StopFailureProcessProbe, fmt.Errorf("private probe detail: %w", syscall.Errno(5)))
+	err := stopDeliveryFailure(delivery, completion)
+	if StopFailureCategory(err) != StopFailureControlLostProbe {
+		t.Fatal("completion category was lost")
+	}
+	if code, ok := StopNativeErrorCode(err); !ok || code != 5 {
+		t.Fatalf("native code was attributed to the transport: (%d,%v)", code, ok)
+	}
+	if !errors.Is(err, delivery) || !errors.Is(err, syscall.Errno(5)) {
+		t.Fatal("original causes were lost")
+	}
+	withoutNative := stopDeliveryFailure(delivery, wrapStopFailure(StopFailureMissingFinalMetadata, errors.New("missing final state")))
+	if _, ok := StopNativeErrorCode(withoutNative); ok {
+		t.Fatal("transport errno was used for completion without a native error")
 	}
 }
 

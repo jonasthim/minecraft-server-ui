@@ -14,7 +14,11 @@ import (
 )
 
 func authorizeMaintenance() error {
-	token := windows.GetCurrentProcessToken()
+	var token windows.Token
+	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY|windows.TOKEN_DUPLICATE, &token); err != nil {
+		return errors.New("administrator token could not be verified")
+	}
+	defer windows.CloseHandle(windows.Handle(token))
 	user, err := token.GetTokenUser()
 	if err != nil {
 		return errors.New("administrator token could not be verified")
@@ -29,11 +33,23 @@ func authorizeMaintenance() error {
 	if err != nil {
 		return errors.New("administrator membership could not be verified")
 	}
-	member, err := token.IsMember(admin)
+	membershipToken, err := duplicateMaintenanceMembershipToken(token)
+	if err != nil {
+		return errors.New("administrator membership could not be verified")
+	}
+	defer windows.CloseHandle(windows.Handle(membershipToken))
+	member, err := membershipToken.IsMember(admin)
 	if err != nil || !member {
 		return errors.New("elevated administrator token is required")
 	}
 	return nil
+}
+
+func duplicateMaintenanceMembershipToken(processToken windows.Token) (windows.Token, error) {
+	var membershipToken windows.Token
+	err := windows.DuplicateTokenEx(processToken, windows.TOKEN_QUERY, nil,
+		windows.SecurityIdentification, windows.TokenImpersonation, &membershipToken)
+	return membershipToken, err
 }
 
 func runningImageHash(ctx context.Context) (string, error) {

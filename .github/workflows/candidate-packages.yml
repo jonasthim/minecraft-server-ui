@@ -194,6 +194,59 @@ jobs:
           $initializeNeedle = '        Initialize-PrivateIO'
           if (($source.Split(@($initializeNeedle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 private IO diagnostic seam drift' }
           $source = $source.Replace($initializeNeedle,'        $script:OUTER_DIAGNOSTIC_STAGE = ''initialize_private_io'''+[Environment]::NewLine+$initializeNeedle)
+          $directoryDiagnosticTypeNeedle = '    public static class PrivateIO {'
+          if (($source.Split(@($directoryDiagnosticTypeNeedle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 directory diagnostic type seam drift' }
+          $directoryDiagnosticTypes = @(
+              '    public sealed class DirectoryCleanupFailure : IOException {'
+              '        public readonly int Stage; public readonly int Api; public readonly int Code;'
+              '        public DirectoryCleanupFailure(int stage,int api,int code) : base("private scratch operation refused") { Stage=stage; Api=api; Code=code; }'
+              '    }'
+              '    sealed class NativeOperationFailure : IOException {'
+              '        public readonly int Api; public readonly int Code;'
+              '        public NativeOperationFailure(int api,int code) : base("private scratch operation refused") { Api=api; Code=code; }'
+              '    }'
+              '    public static class PrivateIO {'
+          ) -join [Environment]::NewLine
+          $source = $source.Replace($directoryDiagnosticTypeNeedle,$directoryDiagnosticTypes)
+          $deleteOwnedNeedle = @(
+              '        public static void DeleteOwned(string path, string identity, string sddl, bool directory) {'
+              '            // A renamed/replaced path is never deleted. Security and identity'
+              '            // are checked on the exact DELETE handle used for disposition.'
+              '            using (SafeFileHandle handle=Open(path,Delete|ReadControl|ReadAttributes,7,3,directory,null)) {'
+              '                AssertBound(handle,identity,sddl,directory);'
+              '                Disposition disposition=new Disposition(); disposition.DeleteFile=true;'
+              '                if (!SetFileInformationByHandle(handle,4,ref disposition,1)) throw Failure();'
+              '            }'
+              '        }'
+          ) -join [Environment]::NewLine
+          $deleteOwnedReplacement = @(
+              '        public static void DeleteOwned(string path, string identity, string sddl, bool directory) {'
+              '            SafeFileHandle handle;'
+              '            try { handle=Open(path,Delete|ReadControl|ReadAttributes,7,3,directory,null); }'
+              '            catch (NativeOperationFailure failure) { throw new DirectoryCleanupFailure(1,failure.Api,failure.Code); }'
+              '            catch { throw new DirectoryCleanupFailure(1,6,-1); }'
+              '            using (handle) {'
+              '                try { AssertBound(handle,identity,sddl,directory); }'
+              '                catch (NativeOperationFailure failure) { throw new DirectoryCleanupFailure(2,failure.Api,failure.Code); }'
+              '                catch { throw new DirectoryCleanupFailure(2,6,-1); }'
+              '                Disposition disposition=new Disposition(); disposition.DeleteFile=true;'
+              '                if (!SetFileInformationByHandle(handle,4,ref disposition,1)) { int code=Marshal.GetLastWin32Error(); throw new DirectoryCleanupFailure(3,4,code); }'
+              '            }'
+              '        }'
+          ) -join [Environment]::NewLine
+          $directoryDiagnosticSeams = @(
+              @{ needle = '                if (handle.IsInvalid) { handle.Dispose(); throw Failure(); }'; replacement = '                if (handle.IsInvalid) { int code=Marshal.GetLastWin32Error(); handle.Dispose(); throw new NativeOperationFailure(1,code); }' },
+              @{ needle = '            if (!GetFileInformationByHandle(handle,out info) || (info.Attributes & Reparse) != 0 || ((info.Attributes & Directory) != 0) != directory || (!directory && info.Links != 1)) throw Failure();'; replacement = @('            if (!GetFileInformationByHandle(handle,out info)) throw new NativeOperationFailure(2,Marshal.GetLastWin32Error());','            if ((info.Attributes & Reparse) != 0 || ((info.Attributes & Directory) != 0) != directory || (!directory && info.Links != 1)) throw new NativeOperationFailure(5,-1);') -join [Environment]::NewLine },
+              @{ needle = '            if (result != 0) throw Failure();'; replacement = '            if (result != 0) throw new NativeOperationFailure(3,(int)result);' },
+              @{ needle = '                if (actual.Owner == null || !actual.Owner.Equals(expected.Owner) || (actual.ControlFlags & ControlFlags.DiscretionaryAclProtected)==0) throw Failure();'; replacement = '                if (actual.Owner == null || !actual.Owner.Equals(expected.Owner) || (actual.ControlFlags & ControlFlags.DiscretionaryAclProtected)==0) throw new NativeOperationFailure(5,-1);' },
+              @{ needle = '                if (a.Length != e.Length) throw Failure();'; replacement = '                if (a.Length != e.Length) throw new NativeOperationFailure(5,-1);' },
+              @{ needle = '                for (int i=0;i<a.Length;i++) if (!String.Equals(a[i],e[i],StringComparison.Ordinal)) throw Failure();'; replacement = '                for (int i=0;i<a.Length;i++) if (!String.Equals(a[i],e[i],StringComparison.Ordinal)) throw new NativeOperationFailure(5,-1);' },
+              @{ needle = $deleteOwnedNeedle; replacement = $deleteOwnedReplacement }
+          )
+          foreach ($seam in $directoryDiagnosticSeams) {
+              if (($source.Split(@($seam.needle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 directory diagnostic API seam drift' }
+              $source = $source.Replace($seam.needle,$seam.replacement)
+          }
           $childDeleteReplacement = @(
               '                if ($ownedFiles.ContainsKey($name)) {'
               '                    if ($name -ceq ''trust.json'') { $script:OUTER_DIAGNOSTIC_STAGE = ''delete_child_trust'' }'
@@ -233,7 +286,7 @@ jobs:
               '                ''System.Exception'' { ''exception'' }'
               '                default { ''other'' }'
               '            }'
-              '            $cleanupInnerType = ''none''; $cleanupInnerWin32 = -1'
+              '            $cleanupInnerType = ''none''; $cleanupInnerWin32 = -1; $cleanupNativeStage = ''none''; $cleanupNativeApi = ''none''; $cleanupNativeCode = -1'
               '            $innerException = $cleanupException.InnerException'
               '            for ($depth = 0; $depth -lt 3 -and $null -ne $innerException; $depth++) {'
               '                if ($cleanupInnerType -eq ''none'') {'
@@ -250,6 +303,7 @@ jobs:
               '                    }'
               '                }'
               '                if ($innerException -is [System.ComponentModel.Win32Exception] -and $cleanupInnerWin32 -eq -1) { try { $candidateCode = [int]$innerException.NativeErrorCode; if ($candidateCode -ge 0 -and $candidateCode -le 65535) { $cleanupInnerWin32 = $candidateCode } } catch {} }'
+              '                if ($script:OUTER_DIAGNOSTIC_STAGE -eq ''delete_directory'' -and $innerException.GetType().FullName -ceq ''MinecraftUiOuter.DirectoryCleanupFailure'') { try { $stageCode = [int]$innerException.Stage; $apiCode = [int]$innerException.Api; $nativeCode = [int]$innerException.Code; if ($stageCode -ge 1 -and $stageCode -le 3 -and $apiCode -ge 1 -and $apiCode -le 6 -and (($nativeCode -eq -1) -or ($nativeCode -ge 0 -and $nativeCode -le 65535))) { $cleanupNativeStage = @(''dir_open'',''dir_validate'',''dir_disposition'')[$stageCode-1]; $cleanupNativeApi = @(''create_file'',''get_file_information'',''get_security_info'',''set_file_information'',''validation'',''managed_failure'')[$apiCode-1]; $cleanupNativeCode = $nativeCode } } catch {} }'
               '                try { $innerException = $innerException.InnerException } catch { $innerException = $null }'
               '            }'
               '            $cleanupLine = 0'
@@ -258,7 +312,7 @@ jobs:
               '            try { $cleanupHResult = ''{0:X8}'' -f ([long]$cleanupException.HResult -band 4294967295) } catch {}'
               '            $cleanupWin32 = -1'
               '            if ($cleanupException -is [System.ComponentModel.Win32Exception]) { try { $candidateCode = [int]$cleanupException.NativeErrorCode; if ($candidateCode -ge 0 -and $candidateCode -le 65535) { $cleanupWin32 = $candidateCode } } catch {} }'
-              '            $cleanupDiagnostic = [ordered]@{ stage=$script:OUTER_DIAGNOSTIC_STAGE; type=$cleanupType; inner_type=$cleanupInnerType; line=$cleanupLine; hresult=$cleanupHResult; win32=$cleanupWin32; inner_win32=$cleanupInnerWin32; bound=$script:OUTER_DIAGNOSTIC_BOUND }'
+              '            $cleanupDiagnostic = [ordered]@{ stage=$script:OUTER_DIAGNOSTIC_STAGE; type=$cleanupType; inner_type=$cleanupInnerType; line=$cleanupLine; hresult=$cleanupHResult; win32=$cleanupWin32; inner_win32=$cleanupInnerWin32; native_stage=$cleanupNativeStage; native_api=$cleanupNativeApi; native_code=$cleanupNativeCode; bound=$script:OUTER_DIAGNOSTIC_BOUND }'
               '            try { [System.IO.File]::WriteAllText($env:OUTER_TEST_CLEANUP_DIAGNOSTICS,(ConvertTo-Json -InputObject $cleanupDiagnostic -Compress)) } catch {}'
               '            [Console]::Error.WriteLine(''private bootstrap scratch cleanup refused'')'
               '        }'
@@ -282,7 +336,7 @@ jobs:
               '        ''System.Exception'' { ''exception'' }'
               '        default { ''other'' }'
               '    }'
-              '    $cleanupInnerType = ''none''; $cleanupInnerWin32 = -1'
+              '    $cleanupInnerType = ''none''; $cleanupInnerWin32 = -1; $cleanupNativeStage = ''none''; $cleanupNativeApi = ''none''; $cleanupNativeCode = -1'
               '    $innerException = $cleanupException.InnerException'
               '    for ($depth = 0; $depth -lt 3 -and $null -ne $innerException; $depth++) {'
               '        if ($cleanupInnerType -eq ''none'') {'
@@ -299,6 +353,7 @@ jobs:
               '            }'
               '        }'
               '        if ($innerException -is [System.ComponentModel.Win32Exception] -and $cleanupInnerWin32 -eq -1) { try { $candidateCode = [int]$innerException.NativeErrorCode; if ($candidateCode -ge 0 -and $candidateCode -le 65535) { $cleanupInnerWin32 = $candidateCode } } catch {} }'
+              '        if ($script:OUTER_DIAGNOSTIC_STAGE -eq ''delete_directory'' -and $innerException.GetType().FullName -ceq ''MinecraftUiOuter.DirectoryCleanupFailure'') { try { $stageCode = [int]$innerException.Stage; $apiCode = [int]$innerException.Api; $nativeCode = [int]$innerException.Code; if ($stageCode -ge 1 -and $stageCode -le 3 -and $apiCode -ge 1 -and $apiCode -le 6 -and (($nativeCode -eq -1) -or ($nativeCode -ge 0 -and $nativeCode -le 65535))) { $cleanupNativeStage = @(''dir_open'',''dir_validate'',''dir_disposition'')[$stageCode-1]; $cleanupNativeApi = @(''create_file'',''get_file_information'',''get_security_info'',''set_file_information'',''validation'',''managed_failure'')[$apiCode-1]; $cleanupNativeCode = $nativeCode } } catch {} }'
               '        try { $innerException = $innerException.InnerException } catch { $innerException = $null }'
               '    }'
               '    $cleanupLine = 0'
@@ -307,7 +362,7 @@ jobs:
               '    try { $cleanupHResult = ''{0:X8}'' -f ([long]$cleanupException.HResult -band 4294967295) } catch {}'
               '    $cleanupWin32 = -1'
               '    if ($cleanupException -is [System.ComponentModel.Win32Exception]) { try { $candidateCode = [int]$cleanupException.NativeErrorCode; if ($candidateCode -ge 0 -and $candidateCode -le 65535) { $cleanupWin32 = $candidateCode } } catch {} }'
-              '    $cleanupDiagnostic = [ordered]@{ stage=$script:OUTER_DIAGNOSTIC_STAGE; type=$cleanupType; inner_type=$cleanupInnerType; line=$cleanupLine; hresult=$cleanupHResult; win32=$cleanupWin32; inner_win32=$cleanupInnerWin32; bound=$script:OUTER_DIAGNOSTIC_BOUND }'
+              '    $cleanupDiagnostic = [ordered]@{ stage=$script:OUTER_DIAGNOSTIC_STAGE; type=$cleanupType; inner_type=$cleanupInnerType; line=$cleanupLine; hresult=$cleanupHResult; win32=$cleanupWin32; inner_win32=$cleanupInnerWin32; native_stage=$cleanupNativeStage; native_api=$cleanupNativeApi; native_code=$cleanupNativeCode; bound=$script:OUTER_DIAGNOSTIC_BOUND }'
               '    try { [System.IO.File]::WriteAllText($env:OUTER_TEST_CLEANUP_DIAGNOSTICS,(ConvertTo-Json -InputObject $cleanupDiagnostic -Compress)) } catch {}'
               '    [Console]::Error.WriteLine(''private bootstrap handle cleanup refused'')'
               '}'
@@ -371,7 +426,7 @@ jobs:
                               $aclProtected = [bool]$acl.AreAccessRulesProtected
                               $currentSID = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
                               $ownerSID = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-                              $ownerMatches = ($ownerSID -ceq $currentSID)
+                              $ownerMatches = (($ownerSID -ceq $currentSID) -or ($ownerSID -ceq 'S-1-5-32-544'))
                           } catch { $aclReadFailed = $true }
                           try {
                               $enumerator = [System.IO.Directory]::EnumerateFileSystemEntries($scratch).GetEnumerator()
@@ -391,7 +446,7 @@ jobs:
                       }
                   }
               } catch { $residualReadFailed = $true }
-              $cleanupStage = 'unavailable'; $cleanupType = 'unavailable'; $cleanupInnerType = 'unavailable'; $cleanupLine = 0; $cleanupHResult = '00000000'; $cleanupWin32 = -1; $cleanupInnerWin32 = -1; $cleanupBound = $false
+              $cleanupStage = 'unavailable'; $cleanupType = 'unavailable'; $cleanupInnerType = 'unavailable'; $cleanupLine = 0; $cleanupHResult = '00000000'; $cleanupWin32 = -1; $cleanupInnerWin32 = -1; $cleanupNativeStage = 'none'; $cleanupNativeApi = 'none'; $cleanupNativeCode = -1; $cleanupBound = $false
               if (Test-Path -LiteralPath $env:OUTER_TEST_CLEANUP_DIAGNOSTICS) {
                   try {
                       $cleanup = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($env:OUTER_TEST_CLEANUP_DIAGNOSTICS))
@@ -402,6 +457,14 @@ jobs:
                       if ([string]$cleanup.hresult -cmatch '^[0-9A-F]{8}$') { $cleanupHResult = $cleanup.hresult }
                       try { $candidateCleanupWin32 = [int]$cleanup.win32; if ($candidateCleanupWin32 -ge -1 -and $candidateCleanupWin32 -le 65535) { $cleanupWin32 = $candidateCleanupWin32 } } catch {}
                       try { $candidateCleanupInnerWin32 = [int]$cleanup.inner_win32; if ($candidateCleanupInnerWin32 -ge -1 -and $candidateCleanupInnerWin32 -le 65535) { $cleanupInnerWin32 = $candidateCleanupInnerWin32 } } catch {}
+                      $knownNativeStages = @('dir_open','dir_validate','dir_disposition')
+                      $knownNativeApis = @('create_file','get_file_information','get_security_info','set_file_information','validation','managed_failure')
+                      try {
+                          $candidateCleanupNativeCode = [int]$cleanup.native_code
+                          if ($cleanupStage -eq 'delete_directory' -and $cleanup.native_stage -cin $knownNativeStages -and $cleanup.native_api -cin $knownNativeApis -and $candidateCleanupNativeCode -ge -1 -and $candidateCleanupNativeCode -le 65535) {
+                              $cleanupNativeStage = $cleanup.native_stage; $cleanupNativeApi = $cleanup.native_api; $cleanupNativeCode = $candidateCleanupNativeCode
+                          }
+                      } catch {}
                       if ($cleanup.bound -is [bool]) { $cleanupBound = $cleanup.bound }
                   } catch { $cleanupType = 'unavailable' }
               }
@@ -409,7 +472,7 @@ jobs:
               $handleRefused = $Captured.Contains('private bootstrap handle cleanup refused')
               $reasonLabel = 'unknown'
               if ($Reason -cin @('unexpected_exit','scratch_leak')) { $reasonLabel = $Reason }
-              [Console]::Error.WriteLine(('PowerShell 5.1 assertion diagnostic: mode='+$modeLabel+' reason='+$reasonLabel+' exit='+$boundedExit+' scratch_exists='+$scratchExists+' scratch_path_readable='+$scratchPathReadable+' acl_readable='+$aclReadable+' acl_read_failed='+$aclReadFailed+' acl_protected='+$aclProtected+' owner_matches='+$ownerMatches+' residual_count='+$entryCount+' residual_overflow='+$entryOverflow+' residual_trust='+$residualTrust+' residual_binary='+$residualBinary+' residual_result='+$residualResult+' residual_error='+$residualError+' residual_unknown='+$residualUnknown+' residual_read_failed='+$residualReadFailed+' scratch_cleanup_refused='+$scratchRefused+' handle_cleanup_refused='+$handleRefused+' cleanup_stage='+$cleanupStage+' cleanup_type='+$cleanupType+' cleanup_inner_type='+$cleanupInnerType+' cleanup_line='+$cleanupLine+' cleanup_hresult='+$cleanupHResult+' cleanup_win32='+$cleanupWin32+' cleanup_inner_win32='+$cleanupInnerWin32+' bound='+$cleanupBound))
+              [Console]::Error.WriteLine(('PowerShell 5.1 assertion diagnostic: mode='+$modeLabel+' reason='+$reasonLabel+' exit='+$boundedExit+' scratch_exists='+$scratchExists+' scratch_path_readable='+$scratchPathReadable+' acl_readable='+$aclReadable+' acl_read_failed='+$aclReadFailed+' acl_protected='+$aclProtected+' owner_matches='+$ownerMatches+' residual_count='+$entryCount+' residual_overflow='+$entryOverflow+' residual_trust='+$residualTrust+' residual_binary='+$residualBinary+' residual_result='+$residualResult+' residual_error='+$residualError+' residual_unknown='+$residualUnknown+' residual_read_failed='+$residualReadFailed+' scratch_cleanup_refused='+$scratchRefused+' handle_cleanup_refused='+$handleRefused+' cleanup_stage='+$cleanupStage+' cleanup_type='+$cleanupType+' cleanup_inner_type='+$cleanupInnerType+' cleanup_line='+$cleanupLine+' cleanup_hresult='+$cleanupHResult+' cleanup_win32='+$cleanupWin32+' cleanup_inner_win32='+$cleanupInnerWin32+' cleanup_native_stage='+$cleanupNativeStage+' cleanup_native_api='+$cleanupNativeApi+' cleanup_native_code='+$cleanupNativeCode+' bound='+$cleanupBound))
           }
           '@
           $testSource = $testSource.Replace($loopNeedle,$diagnosticHelper+$loopNeedle)

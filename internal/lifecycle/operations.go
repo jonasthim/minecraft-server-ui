@@ -450,6 +450,11 @@ func (s *Service) stop(ctx context.Context, e *jobs.Execution, in Request) error
 				if message := stopFailureLogMessage(category); message != "" {
 					logCtx, logCancel := e.CleanupContext()
 					_ = e.Log(logCtx, message)
+					if code, ok := supervisor.StopNativeErrorCode(err); ok {
+						_ = e.Log(logCtx, fmt.Sprintf("Native stop OS error: %d.", code))
+					} else {
+						_ = e.Log(logCtx, "Native stop OS error: unavailable.")
+					}
 					logCancel()
 				}
 			}

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,13 +36,35 @@ func inspectIdentityUsing(ctx context.Context, id domain.ProcessIdentity, read f
 	}
 	result, e := broker(ctx, id)
 	if e != nil {
-		return start, "", "", e
+		return reconcileInspectionFailure(ctx, id, start, exe, cwd, e, read)
 	}
 	if e = validateBrokerIdentity(id, result); e != nil {
-		return start, "", "", e
+		return reconcileInspectionFailure(ctx, id, start, exe, cwd, e, read)
 	}
 	return result.StartIdentity, result.Executable, result.WorkingDir, nil
 }
+
+// A privileged inspection can fail after the JVM exits, even when the initial
+// unprivileged proc read succeeded. One direct read may conclusively establish
+// that the original process ended; every ambiguous result keeps the broker or
+// validation error so a live process never bypasses isolation proof.
+func reconcileInspectionFailure(ctx context.Context, id domain.ProcessIdentity, start, exe, cwd string, original error, read func(int) (string, string, string, error)) (string, string, string, error) {
+	if ctx.Err() != nil || errors.Is(original, context.Canceled) || errors.Is(original, context.DeadlineExceeded) {
+		return start, exe, cwd, original
+	}
+	currentStart, currentExe, currentCwd, err := read(id.PID)
+	if ctx.Err() != nil {
+		return start, exe, cwd, original
+	}
+	if currentStart != "" && currentStart != id.StartIdentity {
+		return currentStart, currentExe, currentCwd, nil
+	}
+	if IsMissingProcess(err) {
+		return currentStart, currentExe, currentCwd, err
+	}
+	return start, exe, cwd, original
+}
+
 func readBrokerIdentity(ctx context.Context, id domain.ProcessIdentity) (NativeInspection, error) {
 	for _, path := range []string{"/usr/local/lib/minecraft-ui/unitctl", "/usr/local/bin/minecraft-ui"} {
 		if e := safeBrokerPath(path); e != nil {

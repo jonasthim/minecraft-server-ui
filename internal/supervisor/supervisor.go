@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
@@ -51,8 +52,9 @@ const (
 )
 
 type stopFailure struct {
-	category StopFailureCode
-	err      error
+	category    StopFailureCode
+	err         error
+	nativeCause error
 }
 
 func (e *stopFailure) Error() string { return e.err.Error() }
@@ -88,6 +90,27 @@ func wrapStopFailure(category StopFailureCode, err error) error {
 		return nil
 	}
 	return &stopFailure{category: category, err: err}
+}
+
+// StopNativeErrorCode returns a bounded native error number only for a known
+// Stop failure. Error text is never a diagnostic source.
+func StopNativeErrorCode(err error) (uint32, bool) {
+	if StopFailureCategory(err) == StopFailureUnknown {
+		return 0, false
+	}
+	var failure *stopFailure
+	if !errors.As(err, &failure) || failure == nil {
+		return 0, false
+	}
+	cause := failure.err
+	if failure.nativeCause != nil {
+		cause = failure.nativeCause
+	}
+	var code syscall.Errno
+	if !errors.As(cause, &code) || code == 0 || uint64(code) > 65535 {
+		return 0, false
+	}
+	return uint32(code), true
 }
 
 type Observation struct {
@@ -352,8 +375,17 @@ func (s *Supervisor) reconcileStopDeliveryFailure(ctx context.Context, id domain
 	if err := s.waitExit(wait, id); err == nil {
 		return nil
 	} else {
-		category := stopControlLostCategory(StopFailureCategory(err))
-		return wrapStopFailure(category, domain.Wrap(domain.CodeUnavailable, "stop delivery failed and clean completion was not confirmed", errors.Join(deliveryErr, err)))
+		return stopDeliveryFailure(deliveryErr, err)
+	}
+}
+
+func stopDeliveryFailure(deliveryErr, completionErr error) error {
+	return &stopFailure{
+		category: stopControlLostCategory(StopFailureCategory(completionErr)),
+		err:      domain.Wrap(domain.CodeUnavailable, "stop delivery failed and clean completion was not confirmed", errors.Join(deliveryErr, completionErr)),
+		// Attribute the native code to the completion failure that determined the
+		// category, while retaining both original causes for errors.Is/As.
+		nativeCause: completionErr,
 	}
 }
 
