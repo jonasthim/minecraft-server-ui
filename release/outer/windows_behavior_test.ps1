@@ -62,6 +62,8 @@ public static class PrivateIO {
         public static int TestDispositionFailures;
         public static int TestDispositionError;
         public static int TestDispositionSkip;
+        public static int TestDispositionInjected;
+        public static string TestDispositionMarker;
 '@)
 $nativeDispositionImport = '        [DllImport("kernel32.dll", EntryPoint="SetFileInformationByHandle", SetLastError=true)]' + "`n" + '        static extern bool NativeSetFileInformationByHandle(SafeFileHandle handle, uint kind, ref Disposition information, uint size);'
 $source = $source.Replace($dispositionImport,$nativeDispositionImport)
@@ -71,7 +73,7 @@ $source = $source.Replace('        [DllImport("kernel32.dll")]', @'
         static extern void SetLastError(uint error);
         static bool SetFileInformationByHandle(SafeFileHandle handle, uint kind, ref Disposition information, uint size) {
             if (TestDispositionSkip > 0) { TestDispositionSkip--; return NativeSetFileInformationByHandle(handle,kind,ref information,size); }
-            if (TestDispositionFailures > 0) { TestDispositionFailures--; SetLastError((uint)TestDispositionError); return false; }
+            if (TestDispositionFailures > 0) { TestDispositionFailures--; TestDispositionInjected++; if (TestDispositionMarker != null) System.IO.File.WriteAllText(TestDispositionMarker,TestDispositionInjected.ToString(System.Globalization.CultureInfo.InvariantCulture)); SetLastError((uint)TestDispositionError); return false; }
             return NativeSetFileInformationByHandle(handle,kind,ref information,size);
         }
         [DllImport("kernel32.dll")]
@@ -160,6 +162,7 @@ if ($env:OUTER_TEST_MODE -in @('delete-pending-child','parent-substitution','cha
     [System.IO.File]::WriteAllText($transientPath,'transient child')
     $global:outerTransientHandle = [System.IO.File]::Open($transientPath,[System.IO.FileMode]::Open,[System.IO.FileAccess]::ReadWrite,[System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
     [System.IO.File]::Delete($transientPath)
+    if ($global:outerTransientHandle.SafeFileHandle.IsClosed -or (Test-Path -LiteralPath $transientPath)) { throw 'delete-pending child fixture did not retain its shared handle after path deletion' }
     [MinecraftUiOuter.PrivateIO]::RetryPauseForTest = [System.Action]{
         $global:outerTransientHandle.Dispose()
         $global:outerTransientHandle = $null
@@ -178,10 +181,14 @@ if ($env:OUTER_TEST_MODE -in @('delete-pending-child','parent-substitution','cha
         [System.IO.File]::WriteAllText($env:OUTER_TEST_RETRY_MARKER,'retry reached')
     }
 }
+if ($env:OUTER_TEST_MODE -in @('delete-pending-child','parent-substitution','changed-directory-acl','non145-file-disposition','non145-directory-disposition')) {
+    [MinecraftUiOuter.PrivateIO]::TestDispositionFailures = 1
+    [MinecraftUiOuter.PrivateIO]::TestDispositionError = 145
+    [MinecraftUiOuter.PrivateIO]::TestDispositionMarker = $env:OUTER_TEST_DISPOSITION_MARKER
+    if ($env:OUTER_TEST_MODE -in @('delete-pending-child','parent-substitution','changed-directory-acl','non145-directory-disposition')) { [MinecraftUiOuter.PrivateIO]::TestDispositionSkip = 4 }
+}
 if ($env:OUTER_TEST_MODE -in @('non145-file-disposition','non145-directory-disposition')) {
     [MinecraftUiOuter.PrivateIO]::TestDispositionError = 5
-    [MinecraftUiOuter.PrivateIO]::TestDispositionFailures = 1
-    if ($env:OUTER_TEST_MODE -eq 'non145-directory-disposition') { [MinecraftUiOuter.PrivateIO]::TestDispositionSkip = 4 }
 }
 if ($env:OUTER_TEST_MODE -eq 'changed-child-owner') {
     $security = Get-Acl -LiteralPath $trustPath
@@ -217,6 +224,7 @@ try {
         $env:OUTER_TEST_SCRATCH = [System.IO.Path]::Combine($root,($mode+'.scratch'))
         $env:OUTER_TEST_ACLS = [System.IO.Path]::Combine($root,($mode+'.acls'))
         $env:OUTER_TEST_RETRY_MARKER = [System.IO.Path]::Combine($root,($mode+'.retry'))
+        $env:OUTER_TEST_DISPOSITION_MARKER = [System.IO.Path]::Combine($root,($mode+'.disposition'))
         $output = [System.IO.Path]::Combine($root,'literal $(Write-Output PWNED); output')
         $version = 'latest'
         if ($mode -eq 'malicious-version') { $version = 'v1.2.3;$(Write-Output PWNED)' }
@@ -237,7 +245,12 @@ try {
         if ($captured.Contains('private-secret')) { throw 'raw error leak' }
         if (-not $success -and $captured.Contains('"prepared":true')) { throw 'success JSON emitted on failure' }
         if ((Test-Path -LiteralPath $env:OUTER_TEST_ARGS) -ne $runnerReached) { throw ('unexpected native runner reachability for '+$mode) }
-        if ((Test-Path -LiteralPath $env:OUTER_TEST_RETRY_MARKER) -ne ($mode -in @('delete-pending-child','parent-substitution','changed-directory-acl'))) { throw ('unexpected directory retry seam for '+$mode) }
+        $retryExpected = $mode -in @('delete-pending-child','parent-substitution','changed-directory-acl')
+        if ((Test-Path -LiteralPath $env:OUTER_TEST_RETRY_MARKER) -ne $retryExpected) { throw ('unexpected directory retry seam for '+$mode) }
+        $injectedDispositionExpected = $mode -in @('delete-pending-child','parent-substitution','changed-directory-acl','non145-file-disposition','non145-directory-disposition')
+        $injectionMarkerExists = Test-Path -LiteralPath $env:OUTER_TEST_DISPOSITION_MARKER
+        if ($injectionMarkerExists -ne $injectedDispositionExpected) { throw ('unexpected injected disposition marker for '+$mode) }
+        if ($injectedDispositionExpected -and [System.IO.File]::ReadAllText($env:OUTER_TEST_DISPOSITION_MARKER) -cne '1') { throw ('unexpected injected disposition count for '+$mode) }
         if ($runnerReached) {
             $actualScratch = [System.IO.File]::ReadAllText($env:OUTER_TEST_SCRATCH)
             $expectedArgv = @('prepare','--repository',$expectedRepository,'--trust-file',[System.IO.Path]::Combine($actualScratch,'trust.json'),'--version',$version,'--output',$output)

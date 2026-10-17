@@ -88,3 +88,31 @@ The fixture and embedded Win32 adapter still require native hosted execution
 under Windows PowerShell 5.1 and PowerShell 7. Portable PowerShell parsing and
 source checks do not establish the Windows handle-sharing or delete-pending
 behavior; report native results separately before claiming those gates pass.
+
+### Candidate 39052372954 — retry fixture assumption corrected
+
+The Windows PowerShell 7 hosted run passed the `good` case and then failed the
+`delete-pending-child` fixture because its retry marker was absent. The shipping
+cleanup had completed the directory disposition without entering the retry.
+The fixture had assumed that retaining a shared-delete .NET `FileStream` after
+`File.Delete` would make the parent disposition return 145. This run disproved
+that assumption on the hosted runtime. It does not contradict the earlier
+PowerShell 5.1 observation of native code 145 from the tamper cleanup; that was
+a separate execution.
+
+The fixture now keeps the real shared-delete child handle open after its path
+is deleted and injects Win32 error 145 at exactly the first directory
+disposition, after the four owned file dispositions. The injected failure
+drives the actual bounded retry path. Its pause seam releases the retained
+child handle; for parent-substitution and changed-ACL cases, the same seam then
+changes the directory before retry validation. Assertions require the retry
+marker only in those cases, count exactly one injected 145, verify the
+successful child cleanup case completes, and verify replacement content and
+changed-ACL directories are preserved. File and directory non-145 controls
+still refuse cleanup without retry.
+
+This is an injected-error test of retry and preservation behavior, not a native
+reproduction of `ERROR_DIR_NOT_EMPTY`. It does not identify the transient
+entry's origin or modify the shipping retry guard. Native Windows PowerShell
+5.1 rerun remains required for this updated fixture; portable PowerShell checks
+do not establish hosted handle behavior.
