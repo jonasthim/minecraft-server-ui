@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -155,6 +157,150 @@ func TestLauncherRealProcessControlLeaseAndWait(t *testing.T) {
 	if !exit.Deliberate || exit.Forced || exit.ExitCode != 0 {
 		t.Fatal(exit)
 	}
+}
+
+type blockingResponseWriter struct {
+	http.ResponseWriter
+	entered chan struct{}
+	release chan struct{}
+	buffer  bytes.Buffer
+	blocked bool
+}
+
+func (w *blockingResponseWriter) Write(p []byte) (int, error) {
+	return w.buffer.Write(p)
+}
+
+func (w *blockingResponseWriter) Flush() {
+	if !w.blocked {
+		w.blocked = true
+		close(w.entered)
+		<-w.release
+		_, _ = w.ResponseWriter.Write(w.buffer.Bytes())
+	}
+	w.ResponseWriter.(http.Flusher).Flush()
+}
+
+func TestStopResponseIsWrittenBeforeChildCanExit(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestJVMHelper$")
+	cmd.Env = append(os.Environ(), "MINECRAFT_TEST_JVM=1", "MINECRAFT_TEST_STOP=")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	waited := false
+	defer func() {
+		if !waited {
+			_ = cmd.Process.Kill()
+			<-waitDone
+		}
+	}()
+	childStdin, ok := stdin.(*os.File)
+	if !ok {
+		t.Fatal("child stdin is not a native file")
+	}
+	spec := domain.LaunchSpec{Executable: exe, WorkingDir: cwd}
+	identity, err := CaptureIdentity("stop-order", cmd.Process.Pid, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &session{identity: identity, stdin: childStdin, stop: make(chan string, 1), persistStop: func(string) error { return nil }}
+	s.lease = newLeaseGuard(s.write)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buffered := &blockingResponseWriter{ResponseWriter: w, entered: entered, release: release}
+		s.handle(buffered, r)
+		// net/http flushes a buffered handler response after the handler returns.
+		// Holding this flush models an acknowledgement delayed after handle has
+		// released s.mu, which permits the production run loop to take the lock.
+		buffered.Flush()
+	}))
+	defer server.Close()
+	defer releaseOnce.Do(func() { close(release) })
+	consumerDone := make(chan error, 1)
+	go func() {
+		reason := <-s.stop
+		s.mu.Lock()
+		s.stopping = true
+		if s.stopReason == "" {
+			s.stopReason = reason
+		}
+		if s.lease.id != "" {
+			if err := s.lease.restore(); err != nil {
+				s.watchdogError = err.Error()
+			}
+		}
+		err := s.write("stop")
+		s.mu.Unlock()
+		consumerDone <- err
+	}()
+	body, err := json.Marshal(Request{Identity: identity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseDone := make(chan error, 1)
+	go func() {
+		response, requestErr := http.Post(server.URL+"/stop", "application/json", bytes.NewReader(body))
+		if requestErr == nil {
+			_, requestErr = io.Copy(io.Discard, response.Body)
+			_ = response.Body.Close()
+		}
+		responseDone <- requestErr
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stop response was not being written")
+	}
+	select {
+	case <-consumerDone:
+		select {
+		case <-waitDone:
+			waited = true
+			releaseOnce.Do(func() { close(release) })
+			<-responseDone
+			t.Fatal("harmless child exited while HTTP stop response was blocked")
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("stop was delivered before the HTTP response was writable")
+		}
+	case <-time.After(250 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err = <-responseDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("stop response did not complete")
+	}
+	select {
+	case err = <-consumerDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("stop was not delivered after response")
+	}
+	if err = <-waitDone; err != nil {
+		t.Fatal(err)
+	}
+	waited = true
 }
 func TestLauncherEOFGracefulStopWaitsForJVM(t *testing.T) {
 	p, id, done, writer := launchHelper(t, "", true)

@@ -47,6 +47,21 @@ def launcher_identity():
 
 
 class Helpers(unittest.TestCase):
+    def test_launcher_identity_accepts_exact_linux_and_native_windows_formats(self):
+        identity = launcher_identity()
+        self.assertTrue(game._valid_process_identity(identity))
+        windows = {**identity, "start_identity": "{00000000-0000-0000-0000-000000000001}:01dc000000000007"}
+        self.assertTrue(game._valid_process_identity(windows))
+        for malformed in (
+            "{00000000-0000-0000-0000-000000000001:01dc000000000007",
+            "{00000000-0000-0000-0000-000000000001}:01dc00000000000",
+            "{00000000-0000-0000-0000-000000000001}:01dc00000000000g",
+            "{00000000-0000-0000-0000-000000000001}:01dc000000000007x",
+            "00000000-0000-0000-0000-000000000001:01dc000000000007",
+        ):
+            with self.subTest(start_identity=malformed):
+                self.assertFalse(game._valid_process_identity({**identity, "start_identity": malformed}))
+
     def test_windows_npm_arguments_survive_shim_reparse_scope(self):
         pwsh = os.environ.get("MINECRAFT_UI_TEST_PWSH") or shutil.which("pwsh")
         if not pwsh:
@@ -382,7 +397,12 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
             with mock.patch.object(game, "DATA", data):
                 for identity in ({}, {**good, "instance_id": "other"}, {**good, "pid": 0},
                                  {**good, "pid": True}, {**good, "start_identity": ""},
-                                 {**good, "start_identity": "bad:tick"}):
+                                 {**good, "start_identity": "bad:tick"},
+                                 {**good, "start_identity": "{00000000-0000-0000-0000-000000000001:0000000000000001"},
+                                 {**good, "start_identity": "{00000000-0000-0000-0000-000000000001}:000000000000001"},
+                                 {**good, "start_identity": "{00000000-0000-0000-0000-000000000001}:000000000000000g"},
+                                 {**good, "start_identity": "{00000000-0000-0000-0000-000000000001}:0000000000000001x"},
+                                 {**good, "start_identity": "00000000-0000-0000-0000-000000000001:12345\n"}):
                     with self.subTest(identity=identity):
                         (state / "identity.json").write_text(json.dumps(identity))
                         self.assertFalse(game.launcher_diagnostics()["diagnostic_available"])

@@ -42,7 +42,10 @@ DATA = Path(r"C:\ProgramData\MinecraftUI" if os.name == "nt" else "/var/lib/mine
 HERE = Path(__file__).resolve().parent
 IDENTIFIER = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
-PROCESS_START_ID = re.compile(r"^[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}:[a-fA-F0-9]{1,20}$")
+PROCESS_START_ID = re.compile(
+    r"^(?:[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}:[0-9]{1,20}|"
+    r"\{[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}\}:[a-fA-F0-9]{16})$"
+)
 PERMISSION_PATHS = (
     "/", "/usr", "/usr/local", "/usr/local/bin", "/usr/local/bin/minecraft-ui",
     "/usr/local/lib", "/usr/local/lib/minecraft-ui", "/usr/local/lib/minecraft-ui/unitctl",

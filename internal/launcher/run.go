@@ -130,6 +130,7 @@ func (s *session) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var err error
+	stopAfterResponse := false
 	if s.stopping && r.URL.Path != "/status" {
 		http.Error(w, "process stopping", http.StatusConflict)
 		return
@@ -155,10 +156,7 @@ func (s *session) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		s.stopping = true
 		s.stopReason = "operator"
-		select {
-		case s.stop <- "operator":
-		default:
-		}
+		stopAfterResponse = true
 	case "/status":
 	default:
 		http.NotFound(w, r)
@@ -170,6 +168,18 @@ func (s *session) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(Response{Delivered: r.URL.Path != "/status", Stopping: s.stopping, WatchdogError: s.watchdogError})
+	if stopAfterResponse {
+		// A fast child can exit as soon as the run loop consumes this signal.
+		// Flush the acknowledgement first so Run's deferred server.Close cannot
+		// tear down the control connection before Send receives it.
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		select {
+		case s.stop <- "operator":
+		default:
+		}
+	}
 }
 
 // Run owns the child until Wait returns. ctx controls launcher shutdown only;

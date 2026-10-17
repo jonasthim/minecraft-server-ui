@@ -4,6 +4,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,12 +32,13 @@ type child struct {
 	err   error
 }
 type Supervisor struct {
-	cfg      Config
-	mu       sync.Mutex
-	locks    map[string]chan struct{}
-	children map[string]*child
-	starts   sync.WaitGroup
-	closing  bool
+	cfg         Config
+	mu          sync.Mutex
+	locks       map[string]chan struct{}
+	children    map[string]*child
+	starts      sync.WaitGroup
+	closing     bool
+	sendControl func(context.Context, domain.ProcessIdentity, string, launcher.Request) (launcher.Response, error)
 }
 
 var _ domain.ProcessSupervisor = (*Supervisor)(nil)
@@ -62,7 +64,12 @@ func New(cfg Config) (*Supervisor, error) {
 	if cfg.StopTimeout > 2*time.Minute {
 		return nil, fmt.Errorf("stop timeout exceeds two minutes")
 	}
-	return &Supervisor{cfg: cfg, locks: map[string]chan struct{}{}, children: map[string]*child{}}, nil
+	return &Supervisor{
+		cfg: cfg, locks: map[string]chan struct{}{}, children: map[string]*child{},
+		sendControl: func(ctx context.Context, id domain.ProcessIdentity, path string, req launcher.Request) (launcher.Response, error) {
+			return launcher.Send(ctx, cfg.DataDir, id, path, req)
+		},
+	}, nil
 }
 func (s *Supervisor) lock(ctx context.Context, id string) (func(), error) {
 	if err := domain.ValidateInstanceID(id); err != nil {
@@ -258,13 +265,27 @@ func (s *Supervisor) stop(ctx context.Context, id domain.ProcessIdentity) error 
 		defer cancel()
 		return s.waitExit(wait, id)
 	}
-	if _, err = launcher.Send(ctx, s.cfg.DataDir, id, "/stop", launcher.Request{}); err != nil {
-		return err
+	if _, err = s.sendControl(ctx, id, "/stop", launcher.Request{}); err != nil {
+		return s.reconcileStopDeliveryFailure(ctx, id, err)
 	}
 	wait, cancel := context.WithTimeout(ctx, s.cfg.StopTimeout+10*time.Second)
 	defer cancel()
 	return s.waitExit(wait, id)
 }
+
+// A control connection can fail after the launcher has accepted and persisted
+// the stop intent. Treat that transport result as successful only when the
+// normal identity, admission, and clean-exit checks confirm completion.
+func (s *Supervisor) reconcileStopDeliveryFailure(ctx context.Context, id domain.ProcessIdentity, deliveryErr error) error {
+	wait, cancel := context.WithTimeout(ctx, s.cfg.StopTimeout+10*time.Second)
+	defer cancel()
+	if err := s.waitExit(wait, id); err == nil {
+		return nil
+	} else {
+		return domain.Wrap(domain.CodeUnavailable, "stop delivery failed and clean completion was not confirmed", errors.Join(deliveryErr, err))
+	}
+}
+
 func (s *Supervisor) waitExit(ctx context.Context, id domain.ProcessIdentity) error {
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
