@@ -99,3 +99,23 @@ Focused Linux validation after the correction:
 - `gofmt` and scoped `git diff --check`: PASS.
 
 No full repository suite or Windows execution was performed locally. A native Windows rerun must validate the legal fixtures and record the previously failing job's actual phase, elapsed time and terminal result. A successful job that takes longer than three seconds would establish a slow valid completion; a job that fails or expires at 30 seconds requires investigation from its diagnostics, not a further bound increase. The earlier successful combined run qualifies its recorded candidate only. This later candidate remains unverified until its hosted checks pass; service, real Minecraft/client and stable release qualification remain separate.
+
+## Administrator recovery correction: hosted Linux result
+
+[Run 39033411791](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39033411791) tested reviewed correction `23698965ac067a5a0e22decf6a8157a42971438e`. [Ubuntu job 117398357934](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39033411791/job/117398357934) completed **successfully** on `ubuntu-24.04` image `20261012.334.1`, Go `1.27.0 linux/amd64`. Its completed job log confirms native vet, the full native race suite and both native builds passed, along with generated API drift, frontend checks/build, locked dependency provisioning and notices (nine tests plus the offline inventory). The race log has zero failed test entries and nine existing skips. Recovery package tests passed in 52.092 seconds, update package tests in 49.388 seconds, and CLI administrator reset success in 1.26 seconds.
+
+The new helper's own measurements, taken directly from this Linux log, show successful job states and complete transaction states for all four composed operations. Each ended with job phase `publishing_backup`:
+
+| Boot-risk scenario | Operation | Terminal observation elapsed | Job state | Transaction state |
+|---|---|---|---|---|
+| `boot_attempted` | apply | 255.602070 ms | `succeeded` | `complete` |
+| `boot_attempted` | confirmed rollback | 229.872443 ms | `succeeded` | `complete` |
+| `complete` | apply | 295.889207 ms | `succeeded` | `complete` |
+| `complete` | confirmed rollback | 278.747977 ms | `succeeded` | `complete` |
+
+These job measurements are all below the former three-second wait bound; whole-test durations are not substituted for job timing. They validate the corrected fixture and observation behavior on this Linux runner, and do not establish the earlier Windows delay's cause. The integrator took over monitoring Windows job `117398358049` before its final result was available; no Windows or overall run success is inferred in this entry. No source changes, local tests or native host operations accompanied this evidence update.
+# Final native rerun result: 39033411791
+
+Root inspected the completed [Windows job117398358049](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39033411791/job/117398358049). The overall run at23698965ac067a5a0e22decf6a8157a42971438e succeeded on both native runners, including the recovery paths and all retained composed update assertions. Windows recovery package completed73.948s and update124.309s.
+
+The Windows target's `boot_attempted` apply/rollback terminal observations were1.2094687s/824.1072ms; `complete` apply/rollback were831.8875ms/953.877ms. Each job succeeded and its transaction reached complete. All four waits finished within the old3s bound in this run, so this evidence does not establish why the earlier run exceeded3s. No further timeout increase or production change was made. Source and package CI are accepted; real service/game qualification remains separately tracked.
