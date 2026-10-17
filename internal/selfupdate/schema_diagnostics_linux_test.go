@@ -116,7 +116,24 @@ func TestLinuxSchemaProbeClassifiesActualProcessOutcomes(t *testing.T) {
 				}
 			}
 			if diagnostics.String() != want {
-				t.Fatalf("diagnostics = %q, want %q", diagnostics.String(), want)
+				got := strings.Builder{}
+				for _, line := range strings.Split(diagnostics.String(), "\n") {
+					if strings.HasPrefix(line, "native-update-schema-context:") {
+						if !validLinuxProbeContextMarker(line) {
+							t.Errorf("unsafe context marker %q", line)
+						}
+						continue
+					}
+					if line != "" {
+						got.WriteString(line + "\n")
+					}
+				}
+				if got.String() != want {
+					t.Fatalf("diagnostics without context packet = %q, want %q", got.String(), want)
+				}
+				if tc.errText != "" && !strings.Contains(diagnostics.String(), "native-update-schema-context:") {
+					t.Fatal("failed probe omitted execution context")
+				}
 			}
 		})
 	}

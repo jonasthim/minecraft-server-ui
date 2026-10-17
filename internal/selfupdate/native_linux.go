@@ -150,18 +150,31 @@ func runLinuxSchemaProbe(ctx context.Context, command *exec.Cmd, diagnostics io.
 	var output, stderr boundedOutput
 	command.Stdout = &output
 	command.Stderr = &stderr
-	err := command.Run()
+	probeContext, err := startLinuxProbeCommand(command)
+	if err == nil {
+		err = command.Wait()
+	}
 	if err != nil || output.exceeded {
+		writeLinuxProbeContext(diagnostics, probeContext)
 		relayLinuxSchemaDiagnostics(diagnostics, stderr)
 		writeLinuxSchemaCommandFailure(diagnostics, ctx, err, output.exceeded)
 		return capability, errors.New("manager-account schema probe failed")
 	}
 	if err := strictJSON(output.body, &capability); err != nil {
+		writeLinuxProbeContext(diagnostics, probeContext)
 		relayLinuxSchemaDiagnostics(diagnostics, stderr)
 		_, _ = fmt.Fprintln(diagnostics, "native-update-schema-diagnostic:command:invalid_json")
 		return capability, errors.New("invalid manager schema probe")
 	}
 	return capability, nil
+}
+
+func writeLinuxProbeContext(diagnostics io.Writer, context linuxProbeContext) {
+	for _, marker := range context.markers() {
+		if validLinuxProbeContextMarker(marker) {
+			_, _ = fmt.Fprintln(diagnostics, marker)
+		}
+	}
 }
 
 func relayLinuxSchemaDiagnostics(diagnostics io.Writer, stderr boundedOutput) {

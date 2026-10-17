@@ -8,6 +8,7 @@ priorities = Counter()
 known_events = Counter()
 native_update_failures = Counter()
 schema_probe_failures = Counter()
+schema_context = Counter()
 pam_failures = Counter()
 errno_reasons = {
     "Operation not permitted": "eperm", "Permission denied": "eacces", "No such file or directory": "enoent",
@@ -84,6 +85,27 @@ def schema_probe_marker(message):
     return marker if reason in allowed else None
 
 
+def schema_context_marker(message):
+    prefix = "native-update-schema-context:"
+    if not message.startswith(prefix):
+        return None
+    fields = message[len(prefix):].split(":")
+    if len(fields) == 2 and fields[0] == "uid_map":
+        return ":".join(fields) if fields[1] in {"initial", "other", "unknown"} else None
+    if len(fields) != 3 or fields[0] not in {"process", "thread"}:
+        return None
+    source, field, value = fields
+    allowed = {
+        "euid": {"root", "nonroot", "unknown"},
+        "cap_setuid_effective": {"yes", "no", "unknown"},
+        "cap_setuid_permitted": {"yes", "no", "unknown"},
+        "cap_setuid_bounding": {"yes", "no", "unknown"},
+        "no_new_privs": {"0", "1", "unknown"},
+        "seccomp": {"0", "1", "2", "unknown"},
+    }
+    return ":".join(fields) if value in allowed.get(field, set()) else None
+
+
 for line in sys.stdin:
     try:
         entry = json.loads(line)
@@ -100,6 +122,9 @@ for line in sys.stdin:
         schema_marker = schema_probe_marker(message)
         if schema_marker is not None:
             schema_probe_failures[schema_marker] += 1
+        context_marker = schema_context_marker(message)
+        if context_marker is not None:
+            schema_context[context_marker] += 1
         if message in pam_messages:
             pam_failures[pam_messages[message]] += 1
         for fixed in ("Minecraft manager listening", "minecraft-ui stopped", "Failed to start", "Stopped Minecraft Server UI manager"):
@@ -108,4 +133,5 @@ for line in sys.stdin:
 print(json.dumps({"priority_counts": dict(priorities), "known_event_counts": dict(known_events),
                   "native_update_failure_counts": dict(native_update_failures),
                   "native_schema_probe_counts": dict(schema_probe_failures),
+                  "native_schema_context_counts": dict(schema_context),
                   "native_pam_failure_counts": dict(pam_failures)}))

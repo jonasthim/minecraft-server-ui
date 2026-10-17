@@ -25,7 +25,7 @@ class JournalSummaryTests(unittest.TestCase):
             {"PRIORITY": "3", "MESSAGE": "native-update-failure:schema_probe"},
         ])
         self.assertEqual(result.get("native_update_failure_counts"), {"drain_read": 2, "schema_probe": 1})
-        self.assertEqual(set(result), {"priority_counts", "known_event_counts", "native_update_failure_counts", "native_schema_probe_counts", "native_pam_failure_counts"})
+        self.assertEqual(set(result), {"priority_counts", "known_event_counts", "native_update_failure_counts", "native_schema_probe_counts", "native_schema_context_counts", "native_pam_failure_counts"})
 
     def test_unknown_or_extended_marker_is_omitted(self):
         messages = [
@@ -39,6 +39,7 @@ class JournalSummaryTests(unittest.TestCase):
         result = self.summarize([{"MESSAGE": message, "PRIORITY": "3"} for message in messages])
         self.assertEqual(result.get("native_update_failure_counts"), {})
         self.assertEqual(result.get("native_schema_probe_counts"), {})
+        self.assertEqual(result.get("native_schema_context_counts"), {})
         self.assertEqual(result["known_event_counts"], {})
 
     def test_schema_probe_keeps_only_exact_fixed_and_bounded_numeric_markers(self):
@@ -90,6 +91,30 @@ class JournalSummaryTests(unittest.TestCase):
         self.assertEqual(result["known_event_counts"], {"Minecraft manager listening": 1})
         self.assertEqual(result.get("native_update_failure_counts"), {})
         self.assertEqual(result.get("native_schema_probe_counts"), {})
+
+    def test_linux_context_markers_are_fixed_and_allowlisted(self):
+        accepted = [
+            "process:euid:root", "process:euid:nonroot", "process:euid:unknown",
+            "process:cap_setuid_effective:yes", "process:cap_setuid_permitted:no",
+            "process:cap_setuid_bounding:unknown", "process:no_new_privs:0",
+            "process:no_new_privs:1", "process:no_new_privs:unknown",
+            "process:seccomp:0", "process:seccomp:1", "process:seccomp:2",
+            "thread:euid:root", "thread:cap_setuid_effective:yes",
+            "thread:cap_setuid_permitted:no", "thread:cap_setuid_bounding:unknown",
+            "thread:no_new_privs:1", "thread:seccomp:2", "uid_map:initial",
+            "uid_map:other", "uid_map:unknown",
+        ]
+        rejected = [
+            "process:cap_setuid_effective:0x80", "process:no_new_privs:2",
+            "thread:seccomp:3", "uid_map:0 0 4294967295", "process:private-secret:yes",
+            "process:euid:root private-secret", "process:euid:root\nprivate-secret",
+            "process:euid:root:extra", "private-secret:euid:root",
+        ]
+        result = self.summarize([
+            {"PRIORITY": "3", "MESSAGE": "native-update-schema-context:" + marker}
+            for marker in accepted + rejected
+        ])
+        self.assertEqual(result.get("native_schema_context_counts"), {marker: 1 for marker in accepted})
 
 
 if __name__ == "__main__":

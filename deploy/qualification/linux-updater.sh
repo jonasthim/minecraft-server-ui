@@ -79,6 +79,7 @@ cleanup() {
         # Fixed fields only. No raw journals, challenges, configs, keys or DB.
         systemctl show minecraft-ui.service -p User -p Group -p MainPID -p ActiveState -p SubState -p Result -p ExecMainStatus -p NoNewPrivileges -p ProtectSystem -p ProtectHome -p ProtectControlGroups -p PrivateTmp >"$output/manager-unit-summary.txt"
         systemctl show 'minecraft-ui-update@*.service' minecraft-ui-update-recovery.service -p Id -p MainPID -p ActiveState -p SubState -p Result -p ExecMainStatus >"$output/updater-unit-summary.txt"
+        systemctl show 'minecraft-ui-update@*.service' minecraft-ui-update-recovery.service -p Id -p User -p CapabilityBoundingSet -p PrivateUsers -p SystemCallFilter -p RestrictSUIDSGID -p NoNewPrivileges | python3 "$here/summarize-updater-unit.py" >"$output/updater-context-properties.json"
         journalctl -u minecraft-ui.service -u 'minecraft-ui-update@*' -u minecraft-ui-update-recovery.service --no-pager -o json | python3 "$here/summarize-journal.py" >"$output/journal-summary.json"
         timeout 15s systemctl kill --signal=SIGKILL 'minecraft-ui-update@*.service' >/dev/null 2>&1
         timeout 180s systemctl stop minecraft-ui.service minecraft-ui-update-recovery.service minecraft-ui-qualification-independent.service >/dev/null 2>&1 || status=1
@@ -100,7 +101,7 @@ cleanup() {
     record_permissions after-prefix-restoration || status=1
     rm -rf "$scratch"
     printf '{"exit_code":%s,"scope":"installed-updater-fixture-acquisition","cleanup_checked":true}\n' "$status" >"$output/result.json"
-    for report in result.json acceptance-summary.json interruption-boundary.json activation-state-summary.json initial-update-status.json api-assertions.txt manager-unit-summary.txt updater-unit-summary.txt journal-summary.json input-summary.txt permission-summary-linux.json; do
+    for report in result.json acceptance-summary.json interruption-boundary.json activation-state-summary.json initial-update-status.json api-assertions.txt manager-unit-summary.txt updater-unit-summary.txt updater-context-properties.json journal-summary.json input-summary.txt permission-summary-linux.json; do
         [[ ! -f $output/$report ]] || chmod 0644 "$output/$report"
     done
     exit "$status"
