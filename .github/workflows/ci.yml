@@ -2,23 +2,106 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
   check:
-    runs-on: ubuntu-latest
+    name: Native ${{ matrix.os }} x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            goos: linux
+            extension: ''
+          - os: windows-2022
+            goos: windows
+            extension: .exe
+    defaults:
+      run:
+        # On Windows this is Git for Windows Bash, executing native go.exe.
+        # GitHub runs explicit Bash with -e -o pipefail on both platforms.
+        shell: bash
+    env:
+      CGO_ENABLED: '1'
+      EXPECTED_GOOS: ${{ matrix.goos }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          architecture: x64
           cache: true
+          cache-dependency-path: go.sum
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24'
+          architecture: x64
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci
+      - name: Verify Windows race compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $compilerPath = (Get-Command gcc -CommandType Application -ErrorAction Stop).Source
+          & $compilerPath --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $target = & $compilerPath -dumpmachine
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($target.Trim() -ne 'x86_64-w64-mingw32') { throw "Unexpected C compiler target: $target" }
+          $syncLibrary = & $compilerPath --print-file-name libsynchronization.a
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path -LiteralPath $syncLibrary.Trim() -PathType Leaf)) {
+            throw "Windows race testing requires MinGW-w64 v8+ libsynchronization.a: $syncLibrary"
+          }
+          Write-Output "Race compiler: $compilerPath; synchronization library: $syncLibrary"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "CC=$compilerPath"
+      - name: Record native runner and toolchain
+        run: |
+          echo "Runner: $RUNNER_OS $RUNNER_ARCH; image: $ImageOS $ImageVersion"
+          test "$RUNNER_ARCH" = X64
+          test "$(go env GOHOSTOS)" = "$EXPECTED_GOOS"
+          test "$(go env GOOS)" = "$EXPECTED_GOOS"
+          test "$(go env GOARCH)" = amd64
+          go version
+          go env GOOS GOARCH CGO_ENABLED CC
+          node --version
+          npm --version
+      - name: Install frontend dependencies
+        run: npm ci
         working-directory: web
-      - run: make check build-linux build-windows build-updater-linux build-updater-windows
-      - run: make check-notices
+      - name: Check generated API types
+        if: runner.os == 'Linux'
+        run: |
+          npm run gen:api --prefix web
+          git diff --exit-code -- web/src/api/schema.d.ts
+      - name: Check frontend
+        if: runner.os == 'Linux'
+        working-directory: web
+        run: |
+          npm run typecheck
+          npm run lint
+      - name: Build embedded frontend once
+        working-directory: web
+        run: npm run build
+      - name: Vet native Go packages
+        run: go vet ./...
+      - name: Test native Go packages with race detector
+        timeout-minutes: 15
+        run: go test -race -v -count=1 -timeout=5m ./...
+      - name: Build native manager and updater
+        env:
+          CGO_ENABLED: '0'
+          BINARY_EXTENSION: ${{ matrix.extension }}
+        run: |
+          mkdir -p bin
+          go build -trimpath -ldflags '-s -w -X main.version=0.0.0-dev' -o "bin/minecraft-ui-$EXPECTED_GOOS-amd64$BINARY_EXTENSION" ./cmd/minecraft-ui
+          go build -trimpath -ldflags '-s -w -X main.version=0.0.0-dev' -o "bin/minecraft-ui-update-$EXPECTED_GOOS-amd64$BINARY_EXTENSION" ./cmd/minecraft-ui-update
+      - name: Check dependency notices
+        if: runner.os == 'Linux'
+        run: make check-notices
