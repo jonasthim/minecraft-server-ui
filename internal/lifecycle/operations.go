@@ -234,6 +234,9 @@ func (s *Service) activate(ctx context.Context, id string, next installation) er
 	return s.clearIntent(ctx, id)
 }
 func (s *Service) prepareLaunch(ctx context.Context, e *jobs.Execution) (domain.LaunchSpec, string, error) {
+	return s.prepareLaunchSettings(ctx, e, true)
+}
+func (s *Service) prepareLaunchSettings(ctx context.Context, e *jobs.Execution, applyPending bool) (domain.LaunchSpec, string, error) {
 	var spec domain.LaunchSpec
 	var instanceID string
 	err := s.instances.WithStoppedJob(ctx, e, func(session *instance.StoppedSession) error {
@@ -247,6 +250,15 @@ func (s *Service) prepareLaunch(ctx context.Context, e *jobs.Execution) (domain.
 		}
 		if err = s.recoverActivation(ctx, d.Instance.ID); err != nil {
 			return safeFailure("activation_recovery")
+		}
+		if applyPending {
+			if err = session.ApplyPendingSettings(ctx, e); err != nil {
+				return err
+			}
+			d, err = session.Detail(ctx)
+			if err != nil {
+				return err
+			}
 		}
 		in, err := s.loadInstallation(ctx, d.Instance.ID)
 		if err != nil {
@@ -464,7 +476,7 @@ func (s *Service) autostart(ctx context.Context, e *jobs.Execution, enabled bool
 			return err
 		}
 		if !running {
-			if _, _, err := s.prepareLaunch(ctx, e); err != nil {
+			if _, _, err := s.prepareLaunchSettings(ctx, e, false); err != nil {
 				return err
 			}
 		}

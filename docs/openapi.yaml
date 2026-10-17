@@ -9229,6 +9229,319 @@
           }
         }
       }
+    },
+    "/api/v1/instances/{instanceId}/pending-settings": {
+      "get": {
+        "operationId": "pendingSettingsGet",
+        "tags": [
+          "instances"
+        ],
+        "summary": "Viewer: inspect separately saved settings and stale state",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved draft state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, token scope, or CSRF denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Active job, conflicting draft revision or changed active settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid config, unsafe paths, or unavailable version-change workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Reconciliation or mutation admission unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "pendingSettingsSave",
+        "tags": [
+          "instances"
+        ],
+        "summary": "Administrator: save desired settings without changing the running server",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved draft state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, token scope, or CSRF denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Active job, conflicting draft revision or changed active settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid config, unsafe paths, or unavailable version-change workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Reconciliation or mutation admission unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavePendingSettings"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "pendingSettingsDiscard",
+        "tags": [
+          "instances"
+        ],
+        "summary": "Administrator: discard a saved draft using its exact revision",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved draft state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, token scope, or CSRF denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Active job, conflicting draft revision or changed active settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid config, unsafe paths, or unavailable version-change workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Reconciliation or mutation admission unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscardPendingSettings"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -11007,7 +11320,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 516,
-            "description": "Exact lowercase list, say plain text (1–512 UTF-8 bytes, no selectors), or admin seed. No aliases, wrappers, lifecycle/save/config or player-privilege commands."
+            "description": "Exact lowercase list, say plain text (1\u2013512 UTF-8 bytes, no selectors), or admin seed. No aliases, wrappers, lifecycle/save/config or player-privilege commands."
           }
         },
         "required": [
@@ -15569,6 +15882,126 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "PendingSettingsDraft": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "memory_mib",
+          "config"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "memory_mib": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 1048576
+          },
+          "config": {
+            "$ref": "#/components/schemas/InstanceConfig"
+          }
+        }
+      },
+      "PendingSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "draft",
+          "base_updated_at",
+          "updated_at",
+          "updated_by",
+          "stale"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PendingSettingsDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "base_updated_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_by": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        },
+        "description": "Active settings remain separate. A non-null draft applies at the next ordinary manager-controlled start/restart, after confirmed stop. Direct OS autostart uses the last applied settings. Stale or revoked-author drafts require administrator resave/discard."
+      },
+      "SavePendingSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "memory_mib",
+          "config",
+          "expected_revision",
+          "expected_instance_updated_at"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "memory_mib": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 1048576
+          },
+          "config": {
+            "$ref": "#/components/schemas/InstanceConfig"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "expected_instance_updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DiscardPendingSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expected_revision"
+        ],
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         }
       }

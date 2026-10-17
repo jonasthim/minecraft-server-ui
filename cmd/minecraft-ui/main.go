@@ -160,7 +160,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 		}
 		return instanceUpdates.StartupBlocked(ctx, id)
 	}
-	instances := instance.New(database, paths, guard, instance.WithJobMutationGuard(guard), instance.WithActivationCoordinator(activation), instance.WithRecoveryMutationGuard(guard), instance.WithReconcileHold(deferUpdate))
+	instances := instance.New(database, paths, guard, instance.WithJobMutationGuard(guard), instance.WithActivationCoordinator(activation), instance.WithRecoveryMutationGuard(guard), instance.WithReconcileHold(deferUpdate), instance.WithPendingSettingsGuard(guard))
 	control := console.New(database, paths, native, instances, queue)
 	playerService := players.New(database, paths, instances, control, queue, native)
 	gameEvents := game.New(database, control, instances)
@@ -411,6 +411,27 @@ func (g *stoppedMutationGuard) WithStopped(ctx context.Context, id string, fn fu
 			}
 			return fn()
 		})
+	})
+}
+
+// Pending drafts change only SQL metadata. Serialize with the same queue and
+// reconciliation gates, while allowing an independently running game process.
+func (g *stoppedMutationGuard) WithPendingSettings(ctx context.Context, id string, fn func() error) error {
+	if g.blocked != nil {
+		return domain.E(domain.CodeUnavailable, "instance reconciliation requires administrator repair")
+	}
+	return g.queue.WithIdle(ctx, id, func() error {
+		if g.ready != nil {
+			if err := g.ready(ctx, id); err != nil {
+				return err
+			}
+		}
+		if g.updateReady != nil {
+			if err := g.updateReady(ctx, id); err != nil {
+				return err
+			}
+		}
+		return fn()
 	})
 }
 

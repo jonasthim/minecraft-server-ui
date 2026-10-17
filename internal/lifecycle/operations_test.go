@@ -548,3 +548,184 @@ func TestStatePreservesKnownRunningProcessWhenControlIsUnavailable(t *testing.T)
 		t.Fatalf("known running JVM hidden by control error: %+v %v", state, err)
 	}
 }
+
+type testPendingGuard struct{ queue *jobs.Service }
+
+func (g testPendingGuard) WithPendingSettings(ctx context.Context, id string, fn func() error) error {
+	return g.queue.WithIdle(ctx, id, fn)
+}
+func pendingLifecycleFixture(t *testing.T) (*Service, domain.User, *testNative, instance.Detail, string) {
+	t.Helper()
+	s, u, n, _, path := configActivationFixture(t)
+	paths, _ := instance.NewPaths(s.dataDir)
+	s.instances = instance.New(s.db, paths, testGuard{n}, instance.WithJobMutationGuard(testGuard{n}), instance.WithActivationCoordinator(s), instance.WithPendingSettingsGuard(testPendingGuard{s.queue}))
+	if _, err := s.db.Exec(`UPDATE instance_settings SET eula_accepted=1 WHERE instance_id='test'`); err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.instances.Get(t.Context(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.instances.SavePendingSettings(t.Context(), u, "test", instance.SavePendingSettings{PendingSettingsDraft: instance.PendingSettingsDraft{Name: "Pending", MemoryMiB: 4096, Config: d.Config}, ExpectedInstanceUpdatedAt: d.Instance.UpdatedAt.Format(time.RFC3339Nano)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, u, n, d, path
+}
+func TestOrdinaryStartConsumesPendingWithMemoryActivation(t *testing.T) {
+	s, u, n, d, path := pendingLifecycleFixture(t)
+	j, err := s.Enqueue(t.Context(), u, "test", Request{Operation: "start"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := waitJob(t, s, j)
+	// This fixture has no readiness transport; actual native launch is the boundary
+	// asserted here. Its final readiness failure must not undo the committed edit.
+	if out.State != domain.JobFailed || n.starts != 1 {
+		t.Fatalf("did not launch with fixture readiness gap: %+v starts=%d", out, n.starts)
+	}
+	active, err := s.instances.Get(t.Context(), "test")
+	if err != nil || active.Instance.Name != "Pending" || active.Instance.MemoryMiB != 4096 || !active.Instance.UpdatedAt.After(d.Instance.UpdatedAt) {
+		t.Fatalf("active=%+v %v", active, err)
+	}
+	pending, err := s.instances.GetPendingSettings(t.Context(), "test")
+	if err != nil || pending.Draft != nil || pending.Revision != 2 {
+		t.Fatal(pending, err)
+	}
+	seal, err := os.ReadFile(path)
+	if err != nil || string(seal) != "-Xmx4096M" {
+		t.Fatalf("seal=%s %v", seal, err)
+	}
+	installed, err := s.loadInstallation(t.Context(), "test")
+	if err != nil || installed.Spec.Args[1] != "-Xmx4096M" {
+		t.Fatal(installed, err)
+	}
+}
+func TestOrdinaryStartRefusesStaleOrRevokedPendingAuthor(t *testing.T) {
+	for _, mode := range []string{"stale", "revoked", "sql", "audit", "seal", "commit", "file"} {
+		t.Run(mode, func(t *testing.T) {
+			s, u, n, d, path := pendingLifecycleFixture(t)
+			var err error
+			switch mode {
+			case "stale":
+				_, err = s.db.Exec(`UPDATE instances SET updated_at='2099-01-01T00:00:00Z' WHERE id='test'`)
+			case "revoked":
+				_, err = s.db.Exec(`INSERT INTO users(id,username,role,created_at,updated_at) VALUES(2,'starter','admin','now','now'); UPDATE users SET role='viewer' WHERE id=1`)
+				u = domain.User{ID: 2, Username: "starter", Role: domain.RoleAdmin}
+			case "sql":
+				_, err = s.db.Exec(`CREATE TRIGGER reject_settings BEFORE UPDATE ON instances BEGIN SELECT RAISE(ABORT,'injected settings failure'); END`)
+			case "audit":
+				_, err = s.db.Exec(`CREATE TRIGGER reject_pending_audit BEFORE INSERT ON audit_log WHEN new.action='instance.pending_settings.apply' BEGIN SELECT RAISE(ABORT,'injected audit failure'); END`)
+			case "commit":
+				_, err = s.db.Exec(`CREATE TABLE pending_commit_fixture(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES pending_commit_fixture(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_config_commit AFTER UPDATE ON instances BEGIN INSERT INTO pending_commit_fixture(id,parent_id) VALUES(1,999); END`)
+			case "file":
+				paths, _ := instance.NewPaths(s.dataDir)
+				dirs, _ := paths.For("test")
+				err = os.Remove(filepath.Join(dirs.Server, "eula.txt"))
+				if err == nil {
+					err = os.Mkdir(filepath.Join(dirs.Server, "eula.txt"), 0700)
+				}
+			case "seal":
+				old := s.seal
+				s.seal = func(ctx context.Context, id string, spec domain.LaunchSpec) error {
+					if spec.Args[1] == "-Xmx4096M" {
+						return errors.New("injected seal failure")
+					}
+					return old(ctx, id, spec)
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			j, err := s.Enqueue(t.Context(), u, "test", Request{Operation: "start"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out := waitJob(t, s, j); out.State != domain.JobFailed || n.starts != 0 {
+				t.Fatalf("unsafe boot: %+v starts=%d", out, n.starts)
+			}
+			active, err := s.instances.Get(t.Context(), "test")
+			if err != nil || active.Instance.Name != d.Instance.Name || active.Instance.MemoryMiB != 1024 {
+				t.Fatal(active, err)
+			}
+			pending, err := s.instances.GetPendingSettings(t.Context(), "test")
+			if err != nil || pending.Draft == nil || pending.Revision != 1 {
+				t.Fatal(pending, err)
+			}
+			seal, err := os.ReadFile(path)
+			if err != nil || string(seal) != "-Xmx1024M" {
+				t.Fatalf("old seal lost: %s %v", seal, err)
+			}
+		})
+	}
+}
+
+func TestAutostartPreparationPreservesPendingSettings(t *testing.T) {
+	s, u, n, _, path := pendingLifecycleFixture(t)
+	j, err := s.Enqueue(t.Context(), u, "test", Request{Operation: "autostart", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := waitJob(t, s, j); out.State != domain.JobSucceeded {
+		t.Fatal(out)
+	}
+	pending, err := s.instances.GetPendingSettings(t.Context(), "test")
+	if err != nil || pending.Draft == nil || pending.Revision != 1 || pending.Stale {
+		t.Fatal(pending, err)
+	}
+	seal, err := os.ReadFile(path)
+	if err != nil || string(seal) != "-Xmx1024M" || n.starts != 0 {
+		t.Fatalf("autostart policy consumed draft: %s starts=%d %v", seal, n.starts, err)
+	}
+}
+func TestUpdateStartPreservesPendingSettings(t *testing.T) {
+	s, u, n, _, path := pendingLifecycleFixture(t)
+	ctx := t.Context()
+	if err := s.queue.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	q := jobs.New(s.db, nil)
+	s.queue = q
+	if err := q.Register("instance_update", func(ctx context.Context, e *jobs.Execution) error {
+		current, err := e.CheckCurrent(ctx)
+		if err != nil {
+			return err
+		}
+		installed, err := s.loadInstallation(ctx, "test")
+		if err != nil {
+			return err
+		}
+		raw, _ := json.Marshal(map[string]any{"version": 1, "boot_attempted": true, "after": map[string]any{"generation": installed.Generation}})
+		if _, err = s.db.ExecContext(ctx, `INSERT INTO update_transactions(id,instance_id,preview_id,job_id,actor_id,kind,state,backup_id,journal_json,updated_at) VALUES('pending-update','test','preview',?,?,'update','boot_attempted','backup',?,'now')`, current.JobID, u.ID, string(raw)); err != nil {
+			return err
+		}
+		err = s.StartForUpdate(ctx, e, u, func(_ context.Context, _ string, start func() (domain.ProcessIdentity, error)) (domain.ProcessIdentity, error) {
+			return start()
+		})
+		if err == nil {
+			return errors.New("fixture readiness gap was hidden")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer q.Stop(context.Background())
+	j, err := q.Enqueue(ctx, jobs.Request{InstanceID: "test", Kind: "instance_update", RequestedBy: u.ID, Payload: []byte(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := waitJob(t, s, j); out.State != domain.JobSucceeded {
+		t.Fatal(out)
+	}
+	pending, err := s.instances.GetPendingSettings(ctx, "test")
+	if err != nil || pending.Draft == nil || pending.Revision != 1 {
+		t.Fatal(pending, err)
+	}
+	seal, err := os.ReadFile(path)
+	if err != nil || string(seal) != "-Xmx1024M" || n.starts != 1 {
+		t.Fatalf("update start consumed draft: %s starts=%d %v", seal, n.starts, err)
+	}
+}

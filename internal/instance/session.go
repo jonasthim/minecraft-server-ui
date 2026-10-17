@@ -23,12 +23,13 @@ func WithJobMutationGuard(guard JobMutationGuard) Option {
 }
 
 type stoppedScope struct {
-	owner   *StoppedSession
-	active  atomic.Bool
-	mu      sync.Mutex
-	ctx     context.Context
-	service *Service
-	id      string
+	owner     *StoppedSession
+	active    atomic.Bool
+	mu        sync.Mutex
+	ctx       context.Context
+	service   *Service
+	id        string
+	execution *jobs.Execution
 }
 
 // StoppedSession can only be used as the original callback argument, during that
@@ -46,11 +47,14 @@ func (s *Service) WithStoppedJob(ctx context.Context, execution *jobs.Execution,
 		return err
 	}
 	return s.jobGuard.WithStoppedForJob(ctx, execution, func(id string) error {
-		return s.withStoppedSession(ctx, id, fn)
+		return s.withStoppedSessionForExecution(ctx, id, execution, fn)
 	})
 }
 
 func (s *Service) withStoppedSession(ctx context.Context, id string, fn func(*StoppedSession) error) error {
+	return s.withStoppedSessionForExecution(ctx, id, nil, fn)
+}
+func (s *Service) withStoppedSessionForExecution(ctx context.Context, id string, execution *jobs.Execution, fn func(*StoppedSession) error) error {
 	if err := validID(id); err != nil {
 		return err
 	}
@@ -77,7 +81,7 @@ func (s *Service) withStoppedSession(ctx context.Context, id string, fn func(*St
 		return err
 	}
 	session := &StoppedSession{}
-	scope := &stoppedScope{owner: session, ctx: ctx, service: s, id: id}
+	scope := &stoppedScope{owner: session, ctx: ctx, service: s, id: id, execution: execution}
 	session.scope = scope
 	scope.active.Store(true)
 	defer func() { scope.active.Store(false); scope.mu.Lock(); scope.mu.Unlock() }()

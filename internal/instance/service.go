@@ -51,6 +51,7 @@ type Service struct {
 	paths         Paths
 	guard         MutationGuard
 	jobGuard      JobMutationGuard
+	pendingGuard  PendingSettingsGuard
 	activation    ActivationCoordinator
 	recoveryGuard RecoveryMutationGuard
 	mu            sync.Mutex
@@ -372,7 +373,29 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 		return Detail{}, err
 	}
 	var result Detail
-	err := s.mutate(ctx, id, func() (updateErr error) {
+	err := s.mutate(ctx, id, func() error {
+		if err := s.recoverDeletion(ctx, id); err != nil {
+			return err
+		}
+		pending, err := s.getPendingSettingsUnlocked(ctx, id)
+		if err != nil {
+			return err
+		}
+		if pending.Draft != nil {
+			return domain.E(domain.CodeConflict, "pending settings exist; explicitly discard or rebase/save them before editing active settings")
+		}
+		result, err = s.updateStopped(ctx, actor, id, d, nil)
+		return err
+	})
+	return result, err
+}
+
+// updateStopped shares the exact config intent, activation and SQL commit boundary
+// for immediate edits and current-job pending consumption. Caller owns admission
+// and service mutex; this helper must never enter queue/native admission.
+func (s *Service) updateStopped(ctx context.Context, actor domain.User, id string, d Draft, pending *pendingApply) (Detail, error) {
+	var result Detail
+	err := func() (updateErr error) {
 		if err := s.recoverDeletion(ctx, id); err != nil {
 			return err
 		}
@@ -447,7 +470,37 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 			return err
 		}
 		var active int
-		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE instance_id=? AND state IN ('queued','running')`, id).Scan(&active); err != nil {
+		if pending == nil {
+			err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE instance_id=? AND state IN ('queued','running')`, id).Scan(&active)
+		} else {
+			current := pending.current
+			if err = checkPendingJob(ctx, tx, current); err != nil {
+				return err
+			}
+			err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE instance_id=? AND state='running' AND id<>?`, id, current.JobID).Scan(&active)
+			if err != nil {
+				return err
+			}
+			actor, err = freshPendingAdmin(ctx, tx, actor.ID)
+			if err != nil {
+				return err
+			}
+			res, consumeErr := tx.ExecContext(ctx, `UPDATE instance_pending_settings SET revision=revision+1,draft_json=NULL,updated_at=? WHERE instance_id=? AND revision=? AND revision<? AND draft_json IS NOT NULL AND base_updated_at=? AND base_updated_at=(SELECT updated_at FROM instances WHERE id=?)`, time.Now().UTC().Format(time.RFC3339Nano), id, pending.revision, maxPendingRevision, pending.base, id)
+			if consumeErr != nil {
+				return fmt.Errorf("consume pending settings: %w", consumeErr)
+			}
+			n, consumeErr := res.RowsAffected()
+			if consumeErr != nil {
+				return consumeErr
+			}
+			if n != 1 {
+				return domain.E(domain.CodeConflict, "pending settings changed or became stale; reload before start")
+			}
+			if err = audit(ctx, tx, actor, id, "instance.pending_settings.apply"); err != nil {
+				return err
+			}
+		}
+		if err != nil {
 			return err
 		}
 		if active > 0 {
@@ -515,9 +568,10 @@ func (s *Service) Update(ctx context.Context, actor domain.User, id string, d Dr
 		err = clearConfigIntent(root)
 		configReady = err == nil
 		return err
-	})
+	}()
 	return result, err
 }
+
 func (s *Service) Delete(ctx context.Context, actor domain.User, id, confirmation string) error {
 	if err := adminOnly(actor); err != nil {
 		return err

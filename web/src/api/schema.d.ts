@@ -1508,6 +1508,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{instanceId}/pending-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Viewer: inspect separately saved settings and stale state */
+        get: operations["pendingSettingsGet"];
+        /** Administrator: save desired settings without changing the running server */
+        put: operations["pendingSettingsSave"];
+        post?: never;
+        /** Administrator: discard a saved draft using its exact revision */
+        delete: operations["pendingSettingsDiscard"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3100,6 +3119,35 @@ export interface components {
             keep_last: number;
             /** @description Zero disables the age limit. Default 30. */
             keep_days: number;
+            /** Format: int64 */
+            expected_revision: number;
+        };
+        PendingSettingsDraft: {
+            name: string;
+            memory_mib: number;
+            config: components["schemas"]["InstanceConfig"];
+        };
+        /** @description Active settings remain separate. A non-null draft applies at the next ordinary manager-controlled start/restart, after confirmed stop. Direct OS autostart uses the last applied settings. Stale or revoked-author drafts require administrator resave/discard. */
+        PendingSettings: {
+            /** Format: int64 */
+            revision: number;
+            draft: components["schemas"]["PendingSettingsDraft"] | null;
+            base_updated_at: string;
+            updated_at: string;
+            /** Format: int64 */
+            updated_by: number;
+            stale: boolean;
+        };
+        SavePendingSettings: {
+            name: string;
+            memory_mib: number;
+            config: components["schemas"]["InstanceConfig"];
+            /** Format: int64 */
+            expected_revision: number;
+            /** Format: date-time */
+            expected_instance_updated_at: string;
+        };
+        DiscardPendingSettings: {
             /** Format: int64 */
             expected_revision: number;
         };
@@ -10324,6 +10372,242 @@ export interface operations {
                 };
             };
             /** @description State or saving recovery unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    pendingSettingsGet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Saved draft state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingSettings"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role, token scope, or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Active job, conflicting draft revision or changed active settings */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid config, unsafe paths, or unavailable version-change workflow */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Reconciliation or mutation admission unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    pendingSettingsSave: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavePendingSettings"];
+            };
+        };
+        responses: {
+            /** @description Saved draft state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingSettings"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role, token scope, or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Active job, conflicting draft revision or changed active settings */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid config, unsafe paths, or unavailable version-change workflow */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Reconciliation or mutation admission unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    pendingSettingsDiscard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiscardPendingSettings"];
+            };
+        };
+        responses: {
+            /** @description Saved draft state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingSettings"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Role, token scope, or CSRF denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Active job, conflicting draft revision or changed active settings */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid config, unsafe paths, or unavailable version-change workflow */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Reconciliation or mutation admission unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -84,6 +84,23 @@
 - [ ] Adjudicate running-config/restart and configurable retention against existing safety rules before implementation. Preserve protected backups and confirmation; do not silently copy incompatible Valheim behavior.
 - [ ] Verify successful shipping interactions and failure/role/empty states; keep real addon/pack/game acceptance in33.
 
+#### Task31D2 adjudicated settings behavior
+
+Save ordinary desired settings separately while the game runs; keep active SQL,
+server properties and launch seals untouched until confirmed stop. Apply the
+draft atomically on the next ordinary manager-controlled start/restart, including
+scheduled and crash-recovery starts. Saving never starts a countdown or stops a
+server. Existing restart controls retain their countdown and confirmation.
+
+Drafts contain display name, memory and typed ordinary properties. Port, world
+directory, runtime/version/Java selection and EULA retain their existing stopped
+or strict workflows. Version updates/rollback and autostart-policy preparation
+do not consume drafts. Direct OS autostart can use the last applied settings;
+the UI must disclose this. A changed active revision or revoked draft author
+blocks applying the draft until an administrator deliberately resaves/discards
+it. Keep active versus saved state distinct, with revision conflict handling,
+fresh administrator authorization and no automatic rebase or world reset.
+
 ### Task32: Stable manager release discovery and update delivery
 
 **Own:** `internal/selfupdate` discovery and corresponding UI; integrator owns schema/API/wiring. Depends29.
