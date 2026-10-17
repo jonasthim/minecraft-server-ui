@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -36,6 +37,10 @@ func newImportFixture(t *testing.T, targetOS string) importFixture {
 }
 
 func newImportFixtureTrust(t *testing.T, targetOS, trustLabel string) importFixture {
+	return newImportFixtureTrustWithUpdaterSize(t, targetOS, trustLabel, 0)
+}
+
+func newImportFixtureTrustWithUpdaterSize(t *testing.T, targetOS, trustLabel string, updaterSize int) importFixture {
 	t.Helper()
 	if targetOS == "" {
 		targetOS = runtime.GOOS
@@ -61,6 +66,13 @@ func newImportFixtureTrust(t *testing.T, targetOS, trustLabel string) importFixt
 	files := map[string][]byte{}
 	for _, name := range memberNames(targetOS) {
 		files[name] = []byte("authenticated member: " + name)
+	}
+	if updaterSize > 0 {
+		updaterName := "selfupdate"
+		if targetOS == "windows" {
+			updaterName = "selfupdate.exe"
+		}
+		files[updaterName] = bytes.Repeat([]byte("u"), updaterSize)
 	}
 	bootstrap := candidate.Bootstrap{Format: 1, Purpose: "minecraft-ui-bootstrap", Repository: "owner/repository", Version: "v1.2.3", PublishedAt: time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC), ExpiresAt: time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC), Schema: 18, Trust: trustLabel}
 	for _, platform := range []string{"linux", "windows"} {
@@ -131,6 +143,42 @@ func newImportFixtureTrust(t *testing.T, targetOS, trustLabel string) importFixt
 	return importFixture{prepared: prepared, transaction: transaction, options: options, files: files}
 }
 
+func TestOpenRecordedRoundTripsLargeSignedUpdater(t *testing.T) {
+	const updaterSize = int(candidate.MaxAssetBytes + 1)
+	f := newImportFixtureTrustWithUpdaterSize(t, runtime.GOOS, "OWNER SIGNED", updaterSize)
+	config := importConfig{targetOS: runtime.GOOS, targetArch: "amd64", now: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC), testRoot: true}
+	imported, err := importWith(context.Background(), f.transaction, f.options, config)
+	if err != nil {
+		t.Fatalf("import signed updater above asset limit: %v", err)
+	}
+	if err := imported.Close(); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := os.ReadFile(filepath.Join(f.transaction.Name(), inputsName, metadataName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := RecordedOptions{Version: f.options.Version, Trust: f.options.Trust, ManifestSHA256: digest(metadata)}
+	reopened, err := openRecordedWith(context.Background(), f.transaction, options, recordedConfig{targetOS: runtime.GOOS, targetArch: "amd64", now: config.now, testRoot: true})
+	if err != nil {
+		t.Fatalf("reopen signed updater above asset limit: %v", err)
+	}
+	defer reopened.Close()
+	updaterName := "selfupdate"
+	if runtime.GOOS == "windows" {
+		updaterName = "selfupdate.exe"
+	}
+	member, err := reopened.OpenMember(context.Background(), updaterName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer member.Close()
+	body, err := io.ReadAll(member)
+	if err != nil || len(body) != updaterSize || !bytes.Equal(body, f.files[updaterName]) {
+		t.Fatalf("large updater differs: got %d bytes, err=%v", len(body), err)
+	}
+}
+
 func memberNames(platform string) []string {
 	if platform == "windows" {
 		return []string{"minecraft-ui.exe", "selfupdate.exe", "LICENSE", "THIRD_PARTY_NOTICES.txt", "install.ps1"}
@@ -175,6 +223,187 @@ func TestImportCopiesExactAuthenticatedBytesAndOpenMember(t *testing.T) {
 			t.Fatalf("retained bytes differ for %s: %v", name, err)
 		}
 	}
+}
+
+func TestOpenRecordedReauthenticatesImportedInputsAndRetainsMemberPins(t *testing.T) {
+	f, options := importRecordedFixture(t)
+	inputs, err := openRecordedWith(context.Background(), f.transaction, options, recordedConfig{targetOS: runtime.GOOS, targetArch: "amd64", now: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC), testRoot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inputs.Close()
+	if got := inputs.Summary(); got.Version != options.Version || got.ManifestSHA256 != options.ManifestSHA256 || got.MemberCount != len(memberNames(runtime.GOOS)) {
+		t.Fatalf("recorded summary=%+v", got)
+	}
+	member := memberNames(runtime.GOOS)[0]
+	file, err := inputs.OpenMember(context.Background(), member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(file)
+	closeErr := file.Close()
+	if err != nil || closeErr != nil || !bytes.Equal(body, f.files[member]) {
+		t.Fatalf("recorded member body differs: read=%v close=%v", err, closeErr)
+	}
+}
+
+func TestOpenRecordedRejectsTamperingWithoutChangingTree(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*testing.T, importFixture)
+	}{
+		{"metadata", func(t *testing.T, f importFixture) {
+			path := filepath.Join(f.transaction.Name(), inputsName, metadataName)
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body[len(body)-2] ^= 1
+			if err := os.WriteFile(path, body, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"member", func(t *testing.T, f importFixture) {
+			member := memberNames(runtime.GOOS)[0]
+			if err := os.WriteFile(filepath.Join(f.transaction.Name(), inputsName, member), bytes.Repeat([]byte{'x'}, len(f.files[member])), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"foreign extra", func(t *testing.T, f importFixture) {
+			if err := os.WriteFile(filepath.Join(f.transaction.Name(), inputsName, "foreign"), []byte("foreign"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"unsafe mode", func(t *testing.T, f importFixture) {
+			if err := os.Chmod(filepath.Join(f.transaction.Name(), inputsName, "bootstrap.json"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, options := importRecordedFixture(t)
+			tc.mutate(t, f)
+			before := snapshotRecordedInputTree(t, f.transaction.Name())
+			if inputs, err := openRecordedWith(context.Background(), f.transaction, options, recordedConfig{targetOS: runtime.GOOS, targetArch: "amd64", now: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC), testRoot: true}); err == nil {
+				_ = inputs.Close()
+				t.Fatal("accepted modified recorded inputs")
+			}
+			after := snapshotRecordedInputTree(t, f.transaction.Name())
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("failed recorded inspection changed tree:\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
+func TestOpenRecordedRejectsPinnedMetadataReplacementDuringRead(t *testing.T) {
+	f, options := importRecordedFixture(t)
+	var afterMutation map[string]string
+	config := recordedConfig{targetOS: runtime.GOOS, targetArch: "amd64", now: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC), testRoot: true, afterRead: func(name string, transaction, _ *os.Root) error {
+		if name != metadataName {
+			return nil
+		}
+		path := filepath.Join(transaction.Name(), inputsName, metadataName)
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, body, 0600); err != nil {
+			return err
+		}
+		afterMutation = snapshotRecordedInputTree(t, transaction.Name())
+		return nil
+	}}
+	if inputs, err := openRecordedWith(context.Background(), f.transaction, options, config); err == nil {
+		_ = inputs.Close()
+		t.Fatal("accepted a metadata pathname replaced after its file was pinned")
+	}
+	if afterMutation == nil || !reflect.DeepEqual(afterMutation, snapshotRecordedInputTree(t, f.transaction.Name())) {
+		t.Fatal("failed inspection changed the tree after the injected replacement")
+	}
+}
+
+func TestOpenRecordedRejectsTransactionRootReplacement(t *testing.T) {
+	f, options := importRecordedFixture(t)
+	base := filepath.Dir(f.transaction.Name())
+	original := f.transaction.Name()
+	moved := original + ".held"
+	if err := f.transaction.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(original, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(original, 0700); err != nil {
+		t.Fatal(err)
+	}
+	newRoot, err := os.OpenRoot(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newRoot.Close()
+	before := snapshotRecordedInputTree(t, base)
+	if inputs, err := openRecordedWith(context.Background(), newRoot, options, recordedConfig{targetOS: runtime.GOOS, targetArch: "amd64", now: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC), testRoot: true}); err == nil {
+		_ = inputs.Close()
+		t.Fatal("accepted a replacement transaction root")
+	}
+	if after := snapshotRecordedInputTree(t, base); !reflect.DeepEqual(before, after) {
+		t.Fatalf("root replacement refusal changed tree:\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func importRecordedFixture(t *testing.T) (importFixture, RecordedOptions) {
+	t.Helper()
+	f := newImportFixture(t, runtime.GOOS)
+	config := importConfig{targetOS: runtime.GOOS, targetArch: "amd64", now: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC), testRoot: true}
+	inputs, err := importWith(context.Background(), f.transaction, f.options, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inputs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := os.ReadFile(filepath.Join(f.prepared, metadataName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, RecordedOptions{Version: f.options.Version, Trust: f.options.Trust, ManifestSHA256: digest(metadata)}
+}
+
+func snapshotRecordedInputTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	entries := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		value := info.Mode().String()
+		if !entry.IsDir() {
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			value += ":" + string(body)
+		}
+		entries[rel] = value
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
 }
 
 func TestCloseReleasesRetainedPins(t *testing.T) {

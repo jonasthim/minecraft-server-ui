@@ -31,6 +31,47 @@ func validateTransactionRoot(root *os.Root, testRoot bool) error {
 	return verifyRootBinding(root.Name(), root)
 }
 
+func validateRecordedInputsDirectory(root *os.Root, info os.FileInfo, testRoot bool) error {
+	if root == nil || info == nil || !info.IsDir() || info.Mode().Perm() != 0700 || info.Mode()&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return errors.New("recorded inputs directory permissions are unsafe")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	expected := uint32(0)
+	if testRoot {
+		expected = uint32(os.Geteuid())
+	}
+	opened, err := root.Stat(".")
+	if !ok || stat.Uid != expected || err != nil || !os.SameFile(info, opened) {
+		return errors.New("recorded inputs directory owner or identity is unsafe")
+	}
+	return nil
+}
+
+func validateRecordedInputMetadata(file *os.File, info os.FileInfo, mode os.FileMode, testRoot bool) error {
+	if info == nil || !info.Mode().IsRegular() || info.Mode().Perm() != mode || info.Mode()&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return errors.New("recorded input file mode or type is unsafe")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	expected := uint32(0)
+	if testRoot {
+		expected = uint32(os.Geteuid())
+	}
+	if !ok || stat.Uid != expected || stat.Nlink != 1 {
+		return errors.New("recorded input file owner or link count is unsafe")
+	}
+	if file != nil {
+		return checkOpenFile(file, info)
+	}
+	return nil
+}
+
+func validateOpenedMember(file *os.File, info os.FileInfo, mode os.FileMode) error {
+	if info == nil || info.Mode().Perm() != mode || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return errors.New("member mode changed")
+	}
+	return checkOpenFile(file, info)
+}
+
 func checkSourcePath(root *os.Root, name string, info os.FileInfo) error {
 	if info == nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("prepared source is not an ordinary file")
@@ -100,7 +141,7 @@ func createOutput(root *os.Root, name string, mode os.FileMode, owned *map[strin
 		_ = file.Close()
 		return nil, errors.New("new output file is unsafe")
 	}
-	(*owned)[name] = ownedFile{name: name, info: info, pin: file}
+	(*owned)[name] = ownedFile{name: name, info: info, pin: file, mode: mode}
 	if err := setOutputMode(file, mode); err != nil {
 		return nil, err
 	}

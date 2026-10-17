@@ -83,6 +83,8 @@ type ownedFile struct {
 	name string
 	info os.FileInfo
 	pin  *os.File
+	hash string
+	mode os.FileMode
 }
 
 type sourceFile struct {
@@ -395,7 +397,7 @@ func (inputs *Inputs) OpenMember(ctx context.Context, name string) (*os.File, er
 	}
 	info, err := f.Stat()
 	current, currentErr := inputs.root.Lstat(name)
-	if err != nil || currentErr != nil || !info.Mode().IsRegular() || checkOpenFile(f, info) != nil || !os.SameFile(info, current) || !sameFileIdentity(owned, info) {
+	if err != nil || currentErr != nil || !info.Mode().IsRegular() || validateOpenedMember(f, info, owned.mode) != nil || !os.SameFile(info, current) || !sameFileIdentity(owned, info) {
 		_ = f.Close()
 		return nil, fail("member identity changed", err)
 	}

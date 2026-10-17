@@ -29,6 +29,34 @@ func validateTransactionRoot(root *os.Root, testRoot bool) error {
 	return verifyRootBinding(root.Name(), root)
 }
 
+func validateRecordedInputsDirectory(root *os.Root, info os.FileInfo, _ bool) error {
+	if root == nil || info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("recorded inputs directory is unsafe")
+	}
+	opened, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, opened) {
+		return errors.New("recorded inputs directory identity changed")
+	}
+	if err := verifyDirectorySecurity(root.Name(), privateDACL, false); err != nil {
+		return errors.New("recorded inputs directory DACL is unsafe")
+	}
+	return nil
+}
+
+func validateRecordedInputMetadata(file *os.File, info os.FileInfo, _ os.FileMode, _ bool) error {
+	if info == nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("recorded input file type is unsafe")
+	}
+	if file != nil {
+		return checkOpenFile(file, info)
+	}
+	return nil
+}
+
+func validateOpenedMember(file *os.File, info os.FileInfo, _ os.FileMode) error {
+	return checkOpenFile(file, info)
+}
+
 func checkSourcePath(root *os.Root, name string, info os.FileInfo) error {
 	if info == nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("prepared source is not ordinary")
@@ -128,7 +156,7 @@ func createOutput(root *os.Root, name string, mode os.FileMode, owned *map[strin
 		_ = file.Close()
 		return nil, errors.New("new output file is unsafe")
 	}
-	(*owned)[name] = ownedFile{name: name, info: info, pin: file}
+	(*owned)[name] = ownedFile{name: name, info: info, pin: file, mode: mode}
 	if err := setOutputMode(file, mode); err != nil {
 		return nil, err
 	}
