@@ -152,6 +152,7 @@ jobs:
           chmod 0755 installer-input/linux/*/bootstrap
           if [[ "${{ matrix.scenario }}" == updater-coexistence ]]; then
             chmod 0755 installer-input/linux/qualify-selfupdate
+            chmod 0755 installer-input/linux/*/manager installer-input/windows/*/manager.exe
             sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT bash deploy/qualification/linux-installer.sh "$GITHUB_WORKSPACE/installer-input/linux/v0.0.1/bootstrap" "$GITHUB_WORKSPACE/installer-fixtures" "$GITHUB_WORKSPACE/installer-results" "${{ matrix.scenario }}" "$GITHUB_WORKSPACE/installer-input/linux/qualify-selfupdate" "$GITHUB_WORKSPACE/installer-input/linux" "$GITHUB_WORKSPACE/installer-input/windows"
           else
             sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT bash deploy/qualification/linux-installer.sh "$GITHUB_WORKSPACE/installer-input/linux/v0.0.1/bootstrap" "$GITHUB_WORKSPACE/installer-fixtures" "$GITHUB_WORKSPACE/installer-results" "${{ matrix.scenario }}"

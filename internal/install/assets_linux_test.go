@@ -9,10 +9,74 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+func TestEnsureAssetParentsUses0755UnderRestrictiveUmask(t *testing.T) {
+	const helperEnv = "MCSUI_ASSET_PARENT_UMASK_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		syscall.Umask(0077)
+		assertAssetParentsWithRestrictiveUmask(t)
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestEnsureAssetParentsUses0755UnderRestrictiveUmask$")
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("asset parent creation failed in umask 0077 subprocess: %v\n%s", err, output)
+	}
+}
+
+func assertAssetParentsWithRestrictiveUmask(t *testing.T) {
+	t.Helper()
+	assetRoot := filepath.Join(t.TempDir(), "assets")
+	if err := os.Mkdir(assetRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	borrowed := filepath.Join(assetRoot, "borrowed")
+	if err := os.Mkdir(borrowed, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(borrowed, 0710); err != nil {
+		t.Fatal(err)
+	}
+	paths := make(map[linuxAssetRole]string, len(fixedLinuxAssets))
+	for _, spec := range fixedLinuxAssets {
+		paths[spec.Role] = filepath.Join(borrowed, "created", "nested", string(spec.Role), filepath.Base(spec.Path))
+	}
+	previous := linuxAssetTestPolicy
+	linuxAssetTestPolicy = &linuxAssetTestPolicyConfig{root: assetRoot, uid: uint32(os.Geteuid()), paths: paths}
+	defer func() { linuxAssetTestPolicy = previous }()
+
+	driver := &linuxInstallDriver{}
+	if err := driver.ensureAssetParents(context.Background(), linuxIntent{}); err != nil {
+		t.Fatal(err)
+	}
+	borrowedInfo, err := os.Stat(borrowed)
+	if err != nil || borrowedInfo.Mode().Perm() != 0710 {
+		var mode os.FileMode
+		if borrowedInfo != nil {
+			mode = borrowedInfo.Mode()
+		}
+		t.Fatalf("borrowed directory mode changed: mode=%v err=%v", mode, err)
+	}
+	for _, path := range paths {
+		for directory := filepath.Dir(path); directory != borrowed; directory = filepath.Dir(directory) {
+			info, err := os.Stat(directory)
+			if err != nil || !info.IsDir() || info.Mode().Perm() != 0755 {
+				var mode os.FileMode
+				if info != nil {
+					mode = info.Mode()
+				}
+				t.Fatalf("new asset parent %q has mode %v, want 0755: %v", directory, mode, err)
+			}
+		}
+	}
+}
 
 func linuxAssetFixture(t *testing.T, role linuxAssetRole, present bool) (*linuxAssetSnapshot, string, *os.Root) {
 	t.Helper()

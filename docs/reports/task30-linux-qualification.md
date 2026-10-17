@@ -48,3 +48,26 @@ tests and therefore makes no Ubuntu acceptance claim. The fixture unit and
 marker are only process-lifetime and persistence checks, not a Minecraft
 support claim. The ordinary updater coexistence case is configured as its own
 native matrix scenario; the first run did not reach it.
+
+## Follow-up run
+
+Workflow run `39060449871` passed native input builds, artifact uploads, and
+signed fixture production, then failed all six lifecycle matrix jobs. Bounded
+summaries show the common earliest lifecycle and retained-retry failure was the
+first valid `prepare --install`: it returned `manual_repair` at stage `prepare`
+with an operation ID. The scrubbed service/journal diagnostic had no journal
+events and both fixed services inactive. The run also exposed that artifact
+extraction loses executable bits on manager peers used by the strict
+updater-coexistence preflight. The workflow now restores expected Linux and
+Windows manager modes only for that scenario; the preflight remains strict.
+No successful native installer lifecycle run has completed yet.
+
+Source diagnosis localized the first-install refusal to executor staging under
+the harness's restrictive umask077. The installer checked0755 before setting
+that mode. A subprocess regression reproduced the refusal, and descriptor-based
+mode setting now passes. Follow-up review also corrected new deployment parent
+directories retaining0700, which prevented the service account from reading
+operator updater trust. New directories receive0755; borrowed directories keep
+their metadata. Both fixes passed independent source review, focused repeated
+regressions and the integrator's combined race/vet checks. Hosted rerun remains
+required.

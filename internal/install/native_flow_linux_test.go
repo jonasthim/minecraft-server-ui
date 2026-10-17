@@ -12,8 +12,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -58,6 +60,81 @@ type nativeFlowInputs struct {
 	members []candidate.Member
 	paths   map[string]string
 	closed  bool
+}
+
+func TestStageExecutorHonorsRestrictiveUmask(t *testing.T) {
+	const helperEnv = "MCSUI_STAGE_EXECUTOR_UMASK_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		syscall.Umask(0077)
+		assertStageExecutorWithRestrictiveUmask(t)
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestStageExecutorHonorsRestrictiveUmask$")
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("StageExecutor failed in umask 0077 subprocess: %v\n%s", err, output)
+	}
+}
+
+func assertStageExecutorWithRestrictiveUmask(t *testing.T) {
+	t.Helper()
+	base := t.TempDir()
+	stateRoot := filepath.Join(base, "state")
+	operationPath := filepath.Join(stateRoot, installDirectory, strings.Repeat("1", 64))
+	if err := os.MkdirAll(operationPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state, err := os.OpenRoot(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	operation, err := os.OpenRoot(operationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Close()
+
+	intent, tx := freshLinuxApplyFixture()
+	executor := []byte("verified updater executor fixture")
+	sum := sha256.Sum256(executor)
+	executorHash := hex.EncodeToString(sum[:])
+	intent.ExecutorSHA256 = executorHash
+	for i := range intent.Assets {
+		if intent.Assets[i].Role == linuxAssetUpdater {
+			intent.Assets[i].After.SHA256 = executorHash
+			intent.Assets[i].After.Size = int64(len(executor))
+			intent.Assets[i].After.Mode = 0755
+		}
+	}
+	rawIntent, err := marshalLinuxIntent(intent, tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentDigest := sha256.Sum256(rawIntent)
+	tx.IntentSHA256 = hex.EncodeToString(intentDigest[:])
+	executorSource := filepath.Join(base, "executor-source")
+	if err := os.WriteFile(executorSource, executor, 0600); err != nil {
+		t.Fatal(err)
+	}
+	driver := &linuxInstallDriver{
+		state: state, store: &journalStore{}, operation: operation,
+		inputs: &nativeFlowInputs{paths: map[string]string{"selfupdate": executorSource}},
+		intent: &intent, tx: &tx,
+		hooks: linuxNativeHooks{stateRoot: stateRoot, testRoot: true},
+	}
+	path, err := driver.StageExecutor(context.Background(), tx)
+	if err != nil {
+		t.Fatalf("StageExecutor: %v", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0755 {
+		t.Fatalf("staged executor mode=%v; want regular mode 0755 under umask 0077", info.Mode())
+	}
 }
 
 func (i *nativeFlowInputs) Summary() installinputs.Summary { return i.summary }

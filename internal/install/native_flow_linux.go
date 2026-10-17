@@ -364,25 +364,8 @@ func (d *linuxInstallDriver) ensureAssetParents(ctx context.Context, intent linu
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		if !pathWithin(boundary, parent) {
-			return errors.New("deployment asset parent escapes fixed boundary")
-		}
-		missing := []string{}
-		for current := parent; current != boundary; current = filepath.Dir(current) {
-			if _, err := os.Lstat(current); err == nil {
-				break
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-			missing = append(missing, current)
-		}
-		for i := len(missing) - 1; i >= 0; i-- {
-			if err := os.Mkdir(missing[i], 0755); err != nil {
-				return fmt.Errorf("create fixed asset parent: %w", err)
-			}
-			if err := syncLinuxParentDirectory(missing[i]); err != nil {
-				return err
-			}
+		if err := createLinuxAssetParents(ctx, parent, boundary); err != nil {
+			return err
 		}
 		if err := checkLinuxAssetDirectoryChain(parent, boundary); err != nil {
 			return err

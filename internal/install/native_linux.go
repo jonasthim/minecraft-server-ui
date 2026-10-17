@@ -230,7 +230,7 @@ func (d *linuxInstallDriver) StageExecutor(ctx context.Context, tx transaction) 
 	}
 	path := filepath.Join(d.hooks.stateRoot, installDirectory, tx.ID, linuxExecutorName)
 	if info, statErr := d.operation.Lstat(linuxExecutorName); statErr == nil {
-		if !info.Mode().IsRegular() || info.Mode().Perm() != 0755 || !isNativeOwned(info) || info.Size() < 1 || info.Size() > candidate.MaxBinaryBytes {
+		if !info.Mode().IsRegular() || info.Mode().Perm() != 0755 || !linuxNativeProtectedFile(info, d.hooks.testRoot) || info.Size() < 1 || info.Size() > candidate.MaxBinaryBytes {
 			return "", errors.New("private installer executor copy is unsafe")
 		}
 		file, err := d.operation.Open(linuxExecutorName)
@@ -259,16 +259,33 @@ func (d *linuxInstallDriver) StageExecutor(ctx context.Context, tx transaction) 
 		return "", fmt.Errorf("create private installer executor: %w", err)
 	}
 	created, statErr := dst.Stat()
-	if statErr != nil || !created.Mode().IsRegular() || !isNativeOwned(created) || created.Mode().Perm() != 0755 {
+	createdPath, pathErr := d.operation.Lstat(linuxExecutorName)
+	if statErr != nil || pathErr != nil || !created.Mode().IsRegular() || !linuxNativeProtectedFile(created, d.hooks.testRoot) || created.Size() != 0 || !os.SameFile(created, createdPath) {
 		_ = dst.Close()
-		return "", errors.Join(errors.New("new private executor is unsafe"), statErr)
+		return "", errors.Join(errors.New("new private executor is unsafe"), statErr, pathErr)
+	}
+	// OpenFile's requested mode is masked by the process umask. Set the final
+	// executable mode through the retained descriptor before requiring it, then
+	// verify that descriptor still names the exclusive path we created.
+	if err := dst.Chmod(0755); err != nil {
+		_ = dst.Close()
+		return "", fmt.Errorf("set private executor mode: %w", err)
+	}
+	created, statErr = dst.Stat()
+	createdPath, pathErr = d.operation.Lstat(linuxExecutorName)
+	if statErr != nil || pathErr != nil || !created.Mode().IsRegular() || !linuxNativeProtectedFile(created, d.hooks.testRoot) || created.Mode().Perm() != 0755 || created.Size() != 0 || !os.SameFile(created, createdPath) {
+		_ = dst.Close()
+		return "", errors.Join(errors.New("new private executor identity changed while setting mode"), statErr, pathErr)
 	}
 	h := sha256.New()
 	count, copyErr := io.Copy(io.MultiWriter(dst, h), &contextReader{ctx: ctx, r: source})
 	syncErr := error(nil)
 	if copyErr == nil && count > 0 && count <= candidate.MaxBinaryBytes {
-		syncErr = dst.Chmod(0755)
-		if syncErr == nil {
+		finalInfo, finalStatErr := dst.Stat()
+		finalPath, finalPathErr := d.operation.Lstat(linuxExecutorName)
+		if finalStatErr != nil || finalPathErr != nil || !finalInfo.Mode().IsRegular() || !linuxNativeProtectedFile(finalInfo, d.hooks.testRoot) || finalInfo.Mode().Perm() != 0755 || finalInfo.Size() != count || !os.SameFile(created, finalInfo) || !os.SameFile(created, finalPath) {
+			syncErr = errors.Join(errors.New("staged executor identity changed during copy"), finalStatErr, finalPathErr)
+		} else {
 			syncErr = dst.Sync()
 		}
 	} else if copyErr == nil {
@@ -306,7 +323,7 @@ func (d *linuxInstallDriver) VerifyExecutor(ctx context.Context, tx transaction)
 		}
 	}
 	executorInfo, err := d.operation.Lstat(linuxExecutorName)
-	if err != nil || !executorInfo.Mode().IsRegular() || executorInfo.Mode().Perm() != 0755 || !isNativeOwned(executorInfo) {
+	if err != nil || !executorInfo.Mode().IsRegular() || executorInfo.Mode().Perm() != 0755 || !linuxNativeProtectedFile(executorInfo, d.hooks.testRoot) {
 		return errors.New("private installer executor identity is unavailable")
 	}
 	executorFile, err := d.operation.Open(linuxExecutorName)
@@ -445,10 +462,6 @@ func (r *contextReader) Read(p []byte) (int, error) {
 func isRootOwned(info os.FileInfo) bool {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	return ok && st.Uid == 0 && st.Nlink == 1 && info.Mode().IsRegular()
-}
-
-func isNativeOwned(info os.FileInfo) bool {
-	return isRootOwned(info)
 }
 
 var _ driver = (*linuxInstallDriver)(nil)

@@ -116,6 +116,8 @@ class InstallerHarnessFixtureTests(unittest.TestCase):
         self.assertIn("go build -trimpath -o installer-input/linux/qualify-selfupdate ./cmd/qualify-selfupdate", content)
         self.assertIn("if: matrix.scenario == 'updater-coexistence'", content)
         self.assertIn('"$GITHUB_WORKSPACE/installer-input/windows"', content)
+        self.assertIn("chmod 0755 installer-input/linux/*/manager", content)
+        self.assertIn("installer-input/windows/*/manager.exe", content)
 
     def test_database_snapshot_records_schema_and_manager_logical_state(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -250,6 +250,117 @@ func openLinuxAssetParent(ctx context.Context, parentPath, boundary string) (*os
 	return root, bound, bound == parentPath, nil
 }
 
+// createLinuxAssetParents creates only absent path components beneath a held
+// protected ancestor. New directory modes are applied through opened directory
+// handles so the caller's umask cannot make shared deployment parents
+// inaccessible to the manager service account.
+func createLinuxAssetParents(ctx context.Context, target, boundary string) error {
+	if ctx == nil || !filepath.IsAbs(target) || filepath.Clean(target) != target || !filepath.IsAbs(boundary) || filepath.Clean(boundary) != boundary || !pathWithin(boundary, target) || target == boundary {
+		return errors.New("deployment asset parent path is invalid")
+	}
+	parent, bound, _, err := openLinuxAssetParent(ctx, target, boundary)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if parent != nil {
+			_ = parent.Close()
+		}
+	}()
+	missing := make([]string, 0, 4)
+	for current := target; current != bound; current = filepath.Dir(current) {
+		if current == filepath.Dir(current) {
+			return errors.New("deployment asset parent escapes protected ancestor")
+		}
+		if _, err := os.Lstat(current); err == nil {
+			return errors.New("deployment asset parent appeared during creation")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, current)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	boundInfo, err := os.Lstat(bound)
+	openedBound, openedErr := parent.Stat(".")
+	if err != nil || openedErr != nil || !os.SameFile(boundInfo, openedBound) {
+		return errors.Join(errors.New("deployment asset ancestor changed before creation"), err, openedErr)
+	}
+	currentRoot := parent
+	parent = nil // currentRoot owns the root from here; it advances below.
+	defer func() {
+		if currentRoot != nil {
+			_ = currentRoot.Close()
+		}
+	}()
+	for i := len(missing) - 1; i >= 0; i-- {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		leaf := filepath.Base(missing[i])
+		if !filepath.IsLocal(leaf) || leaf == "." || leaf == ".." {
+			return errors.New("deployment asset directory component is invalid")
+		}
+		if err := currentRoot.Mkdir(leaf, 0755); err != nil {
+			return fmt.Errorf("create fixed asset parent: %w", err)
+		}
+		child, err := currentRoot.OpenRoot(leaf)
+		if err != nil {
+			return fmt.Errorf("open newly created asset parent: %w", err)
+		}
+		created, statErr := child.Stat(".")
+		entry, entryErr := currentRoot.Lstat(leaf)
+		if statErr != nil || entryErr != nil || !validLinuxAssetDirectoryOwner(created) || created.Mode().Perm()&0022 != 0 || !os.SameFile(created, entry) {
+			_ = child.Close()
+			return errors.Join(errors.New("new asset parent identity is unsafe"), statErr, entryErr)
+		}
+		directory, err := child.Open(".")
+		if err != nil {
+			_ = child.Close()
+			return fmt.Errorf("open new asset parent for mode update: %w", err)
+		}
+		chmodErr := directory.Chmod(0755)
+		modeInfo, modeErr := child.Stat(".")
+		modeEntry, modeEntryErr := currentRoot.Lstat(leaf)
+		closeErr := directory.Close()
+		if chmodErr != nil || modeErr != nil || modeEntryErr != nil || closeErr != nil || !validLinuxAssetDirectoryOwner(modeInfo) || modeInfo.Mode().Perm() != 0755 || !os.SameFile(created, modeInfo) || !os.SameFile(created, modeEntry) {
+			_ = child.Close()
+			return errors.Join(errors.New("new asset parent mode or identity changed"), chmodErr, modeErr, modeEntryErr, closeErr)
+		}
+		if err := syncDirectory(child); err != nil {
+			_ = child.Close()
+			return err
+		}
+		if err := syncDirectory(currentRoot); err != nil {
+			_ = child.Close()
+			return err
+		}
+		previous := currentRoot
+		currentRoot = child
+		if err := previous.Close(); err != nil {
+			return err
+		}
+	}
+	actual, err := currentRoot.Stat(".")
+	pathInfo, pathErr := os.Lstat(target)
+	if err != nil || pathErr != nil || !os.SameFile(actual, pathInfo) {
+		return errors.Join(errors.New("created asset parent is no longer bound to its fixed path"), err, pathErr)
+	}
+	if err := checkLinuxAssetDirectoryChain(target, boundary); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func validLinuxAssetDirectoryOwner(info os.FileInfo) bool {
+	if info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && stat.Uid == linuxAssetExpectedUID()
+}
+
 func pathWithin(root, path string) bool {
 	rel, err := filepath.Rel(root, path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
