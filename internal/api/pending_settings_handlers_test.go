@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -161,5 +164,119 @@ func TestPendingSettingsHTTPContractAndAuthority(t *testing.T) {
 	var discarded instance.PendingSettings
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &discarded) != nil || discarded.Draft != nil || discarded.Revision <= saved.Revision {
 		t.Fatalf("discard must retain revision: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestPendingSettingsHTTPRejectsCompactSerializedExpansionAtomically(t *testing.T) {
+	database, err := db.OpenMemory(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	paths, err := instance.NewPaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO users(id,username,role,created_at,updated_at) VALUES(1,'admin','admin','2026-10-17','2026-10-17')`); err != nil {
+		t.Fatal(err)
+	}
+	admin := domain.User{ID: 1, Username: "admin", Role: domain.RoleAdmin}
+	guard := pendingHTTPGuard{}
+	service := instance.New(database, paths, guard, instance.WithPendingSettingsGuard(guard))
+	detail, err := service.Create(t.Context(), admin, instance.Draft{Instance: domain.Instance{ID: "alpha", Name: "Alpha", Flavor: domain.FlavorVanilla, MinecraftVersion: "1.21.9", MemoryMiB: 1024, GamePort: 25565}, Config: instance.DefaultConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	MountInstances(router, service)
+	request := func(method string, body []byte) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/instances/alpha/pending-settings", bytes.NewReader(body))
+		req = req.WithContext(auth.WithUser(req.Context(), &admin))
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		return response
+	}
+	encode := func(v any) []byte {
+		var buffer bytes.Buffer
+		encoder := json.NewEncoder(&buffer)
+		encoder.SetEscapeHTML(false)
+		if err := encoder.Encode(v); err != nil {
+			t.Fatal(err)
+		}
+		return buffer.Bytes()
+	}
+	in := instance.SavePendingSettings{PendingSettingsDraft: instance.PendingSettingsDraft{Name: "Prior draft", MemoryMiB: 2048, Config: detail.Config}, ExpectedInstanceUpdatedAt: detail.Instance.UpdatedAt.Format(time.RFC3339Nano)}
+	saved := request("PUT", encode(in))
+	if saved.Code != 200 {
+		t.Fatalf("initial save: %d %s", saved.Code, saved.Body)
+	}
+	var before instance.PendingSettings
+	if err := json.Unmarshal(saved.Body.Bytes(), &before); err != nil {
+		t.Fatal(err)
+	}
+	var auditsBefore int
+	if err := database.QueryRow(`SELECT count(*) FROM audit_log`).Scan(&auditsBefore); err != nil {
+		t.Fatal(err)
+	}
+	in.ExpectedRevision = before.Revision
+	in.Name = "Expanded replacement"
+	in.Config.Extra = map[string]string{}
+	for i := range 100 {
+		in.Config.Extra[fmt.Sprintf("mod.option.%03d", i)] = strings.Repeat("<", 5000)
+	}
+	body := encode(in)
+	stored, err := json.Marshal(in.PendingSettingsDraft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) >= 1<<20 || len(stored) <= 2<<20 {
+		t.Fatalf("fixture must fit HTTP body but exceed stored budget: request=%d stored=%d", len(body), len(stored))
+	}
+	t.Logf("compact request bytes=%d serialized draft bytes=%d", len(body), len(stored))
+	response := request("PUT", body)
+	if response.Code != 422 {
+		t.Fatalf("oversized serialized draft must fail validation: status=%d response_bytes=%d", response.Code, response.Body.Len())
+	}
+	var failure struct {
+		Error struct {
+			Code domain.ErrorCode `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil || failure.Error.Code != domain.CodeValidationFailed {
+		t.Fatalf("expected ordinary validation error: %s %v", response.Body, err)
+	}
+	response = request("GET", nil)
+	var after instance.PendingSettings
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &after) != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("refusal changed prior draft: %d %s", response.Code, response.Body)
+	}
+	var auditsAfter int
+	if err := database.QueryRow(`SELECT count(*) FROM audit_log`).Scan(&auditsAfter); err != nil || auditsAfter != auditsBefore {
+		t.Fatalf("refusal changed audits: before=%d after=%d err=%v", auditsBefore, auditsAfter, err)
+	}
+	response = request("DELETE", encode(map[string]int64{"expected_revision": before.Revision}))
+	if response.Code != 200 {
+		t.Fatalf("prior draft no longer discardable: %d %s", response.Code, response.Body)
+	}
+	var discarded instance.PendingSettings
+	if err := json.Unmarshal(response.Body.Bytes(), &discarded); err != nil || discarded.Draft != nil || discarded.Revision != before.Revision+1 {
+		t.Fatalf("discard outcome: %s %v", response.Body, err)
+	}
+	// A smaller HTML-sensitive draft still makes the complete save/read/discard
+	// round trip; the budget rejects only the oversized stored representation.
+	in.ExpectedRevision = discarded.Revision
+	in.Config.Extra = map[string]string{"mod.option": strings.Repeat("<>&", 2000)}
+	response = request("PUT", encode(in))
+	if response.Code != 200 {
+		t.Fatalf("bounded save: %d %s", response.Code, response.Body)
+	}
+	response = request("GET", nil)
+	var bounded instance.PendingSettings
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &bounded) != nil || bounded.Draft == nil || !reflect.DeepEqual(*bounded.Draft, in.PendingSettingsDraft) {
+		t.Fatalf("bounded read: %d %s", response.Code, response.Body)
+	}
+	response = request("DELETE", encode(map[string]int64{"expected_revision": bounded.Revision}))
+	if response.Code != 200 {
+		t.Fatalf("bounded discard: %d %s", response.Code, response.Body)
 	}
 }

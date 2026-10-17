@@ -8,6 +8,8 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -398,5 +400,58 @@ func TestPendingSettingsAnotherAdminCanReauthorizeSameDesiredDraft(t *testing.T)
 	state, err := s.SavePendingSettings(ctx, domain.User{ID: 2, Username: "other-admin", Role: domain.RoleAdmin}, "alpha", in)
 	if err != nil || state.UpdatedBy != 2 || state.Revision != 2 {
 		t.Fatal("deliberate resave did not authorize new originator", state, err)
+	}
+}
+
+func TestPendingSettingsRejectsOversizedSerializedDraftAtomically(t *testing.T) {
+	for _, prior := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prior=%t", prior), func(t *testing.T) {
+			s, d, _ := pendingFixture(t)
+			ctx := t.Context()
+			if prior {
+				if _, err := s.SavePendingSettings(ctx, admin, "alpha", pendingInput(d)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := s.GetPendingSettings(ctx, "alpha")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var auditsBefore int
+			if err := s.db.QueryRow(`SELECT count(*) FROM audit_log`).Scan(&auditsBefore); err != nil {
+				t.Fatal(err)
+			}
+			in := pendingInput(d)
+			in.ExpectedRevision = before.Revision
+			in.Name = "Oversized replacement"
+			in.Config.Extra = map[string]string{}
+			for i := range 100 {
+				in.Config.Extra[fmt.Sprintf("mod.option.%03d", i)] = strings.Repeat("<", 5000)
+			}
+			raw, err := json.Marshal(in.PendingSettingsDraft)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(raw) <= 2<<20 {
+				t.Fatalf("fixture does not exceed serialized limit: %d", len(raw))
+			}
+			if _, err := s.SavePendingSettings(ctx, admin, "alpha", in); domain.AsError(err).Code != domain.CodeValidationFailed {
+				t.Fatalf("oversized serialized draft accepted: %v", err)
+			}
+			after, err := s.GetPendingSettings(ctx, "alpha")
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatalf("refusal changed prior draft: before=%+v after=%+v err=%v", before, after, err)
+			}
+			var auditsAfter, rows int
+			if err := s.db.QueryRow(`SELECT count(*) FROM audit_log`).Scan(&auditsAfter); err != nil || auditsAfter != auditsBefore {
+				t.Fatalf("refusal changed audits: before=%d after=%d err=%v", auditsBefore, auditsAfter, err)
+			}
+			if err := s.db.QueryRow(`SELECT count(*) FROM instance_pending_settings WHERE instance_id='alpha'`).Scan(&rows); err != nil || (rows == 1) != prior {
+				t.Fatalf("refusal changed pending row existence: rows=%d err=%v", rows, err)
+			}
+			if _, err := s.DiscardPendingSettings(ctx, admin, "alpha", before.Revision); err != nil {
+				t.Fatalf("prior state cannot be discarded: %v", err)
+			}
+		})
 	}
 }

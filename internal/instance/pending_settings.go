@@ -15,7 +15,10 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/jobs"
 )
 
-const maxPendingRevision int64 = 9007199254740991
+const (
+	maxPendingRevision      int64 = 9007199254740991
+	maxPendingSettingsBytes       = 2 << 20
+)
 
 type PendingSettingsDraft struct {
 	Name      string                `json:"name"`
@@ -105,7 +108,7 @@ func readPendingSettings(ctx context.Context, r pendingReader, id string, d Deta
 		return invalid()
 	}
 	if raw.Valid {
-		if len(raw.String) > 2<<20 {
+		if len(raw.String) > maxPendingSettingsBytes {
 			return invalid()
 		}
 
@@ -215,6 +218,9 @@ func (s *Service) SavePendingSettings(ctx context.Context, actor domain.User, id
 		raw, err := json.Marshal(in.PendingSettingsDraft)
 		if err != nil {
 			return err
+		}
+		if len(raw) > maxPendingSettingsBytes {
+			return domain.E(domain.CodeValidationFailed, "serialized pending settings must not exceed 2 MiB")
 		}
 		out = PendingSettings{Revision: before.Revision + 1, Draft: &in.PendingSettingsDraft, BaseUpdatedAt: revision, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), UpdatedBy: fresh.ID}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO instance_pending_settings(instance_id,revision,draft_json,base_updated_at,updated_at,updated_by) VALUES(?,?,?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET revision=excluded.revision,draft_json=excluded.draft_json,base_updated_at=excluded.base_updated_at,updated_at=excluded.updated_at,updated_by=excluded.updated_by`, id, out.Revision, string(raw), out.BaseUpdatedAt, out.UpdatedAt, out.UpdatedBy); err != nil {

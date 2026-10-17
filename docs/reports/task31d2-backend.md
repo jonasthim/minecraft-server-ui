@@ -45,3 +45,37 @@ git diff --check -- internal/instance/service.go internal/instance/session.go in
 New tests use actual migrated SQLite, actual queue admissions and explicitly labeled native fixtures. Coverage includes DB-only running save, viewer/revoked author, pending/active CAS, idempotency, tombstone revision cycles, stale selection/rebase, level-name and secret rejection, mandatory guard/overflow, incomplete stored JSON, competing saves, actual same-instance jobs and queued successors, forged/copied/unbound/expired capabilities, memory activation, SQL/audit/deferred-commit/seal failures, unsafe managed-path refusal, ordinary no-pending compatibility through the existing package suite, autostart isolation and the actual update-start path. Deferred-commit injection verifies active memory and seal remain old and draft remains pending when SQL commit fails. The unsafe managed path case refuses during snapshot validation; it is not evidence of failure after file writing has begun. Existing shared transaction recovery tests continue to cover write/recovery behavior.
 
 The ordinary-start fixture deliberately has no readiness transport: it asserts actual fixture native start, committed settings, memory seal and tombstone, followed by an honestly failed readiness job. The current-job instance tests separately assert successful atomic apply under real queue authority. This does not qualify real games, client connectivity, native Linux/Windows services, distribution/version combinations, direct OS autostart behavior or stable release support. Independent review, composed HTTP/UI acceptance and ledger updates remain with the integrator.
+
+## Review correction round 1 — R1 serialized-size refusal
+
+2026-10-17, against frozen backend `6227cb2`. Read `docs/reports/review-task31d2-backend.md` and the original frozen brief. The independent review identified a real accepted-input defect: the HTTP request budget and typed value bounds did not account for HTML escaping in `json.Marshal`, so a save could create a draft larger than its own reader allowed.
+
+`maxPendingSettingsBytes` now defines the same unchanged 2 MiB budget for reading and saving. Save measures the actual marshaled draft and returns ordinary `validation_failed` before INSERT, revision change or audit. This does not raise the reader limit or change HTTP/schema contracts. The integrator explicitly extended ownership to permit a focused regression in `internal/api/pending_settings_handlers_test.go`.
+
+Changed files in this correction: `internal/instance/pending_settings.go`, `internal/instance/pending_settings_test.go`, `internal/api/pending_settings_handlers_test.go`, and this report. No lifecycle/shared wiring changes or unrelated working-tree edits were made.
+
+Observed red then green:
+
+```text
+go test ./internal/instance ./internal/api -run 'TestPendingSettingsRejectsOversizedSerializedDraftAtomically|TestPendingSettingsHTTPRejectsCompactSerializedExpansionAtomically' -v -count=1 -timeout=60s
+```
+
+Before the fix, both service subcases (`prior=false`, `prior=true`) failed because save returned no error. The shipping HTTP regression logged a compact 502358-byte request that serializes to a 3002271-byte draft, then failed because PUT returned 200/revision2 instead of 422. After the fix, the same command passed: instance0.052s; API0.055s. The HTTP regression verifies the ordinary validation error code, identical prior draft metadata/content/revision, unchanged audit count, successful prior GET/discard, and a smaller HTML-sensitive save→GET→discard round trip. The service regressions additionally verify absent rows remain absent when the first save is refused.
+
+Final correction checks, exit0:
+
+```text
+go test -race ./internal/instance ./internal/lifecycle ./internal/api ./cmd/minecraft-ui -run 'TestPendingSettings|TestOrdinaryStart|TestAutostartPreparationPreservesPendingSettings|TestUpdateStartPreservesPendingSettings' -count=1 -timeout=120s
+  instance8.427s; lifecycle4.049s; API1.838s; main2.097s
+
+go test ./internal/instance ./internal/lifecycle ./internal/api ./cmd/minecraft-ui -count=1 -timeout=120s
+  instance0.645s; lifecycle0.526s; API0.706s; main0.408s
+
+go vet ./internal/instance ./internal/lifecycle ./internal/api ./cmd/minecraft-ui
+  no findings
+
+git diff --check -- internal/instance/pending_settings.go internal/instance/pending_settings_test.go internal/api/pending_settings_handlers_test.go docs/reports/task31d2-backend.md
+  clean
+```
+
+These are migrated-SQLite and shipping-handler fixtures. No real services/games, user preview, vault writes, staging, commits or pushes were involved. R1 is submitted for independent re-review; integrator acceptance and ledger ownership remain unchanged.
