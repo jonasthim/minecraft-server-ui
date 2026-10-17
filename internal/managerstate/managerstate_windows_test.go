@@ -3,6 +3,8 @@
 package managerstate
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -30,6 +32,135 @@ func TestPrivateDirectoryOwnerUsesExactSIDAndWellKnownOwners(t *testing.T) {
 				t.Fatalf("owner decision = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestExactPrivateDACLUsesBinaryAllowlist(t *testing.T) {
+	managerSID := "S-1-5-21-111-222-333-1000"
+	for _, test := range []struct {
+		name string
+		dacl string
+		want bool
+	}{
+		{
+			name: "alternate ACE order and numeric access mask",
+			dacl: "D:P(A;OICI;0x001f01ff;;;SY)(A;OICI;FA;;;" + managerSID + ")(A;OICI;0x001f01ff;;;BA)",
+			want: true,
+		},
+		{
+			name: "exact generated descriptor",
+			dacl: "D:P(A;OICI;FA;;;" + managerSID + ")(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)",
+			want: true,
+		},
+		{
+			name: "extra principal",
+			dacl: "D:P(A;OICI;FA;;;" + managerSID + ")(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)(A;OICI;FA;;;WD)",
+		},
+		{
+			name: "deny ACE",
+			dacl: "D:P(D;OICI;FA;;;WD)(A;OICI;FA;;;" + managerSID + ")(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)",
+		},
+		{
+			name: "reduced rights",
+			dacl: "D:P(A;OICI;GW;;;" + managerSID + ")(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)",
+		},
+		{
+			name: "unprotected DACL",
+			dacl: "D:(A;OICI;FA;;;" + managerSID + ")(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)",
+		},
+		{
+			name: "inherit only ACE",
+			dacl: "D:P(A;IO;FA;;;" + managerSID + ")(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sd, err := windows.SecurityDescriptorFromString(test.dacl)
+			if err != nil {
+				t.Fatal("test security descriptor could not be built")
+			}
+			err = checkExactPrivateDACL(sd, managerSID)
+			if (err == nil) != test.want {
+				t.Fatalf("private DACL accepted = %v, want %v", err == nil, test.want)
+			}
+		})
+	}
+}
+
+func TestPlatformManagerSIDUsesBinaryWritableACEs(t *testing.T) {
+	managerSID := testManagerStateSID(t)
+	inheritedOnlySID := "S-1-5-21-998-997-996-1000"
+	if inheritedOnlySID == managerSID {
+		inheritedOnlySID = "S-1-5-21-998-997-996-1001"
+	}
+	for _, test := range []struct {
+		name    string
+		account string
+		want    string
+	}{
+		{
+			name:    "effective manager wins over inherited-only writable SID",
+			account: "(A;OICI;0x001f01ff;;;" + managerSID + ")(A;OICIIO;0x001f01ff;;;" + inheritedOnlySID + ")",
+			want:    managerSID,
+		},
+		{
+			name:    "inherited-only SID is not an effective manager",
+			account: "(A;OICIIO;0x001f01ff;;;" + inheritedOnlySID + ")",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := t.TempDir()
+			setManagerStateTestDACL(t, path, "D:P"+test.account+"(A;OICI;0x001f01ff;;;BA)(A;OICI;0x001f01ff;;;SY)")
+			root, err := os.OpenRoot(filepath.Clean(path))
+			if err != nil {
+				t.Fatal("test data directory could not be opened")
+			}
+			defer root.Close()
+			got, err := platformManagerSID(root)
+			if test.want == "" {
+				if err == nil || got != "" {
+					t.Fatal("inherited-only SID was accepted as an effective manager")
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("manager SID lookup returned expected=%v", err == nil && got == test.want)
+			}
+		})
+	}
+}
+
+func TestMaskGrantsWriteIncludesDirectoryDeleteChild(t *testing.T) {
+	const fileDeleteChild = uint32(0x00000040)
+	for _, test := range []struct {
+		name string
+		mask uint32
+		want bool
+	}{
+		{name: "delete children", mask: fileDeleteChild, want: true},
+		{name: "write file data", mask: windows.FILE_WRITE_DATA, want: true},
+		{name: "read only", mask: windows.FILE_READ_DATA, want: false},
+		{name: "execute only", mask: windows.FILE_EXECUTE, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := maskGrantsWrite(test.mask); got != test.want {
+				t.Fatalf("write classification = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func setManagerStateTestDACL(t *testing.T, path, sddl string) {
+	t.Helper()
+	descriptor, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		t.Fatal("test data DACL could not be built")
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		t.Fatal("test data DACL could not be read")
+	}
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		t.Fatal("test data DACL could not be applied")
 	}
 }
 

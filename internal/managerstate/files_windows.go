@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -28,37 +27,34 @@ func platformManagerSID(data *os.Root) (string, error) {
 	if err != nil || pathErr != nil || !os.SameFile(before, after) || !os.SameFile(before, current) {
 		return "", errors.New("manager data directory identity changed")
 	}
-	text := sd.String()
-	start := strings.Index(text, "D:")
-	if start < 0 {
+	acl, _, err := sd.DACL()
+	if err != nil || acl == nil {
 		return "", errors.New("manager data DACL is unavailable")
 	}
-	accounts := map[string]uint32{}
-	for rest := text[start:]; ; {
-		open := strings.IndexByte(rest, '(')
-		if open < 0 {
-			break
-		}
-		rest = rest[open+1:]
-		end := strings.IndexByte(rest, ')')
-		if end < 0 {
+	var accountSID string
+	for index := uint32(0); index < uint32(acl.AceCount); index++ {
+		var raw *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, index, &raw); err != nil || raw == nil {
 			return "", errors.New("manager data DACL is malformed")
 		}
-		fields := strings.Split(rest[:end], ";")
-		if len(fields) == 6 && fields[0] == "A" && strings.HasPrefix(fields[5], "S-1-5-21-") {
-			accounts[fields[5]] |= parseSDDLMask(fields[2])
-		}
-		rest = rest[end+1:]
-	}
-	var accountSID string
-	for sid, rights := range accounts {
-		if rights&0x00000002 == 0 && rights&0x40000000 == 0 && rights != ^uint32(0) {
+		if raw.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
 			continue
 		}
-		if accountSID != "" && accountSID != sid {
+		ace, sid, err := privateAllowACE(acl, index)
+		if err != nil || !sid.IsValid() {
+			return "", errors.New("manager data DACL is malformed")
+		}
+		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
+			continue
+		}
+		account := sid.String()
+		if !strings.HasPrefix(account, "S-1-5-21-") || !maskGrantsWrite(uint32(ace.Mask)) {
+			continue
+		}
+		if accountSID != "" && accountSID != account {
 			return "", errors.New("manager data DACL has multiple writable account principals")
 		}
-		accountSID = sid
+		accountSID = account
 	}
 	if accountSID == "" {
 		return "", errors.New("manager account ACE is missing")
@@ -70,22 +66,69 @@ func platformManagerSID(data *os.Root) (string, error) {
 	return accountSID, nil
 }
 
-func parseSDDLMask(value string) uint32 {
-	switch strings.ToUpper(value) {
-	case "FA", "GA":
-		return ^uint32(0)
-	case "M":
-		return 0x1301bf
-	case "GW":
-		return 0x40000000
+func maskGrantsWrite(mask uint32) bool {
+	// FILE_DELETE_CHILD is a directory access right (0x40) that is not
+	// currently exported by x/sys/windows. It permits deleting directory entries.
+	const fileDeleteChild = uint32(0x00000040)
+	const writeRights = uint32(windows.FILE_WRITE_DATA|windows.FILE_APPEND_DATA|windows.FILE_WRITE_EA|windows.FILE_WRITE_ATTRIBUTES|windows.DELETE|windows.WRITE_DAC|windows.WRITE_OWNER) | fileDeleteChild
+	return mask&(windows.GENERIC_WRITE|windows.GENERIC_ALL|writeRights) != 0
+}
+
+// privateAllowACE validates the minimum ACE layout before interpreting the SID
+// bytes. GetAce returns a pointer into the Windows-owned ACL buffer.
+func privateAllowACE(acl *windows.ACL, index uint32) (*windows.ACCESS_ALLOWED_ACE, *windows.SID, error) {
+	if acl == nil || index >= uint32(acl.AceCount) {
+		return nil, nil, errors.New("ACL entry is unavailable")
 	}
-	if strings.HasPrefix(strings.ToLower(value), "0x") {
-		parsed, err := strconv.ParseUint(value[2:], 16, 32)
-		if err == nil {
-			return uint32(parsed)
+	var ace *windows.ACCESS_ALLOWED_ACE
+	if err := windows.GetAce(acl, index, &ace); err != nil || ace == nil {
+		return nil, nil, errors.New("ACL entry is unavailable")
+	}
+	if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+		return nil, nil, errors.New("ACL entry is not an allow ACE")
+	}
+	if ace.Header.AceSize < uint16(unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart)+8) {
+		return nil, nil, errors.New("ACL entry is truncated")
+	}
+	sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+	sidBytes := 8 + 4*int(sid.SubAuthorityCount())
+	if sid.SubAuthorityCount() > 15 || sidBytes > int(ace.Header.AceSize)-int(unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart)) || !sid.IsValid() {
+		return nil, nil, errors.New("ACL SID is truncated")
+	}
+	return ace, sid, nil
+}
+
+func checkExactPrivateDACL(sd *windows.SECURITY_DESCRIPTOR, managerSID string) error {
+	if sd == nil {
+		return errors.New("directory DACL is missing")
+	}
+	control, _, err := sd.Control()
+	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
+		return errors.New("directory DACL is not protected")
+	}
+	acl, defaulted, err := sd.DACL()
+	if err != nil || defaulted || acl == nil || acl.AceCount != 3 {
+		return errors.New("directory DACL is not the exact private allowlist")
+	}
+	want := map[string]bool{managerSID: false, "S-1-5-32-544": false, "S-1-5-18": false}
+	for index := uint32(0); index < uint32(acl.AceCount); index++ {
+		ace, sid, err := privateAllowACE(acl, index)
+		if err != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags != windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE || uint32(ace.Mask) != 0x001f01ff {
+			return errors.New("directory DACL is not the exact private allowlist")
+		}
+		key := sid.String()
+		seen, ok := want[key]
+		if !ok || seen {
+			return errors.New("directory DACL is not the exact private allowlist")
+		}
+		want[key] = true
+	}
+	for _, seen := range want {
+		if !seen {
+			return errors.New("directory DACL is not the exact private allowlist")
 		}
 	}
-	return 0
+	return nil
 }
 
 func ensurePrivateDirectory(parent *os.Root, name, managerSID string) (*os.Root, error) {
@@ -197,14 +240,8 @@ func checkPrivateDirectory(parent *os.Root, name string, info os.FileInfo, manag
 	if err != nil || !privateDirectoryOwnerAllowed(owner, managerSID) {
 		return errors.New("directory owner is unsafe")
 	}
-	actual := sd.String()
-	aclStart := strings.Index(actual, "D:")
-	if aclStart < 0 {
-		return errors.New("directory DACL is missing")
-	}
-	expected := "D:P(A;OICI;FA;;;" + managerSID + ")(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)"
-	if actual[aclStart:] != expected {
-		return errors.New("directory DACL is not the exact private allowlist")
+	if err := checkExactPrivateDACL(sd, managerSID); err != nil {
+		return err
 	}
 	current, err := parent.Lstat(name)
 	if err != nil || !os.SameFile(info, current) {
