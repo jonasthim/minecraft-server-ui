@@ -1,4 +1,4 @@
-# Task 33a: Windows firewall address probe
+# Task 33a: Windows firewall provider and address probe
 
 ## Observed failure
 
@@ -6,7 +6,7 @@ Windows game acceptance run [39042942229](https://github.com/jonasthim/minecraft
 
 The existing call's `RemoteAddress` input contains two IPv4 ranges excluding `127.0.0.0/8`, plus `::/0`. Microsoft's [New-NetFirewallRule documentation](https://learn.microsoft.com/en-us/powershell/module/netsecurity/new-netfirewallrule?view=windowsserver2022-ps) lists both address ranges and subnets as accepted input formats. The docs do not establish whether this exact mixed IPv4-range/IPv6-subnet combination is accepted by the hosted Windows Server 2022 NetSecurity provider.
 
-## Bounded experiment
+## First bounded experiment
 
 Added `deploy/qualification/windows-firewall.ps1` as a disposable hosted Windows Server 2022 probe. It performs two independent create/readback/cleanup cases using fixed rule names and refuses either name if it exists before the experiment:
 
@@ -25,4 +25,14 @@ The root integrator owns the minimal workflow wiring and hosted dispatch. The sc
 - PowerShell 7.6.7 parser — passed.
 - `git diff --check -- deploy/qualification/windows-firewall.ps1 docs/reports/task33a-firewall-probe.md` — passed.
 
-No local Windows or firewall native operation was run. The two cases have not yet been executed on a hosted Windows runner, so their create/readback/cleanup results remain pending.
+No local Windows or firewall native operation was run. Hosted results are recorded in `task33a-firewall-native-result.md`.
+
+## Follow-up isolation packet
+
+The first hosted probe failed to create both the original range expression and its mathematically equivalent CIDR expression with the same generic CIM codes. That result does not isolate whether the provider rejects the remote-address input or whether rule creation fails independently of it. The probe now records read-only BFE and MpsSvc status, the `MSFT_NetFirewallRule` class query result, and availability of three required NetSecurity cmdlets. Values are limited to fixed statuses and booleans; raw exception messages and arbitrary provider text are not emitted.
+
+On the next hosted run, six sequential cases use a fixed `MinecraftUI-Task33a-Firewall-Probe-*` namespace. Before any creation, the script checks that every fixed name is absent. Cases include a minimal inbound TCP block rule, the full game rule fields with only `RemoteAddress` omitted, the IPv4 range set alone, `::/0` alone, the original mixed expression, and the equivalent CIDR set. All rules block only inbound TCP ports 25565 and/or 8080. Each created rule is read back where its address input can be compared, then removed by its exact fixed name in `finally`; the script verifies absence before proceeding. Any failed cleanup fails the probe.
+
+Each case emits only its fixed label, creation/readback/cleanup booleans, bounded numeric CIM codes, and a finite failure category derived from exception type, selected numeric codes, or fixed provider/access-denied markers. It retains no raw exception message, fully qualified error ID, or arbitrary native data. The packet makes no firewall policy, service, account, or server changes.
+
+The six hosted cases are intentionally small. If the no-remote-address rules also fail, provider readiness and command availability become the primary evidence. If those succeed while address-specific cases fail, the family-specific cases narrow the rejected input. No shipping firewall change is authorized by this probe alone; native game acceptance remains a separate gate.

@@ -5,7 +5,7 @@ permissions:
   contents: read
 jobs:
   firewall:
-    name: Compare equivalent loopback exclusions
+    name: Isolate firewall provider and rule parameters
     runs-on: windows-2022
     timeout-minutes: 10
     steps:

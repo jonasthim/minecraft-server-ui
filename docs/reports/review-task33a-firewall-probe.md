@@ -21,3 +21,17 @@ The manual windows-firewall workflow has read-only repository permission, one
 WindowsServer2022 job, ten-minute bound and bounded evidence retention. It builds
 no game and is separately labelled. Actual syntax acceptance/readback/cleanup is
 pending native execution; neither expression is accepted merely from source.
+# Follow-up review: provider and parameter isolation
+
+The first native run39043681496 completed with both address forms rejected and
+both cleanup checks passing; its workflow success does not mean rule creation
+succeeded. The follow-up adds six fixed block-rule cases and read-only BFE,
+MpsSvc, provider-class and NetSecurity command availability. Every rule name is
+prechecked, cleanup is verified, and any cleanup uncertainty halts later cases.
+No shipping game restriction, firewall profile, service or account is changed.
+
+Root corrected the availability check's initial Cmdlet-only assumption: CDXML
+commands may be Functions. Exact command names and the NetSecurity module remain
+required. The portable PowerShell7.6.7 pure fixtures pass, including Function,
+Cmdlet, wrong-module and wrong-name cases. Numeric diagnostics and fixed category
+outputs remain bounded; the new native probe is not yet executed.

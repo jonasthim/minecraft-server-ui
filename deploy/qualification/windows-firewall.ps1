@@ -1,6 +1,7 @@
-# Task 33a diagnostic only. This script creates and removes two fixed inbound
-# block rules on a fresh hosted Windows Server 2022 runner. It does not run a
-# server, create a listener, or change service/account state.
+# Task 33a diagnostic only. This script captures read-only firewall provider
+# state, then creates/removes a small fixed set of inbound block rules on a
+# fresh hosted Windows Server 2022 runner. It does not run a server, create a
+# listener, or change service, account, firewall profile, or firewall policy.
 param(
  [string]$OutputDirectory,
  [switch]$PureFixtureOnly
@@ -115,8 +116,28 @@ function Test-FirewallAddressNormalization {
  return $true
 }
 
+function Test-NetSecurityCommandAvailable([object[]]$Commands, [string]$ExpectedName) {
+ foreach ($command in $Commands) {
+  if ($command.Name -cne $ExpectedName -or $command.CommandType -notin @('Cmdlet','Function')) { continue }
+  if ($command.ModuleName -ceq 'NetSecurity' -or $command.Source -ceq 'NetSecurity') { return $true }
+ }
+ return $false
+}
+
+function Test-FirewallCommandAvailabilityFixture {
+ $cdxmlFunction = [pscustomobject]@{Name='Get-NetFirewallRule';CommandType='Function';ModuleName='NetSecurity';Source='NetSecurity'}
+ $providerCmdlet = [pscustomobject]@{Name='New-NetFirewallRule';CommandType='Cmdlet';ModuleName='NetSecurity';Source='NetSecurity'}
+ $unrelated = [pscustomobject]@{Name='Get-NetFirewallRule';CommandType='Function';ModuleName='PrivateModule';Source='PrivateModule'}
+ if (-not (Test-NetSecurityCommandAvailable @($cdxmlFunction) 'Get-NetFirewallRule')) { throw 'NetSecurity function fixture failed' }
+ if (-not (Test-NetSecurityCommandAvailable @($providerCmdlet) 'New-NetFirewallRule')) { throw 'NetSecurity cmdlet fixture failed' }
+ if (Test-NetSecurityCommandAvailable @($unrelated) 'Get-NetFirewallRule') { throw 'unrelated firewall command fixture failed' }
+ if (Test-NetSecurityCommandAvailable @($cdxmlFunction) 'New-NetFirewallRule') { throw 'mismatched firewall command fixture failed' }
+ return $true
+}
+
 if (-not (Test-FirewallAddressNormalization)) { throw 'firewall address normalization fixture failed' }
-if ($PureFixtureOnly) { [Console]::Out.WriteLine('firewall address fixtures passed'); exit 0 }
+if (-not (Test-FirewallCommandAvailabilityFixture)) { throw 'firewall command availability fixture failed' }
+if ($PureFixtureOnly) { [Console]::Out.WriteLine('firewall pure fixtures passed'); exit 0 }
 
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'fresh hosted runner required' }
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Windows Server 2022 runner required' }
@@ -139,14 +160,88 @@ if ($pathCursor -ine $workspace -or -not $pathItem.PSIsContainer) { throw 'ordin
 if (@(Get-ChildItem -LiteralPath $outputPath -Force -ErrorAction Stop).Count -ne 0) { throw 'firewall output directory must be empty' }
 $reportPath = Join-Path $outputPath 'firewall-summary.json'
 
-$caseDefinitions = @(
- [pscustomobject]@{Label='original';Name='MinecraftUI-Task33a-Firewall-Probe-Original';Addresses=@('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/0')},
- [pscustomobject]@{Label='cidr_equivalent';Name='MinecraftUI-Task33a-Firewall-Probe-CIDR';Addresses=@('128.0.0.0/1','0.0.0.0/2','64.0.0.0/3','96.0.0.0/4','112.0.0.0/5','120.0.0.0/6','124.0.0.0/7','126.0.0.0/8','::/0')}
-)
-foreach ($definition in $caseDefinitions) {
- $existing = @(Get-NetFirewallRule -ErrorAction Stop | Where-Object { $_.Name -ceq $definition.Name })
- if ($existing.Count -ne 0) { throw 'fixed firewall probe name already exists' }
+$script:diagnosticErrors = [Collections.Generic.List[string]]::new()
+function Get-FixedFailureCategory([System.Management.Automation.ErrorRecord]$Record) {
+ $type = $Record.Exception.GetType().Name
+ if ($type -eq 'ParameterBindingValidationException' -or $type -eq 'ParameterBindingException') { return 'parameter_binding' }
+ if ($type -eq 'CimException') {
+  $native = $Record.Exception.PSObject.Properties['NativeErrorCode']
+  if ($null -ne $native -and $null -ne $native.Value) {
+   try {
+    switch ([Convert]::ToInt64($native.Value,[Globalization.CultureInfo]::InvariantCulture)) {
+     5 { return 'cim_access_denied' }
+     87 { return 'cim_invalid_parameter' }
+     1168 { return 'cim_not_found' }
+    }
+   } catch { }
+  }
+  return 'cim_other'
+ }
+ $id = [string]$Record.FullyQualifiedErrorId
+ if ($id -match '(?i)ProviderNotFound|InvalidNamespace|ClassNotFound') { return 'provider_unavailable' }
+ if ($id -match '(?i)AccessDenied|UnauthorizedAccess') { return 'access_denied' }
+ return 'other'
 }
+
+function Get-ServiceAvailability([string]$Name) {
+ try {
+  $service = Get-Service -Name $Name -ErrorAction Stop
+  switch ([string]$service.Status) {
+   'Running' { return 'running' }
+   'Stopped' { return 'stopped' }
+   'StartPending' { return 'start_pending' }
+   'StopPending' { return 'stop_pending' }
+   'Paused' { return 'paused' }
+   default { return 'other' }
+  }
+ } catch {
+  $script:diagnosticErrors.Add((Get-FixedFailureCategory $_))
+  if ($_.Exception.GetType().Name -eq 'ServiceCommandException') { return 'not_found' }
+  return 'query_failed'
+ }
+}
+
+$providerAvailable = $false
+try {
+ $providerClass = @(Get-CimClass -Namespace 'root/standardcimv2' -ClassName 'MSFT_NetFirewallRule' -ErrorAction Stop)
+ $providerAvailable = ($providerClass.Count -eq 1)
+} catch { $script:diagnosticErrors.Add((Get-FixedFailureCategory $_)) }
+$providerCmdlets = [ordered]@{}
+foreach ($commandName in @('Get-NetFirewallRule','New-NetFirewallRule','Get-NetFirewallAddressFilter')) {
+ $commands = @(Get-Command -Name $commandName -All -CommandType Cmdlet,Function -ErrorAction SilentlyContinue)
+ $providerCmdlets[$commandName] = Test-NetSecurityCommandAvailable $commands $commandName
+}
+$availability = [ordered]@{
+ bfe=(Get-ServiceAvailability 'BFE')
+ mpssvc=(Get-ServiceAvailability 'MpsSvc')
+ provider_class_available=$providerAvailable
+ provider_cmdlets=$providerCmdlets
+ diagnostic_error_categories=@($script:diagnosticErrors.ToArray() | Select-Object -Unique)
+}
+
+$caseDefinitions = @(
+ [pscustomobject]@{Label='minimal_block';Name='MinecraftUI-Task33a-Firewall-Probe-Minimal';IncludeRemoteAddress=$false;Addresses=@()},
+ [pscustomobject]@{Label='full_without_remote';Name='MinecraftUI-Task33a-Firewall-Probe-NoRemote';IncludeRemoteAddress=$false;Addresses=@()},
+ [pscustomobject]@{Label='ipv4_ranges';Name='MinecraftUI-Task33a-Firewall-Probe-IPv4';IncludeRemoteAddress=$true;Addresses=@('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255')},
+ [pscustomobject]@{Label='ipv6_any';Name='MinecraftUI-Task33a-Firewall-Probe-IPv6';IncludeRemoteAddress=$true;Addresses=@('::/0')},
+ [pscustomobject]@{Label='original';Name='MinecraftUI-Task33a-Firewall-Probe-Original';IncludeRemoteAddress=$true;Addresses=@('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/0')},
+ [pscustomobject]@{Label='cidr_equivalent';Name='MinecraftUI-Task33a-Firewall-Probe-CIDR';IncludeRemoteAddress=$true;Addresses=@('128.0.0.0/1','0.0.0.0/2','64.0.0.0/3','96.0.0.0/4','112.0.0.0/5','120.0.0.0/6','124.0.0.0/7','126.0.0.0/8','::/0')}
+)
+$precheckPassed = $true
+$precheckErrorCategory = $null
+$preexistingName = $false
+try {
+ foreach ($definition in $caseDefinitions) {
+  $existing = @(Get-NetFirewallRule -ErrorAction Stop | Where-Object { $_.Name -ceq $definition.Name })
+  if ($existing.Count -ne 0) { $preexistingName = $true; break }
+ }
+} catch {
+ $precheckPassed = $false
+ $precheckErrorCategory = Get-FixedFailureCategory $_
+}
+if ($preexistingName) { throw 'fixed firewall probe name already exists' }
+$availability.name_prechecks_passed = $precheckPassed
+$availability.precheck_error_category = $precheckErrorCategory
 
 function New-NumericCimCodes {
  return [ordered]@{hresult=[Collections.Generic.List[long]]::new();native_error_code=[Collections.Generic.List[long]]::new();status_code=[Collections.Generic.List[long]]::new()}
@@ -167,28 +262,48 @@ function Add-NumericCimCodes([System.Collections.IDictionary]$Target, [System.Ex
 }
 
 $caseResults = [Collections.Generic.List[object]]::new()
-$safetyFailure = $false
+$safetyFailure = -not $precheckPassed
+$cleanupHalted = $false
 foreach ($definition in $caseDefinitions) {
- $result = [ordered]@{case=$definition.Label;created=$false;cim_codes=(New-NumericCimCodes);exact_match_normalized_address_set=$false;cleanup_verified=$false}
+ $attemptCase = $precheckPassed -and -not $cleanupHalted
+ $result = [ordered]@{case=$definition.Label;attempted=$attemptCase;created=$false;cim_codes=(New-NumericCimCodes);failure_categories=[Collections.Generic.List[string]]::new();exact_match_normalized_address_set=$null;cleanup_verified=$null}
+ if (-not $attemptCase) {
+  if (-not $precheckPassed) { $result.failure_categories.Add($precheckErrorCategory) }
+  else { $result.failure_categories.Add('prior_cleanup_unverified') }
+  $result.failure_categories = @($result.failure_categories.ToArray())
+  $caseResults.Add($result)
+  continue
+ }
+ $result.cleanup_verified = $false
  try {
   try {
-   New-NetFirewallRule -Name $definition.Name -DisplayName $definition.Name -Direction Inbound -Action Block -Protocol TCP -LocalPort 25565,8080 -RemoteAddress $definition.Addresses -Profile Any -Enabled True -ErrorAction Stop | Out-Null
+   if ($definition.Label -eq 'minimal_block') {
+    New-NetFirewallRule -Name $definition.Name -DisplayName $definition.Name -Direction Inbound -Action Block -Protocol TCP -LocalPort 25565 -ErrorAction Stop | Out-Null
+   } elseif ($definition.IncludeRemoteAddress) {
+    New-NetFirewallRule -Name $definition.Name -DisplayName $definition.Name -Direction Inbound -Action Block -Protocol TCP -LocalPort 25565,8080 -RemoteAddress $definition.Addresses -Profile Any -Enabled True -ErrorAction Stop | Out-Null
+   } else {
+    New-NetFirewallRule -Name $definition.Name -DisplayName $definition.Name -Direction Inbound -Action Block -Protocol TCP -LocalPort 25565,8080 -Profile Any -Enabled True -ErrorAction Stop | Out-Null
+   }
    $result.created = $true
   } catch {
    Add-NumericCimCodes $result.cim_codes $_.Exception
+   $result.failure_categories.Add((Get-FixedFailureCategory $_))
   }
   try {
    $rules = @(Get-NetFirewallRule -ErrorAction Stop | Where-Object { $_.Name -ceq $definition.Name })
    if ($rules.Count -gt 0) { $result.created = $true }
    if ($rules.Count -eq 1) {
     $filters = @($rules | Get-NetFirewallAddressFilter -ErrorAction Stop)
-    if ($filters.Count -eq 1) {
+    if ($filters.Count -eq 1 -and $definition.IncludeRemoteAddress) {
      $actual = @(ConvertTo-NormalizedAddressSet @($filters[0].RemoteAddress))
      $expected = @(ConvertTo-NormalizedAddressSet $definition.Addresses)
      $result.exact_match_normalized_address_set = (($actual -join '|') -ceq ($expected -join '|'))
     }
    }
-  } catch { Add-NumericCimCodes $result.cim_codes $_.Exception }
+  } catch {
+   Add-NumericCimCodes $result.cim_codes $_.Exception
+   $result.failure_categories.Add((Get-FixedFailureCategory $_))
+  }
  } finally {
   # The name was absent immediately before this case. Any matching object now
   # belongs to this attempt, including a cmdlet failure after partial creation.
@@ -202,15 +317,17 @@ foreach ($definition in $caseDefinitions) {
    $result.cleanup_verified = ($remaining.Count -eq 0)
   } catch {
    Add-NumericCimCodes $result.cim_codes $_.Exception
+   $result.failure_categories.Add((Get-FixedFailureCategory $_))
    $result.cleanup_verified = $false
   }
  }
  foreach ($key in @('hresult','native_error_code','status_code')) { $result.cim_codes[$key] = @($result.cim_codes[$key].ToArray() | Select-Object -Unique) }
- if (-not $result.cleanup_verified) { $safetyFailure = $true }
+ $result.failure_categories = @($result.failure_categories.ToArray() | Select-Object -Unique)
+ if (-not $result.cleanup_verified) { $safetyFailure = $true; $cleanupHalted = $true }
  $caseResults.Add($result)
 }
 
-$json = ConvertTo-Json -Depth 5 -InputObject $caseResults.ToArray()
+$json = ConvertTo-Json -Depth 6 -InputObject ([ordered]@{availability=$availability;cases=$caseResults.ToArray()})
 $encoding = [Text.UTF8Encoding]::new($false)
 $bytes = $encoding.GetBytes($json)
 $stream = [IO.File]::Open($reportPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
