@@ -109,7 +109,7 @@ func TestWindowsUpdaterPipeClientBeforeConnect(t *testing.T) {
 	}
 }
 
-func TestWindowsUpdaterPipeClosedClientBeforeConnect(t *testing.T) {
+func TestWindowsUpdaterPipeNativeClosedClientState(t *testing.T) {
 	handle, name := newWindowsUpdaterTestPipe(t)
 	client, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
@@ -118,9 +118,9 @@ func TestWindowsUpdaterPipeClosedClientBeforeConnect(t *testing.T) {
 	if err := windows.CloseHandle(client); err != nil {
 		t.Fatal("close early test client:", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	err = connectWindowsUpdaterPipe(ctx, handle)
+	// Preserve direct native evidence for the hosted failure's exact state;
+	// the shipping helper must recover from this rather than return it.
+	err = windows.ConnectNamedPipe(handle, nil)
 	if !errors.Is(err, windows.ERROR_NO_DATA) {
 		t.Fatalf("closed client native result = %v, want ERROR_NO_DATA", err)
 	}
@@ -129,18 +129,114 @@ func TestWindowsUpdaterPipeClosedClientBeforeConnect(t *testing.T) {
 	}
 }
 
+func TestWindowsUpdaterPipeClosedClientRecovery(t *testing.T) {
+	handle, name := newWindowsUpdaterTestPipe(t)
+	early, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		t.Fatal("open early client:", err)
+	}
+	if err := windows.CloseHandle(early); err != nil {
+		t.Fatal("close early client:", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	connected := make(chan error, 1)
+	go func() { connected <- connectWindowsUpdaterPipe(ctx, handle) }()
+	var pending <-chan error = connected
+	// CreateFile fails with PIPE_BUSY until the old connection is reset.
+	var client windows.Handle
+	for {
+		client, err = windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, windows.ERROR_PIPE_BUSY) {
+			t.Fatal("open subsequent client:", err)
+		}
+		select {
+		case err := <-pending:
+			if err != nil {
+				t.Fatal("server failed instead of resetting closed client:", err)
+			}
+			// A nonblocking availability transition may precede this open;
+			// the separate idle contract checks premature success.
+			pending = nil
+		case <-ctx.Done():
+			t.Fatal("subsequent client was never admitted")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	defer windows.CloseHandle(client)
+	if pending != nil {
+		select {
+		case err := <-pending:
+			if err != nil {
+				t.Fatal("connect subsequent client:", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("subsequent accept did not complete")
+		}
+	}
+	var count uint32
+	if err := windows.WriteFile(client, []byte("status"), &count, nil); err != nil || count != 6 {
+		t.Fatal("write subsequent fixed command:", err)
+	}
+	buffer := make([]byte, 128)
+	if err := windows.ReadFile(handle, buffer, &count, nil); err != nil || string(buffer[:count]) != "status" {
+		t.Fatal("receive subsequent fixed command:", err)
+	}
+}
+
+func TestWindowsUpdaterPipeCancelledAccept(t *testing.T) {
+	handle, _ := newWindowsUpdaterTestPipe(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := connectWindowsUpdaterPipe(ctx, handle); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled accept returned %v", err)
+	}
+}
+
+func TestWindowsUpdaterPipeInvalidHandleFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := connectWindowsUpdaterPipe(ctx, windows.InvalidHandle); !errors.Is(err, windows.ERROR_INVALID_HANDLE) {
+		t.Fatalf("invalid handle returned %v", err)
+	}
+}
+
 func TestWindowsUpdaterPipeFirstInstanceCollision(t *testing.T) {
-	_, name := newWindowsUpdaterTestPipe(t)
-	// A second server must not acquire the same name and bypass FIRST_INSTANCE.
+	first, name := newWindowsUpdaterTestPipe(t)
+	// The shipping first-instance/single-instance settings must refuse a
+	// second server. Windows may check the exhausted instance count first.
 	second, err := createWindowsUpdaterPipe(name, nil)
-	if err == nil {
-		windows.CloseHandle(second)
+	if err == nil || second != windows.InvalidHandle {
+		if second != windows.InvalidHandle {
+			windows.CloseHandle(second)
+		}
 		t.Fatal("duplicate pipe server accepted")
 	}
-	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) && !errors.Is(err, windows.ERROR_PIPE_BUSY) {
 		t.Fatal("duplicate native error differs:", err)
 	}
-	if windowsUpdaterExitCode(&windowsUpdaterFailure{windowsUpdaterPipeCreate, err}) != 0x4d050005 {
+	want := uint32(0x4d050005)
+	if errors.Is(err, windows.ERROR_PIPE_BUSY) {
+		want = 0x4d0500e7
+	}
+	if windowsUpdaterExitCode(&windowsUpdaterFailure{windowsUpdaterPipeCreate, err}) != want {
 		t.Fatal("duplicate server lost fixed SCM diagnostic")
+	}
+	client := openWindowsUpdaterTestClient(t, name)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := connectWindowsUpdaterPipe(ctx, first); err != nil {
+		t.Fatal("original server damaged by duplicate attempt:", err)
+	}
+	var count uint32
+	if err := windows.WriteFile(client, []byte("status"), &count, nil); err != nil || count != 6 {
+		t.Fatal("write original-server command:", err)
+	}
+	buffer := make([]byte, 128)
+	if err := windows.ReadFile(first, buffer, &count, nil); err != nil || string(buffer[:count]) != "status" {
+		t.Fatal("original server lost command after collision:", err)
 	}
 }

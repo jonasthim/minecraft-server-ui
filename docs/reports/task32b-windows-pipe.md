@@ -1,8 +1,9 @@
 # Task32B — native updater failure diagnostics
 
-Status: diagnostic source candidate, not a demonstrated Windows runtime fix.
-Windows pipe tests have been cross-compiled but not executed locally. The next
-native run must identify the actual failing operation before a behavior change.
+Status: the diagnostic rerun confirms a closed-client connection failure. A
+narrow reset/retry correction is prepared for review and native rerun; installed
+Windows success remains pending. The original diagnostic packet is recorded
+first; the final section records actual native results and the correction.
 
 ## Actual evidence and unresolved cause
 
@@ -128,8 +129,90 @@ Executed on Linux, 2026-10-17:
 - `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./internal/selfupdate`: PASS.
 - Bash syntax, Python compilation and scoped `git diff --check`: PASS.
 
-Native Windows execution of the pipe tests and the installed updater must
-follow review. The exact Windows failing stage/Win32 code and Ubuntu24.04
-terminal/last journal phase remain unknown until that run. No Linux updater
+At the diagnostic source freeze, native Windows execution of the pipe tests and
+installed updater remained required. The exact Windows stage/Win32 code and
+Ubuntu24.04 journal phase were unknown; the following section records their
+actual results. No Linux updater
 product logic, ACL predicate/tests, shared API/schema, service installation,
 native host state or release qualification was changed by this packet.
+
+## Actual diagnostic rerun and closed-client correction
+
+[Installed run39035609290](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39035609290)
+at `02b554d797e543452fb99ff7ffc66c340caae73c` now establishes the Windows
+failing operation: service-specific exit1292239080 is `0x4d0600e8`, meaning
+`ConnectNamedPipe` returned `ERROR_NO_DATA`232. Initial status retains genuine
+`v0.0.1`, schema20 and configured trust, with activation unavailable and fixed
+reason `native_not_ready`. Account loading, descriptor construction and pipe
+creation therefore passed before the connection failure. The previous client's
+closure is a transport state, not an activation authorization failure.
+
+The same run's Ubuntu24.04 summary now records `aborted`, rollback not attempted,
+and expected prior/candidate identities. The Linux updater/recovery units are
+still activating in the failure snapshot. This narrows that investigation but
+does not establish its original cause; a separate owner handles Linux diagnosis.
+Ubuntu22.04's job completed successfully. No Linux or Python source is changed
+in this follow-up.
+
+[Native CI39035602352](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39035602352)
+at the same candidate passes Ubuntu24.04. Actual Windows race execution passes
+the new diagnostic-code cases, idle/cancellation test (`0.15s`), already-connected
+client/command test and closed-client test. The latter proves the shipping helper
+returned `ERROR_NO_DATA` for the same state that killed the installed service.
+The **only failing test entry** is
+`TestWindowsUpdaterPipeFirstInstanceCollision`: it expected access denied but
+the actual native error is `ERROR_PIPE_BUSY`231. This is a test expectation
+failure; a second pipe server was refused. Windows native manager/updater builds
+were not reached after the race step failed. No green Windows suite is claimed.
+
+Microsoft defines `nMaxInstances` as the maximum pipe instance count; shipping
+uses1. Its API page also describes access-denied refusal for the first-instance
+flag. The native result here shows the exhausted single-instance path instead.
+The documentation does not promise which conflicting constraint is reported
+first, so the test now accepts only access denied or pipe busy while requiring
+`INVALID_HANDLE_VALUE`. It also transfers a fixed command through the original
+server after the failed duplicate attempt. Win32 code231 maps to diagnostic
+`0x4d0500e7`; code5 maps to `0x4d050005`.
+[Microsoft CreateNamedPipe source](https://github.com/MicrosoftDocs/sdk-api/blob/docs/sdk-api-src/content/winbase/nf-winbase-createnamedpipea.md),
+[Microsoft system error codes source](https://github.com/MicrosoftDocs/win32/blob/docs/desktop-src/Debug/system-error-codes--0-499-.md)
+
+The production correction handles only the demonstrated closed-client state.
+On `ERROR_NO_DATA`, it calls `DisconnectNamedPipe`, checks that operation's
+result, and resumes the same50ms cancellable accept loop using the same held
+server handle. The private DACL, first-instance name ownership and remote-client
+refusal therefore remain in force while resetting the stale connection. Reset
+failure and every other unexpected native error still fail the service; SCM's
+stage06 now covers accept and its checked disconnect/reset. Context is checked
+before each connect attempt and during the poll wait. Commands still require
+the unchanged actual manager SCM PID/image check after connection.
+
+Microsoft explicitly requires `DisconnectNamedPipe` before a server instance
+can connect to a subsequent client; its handle remains the pipe instance's
+identity. No new client is authorized merely because the old one closed.
+[DisconnectNamedPipe](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-disconnectnamedpipe)
+
+The original nil-success branch remains unchanged: the actual fresh-idle native
+test passed, so no nil-transition correction is inferred from this run. The
+direct raw-API closed-client assertion is preserved as
+`TestWindowsUpdaterPipeNativeClosedClientState`. A separate shipping-helper
+regression requires reset, a fresh client and an exact fixed-command transfer;
+additional tests require cancellation and immediate invalid-handle refusal.
+These recovery tests fail if `ERROR_NO_DATA` is returned to the caller instead
+of resetting. Their native execution is still required; cross-compilation is
+not a demonstrated green recovery result.
+
+Follow-up local verification on Linux,2026-10-17:
+
+- `go test -race ./internal/selfupdate`: PASS (`11.517s`), Linux-applicable
+  package tests. Windows production/tests are excluded from execution here.
+- `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o
+  /home/thim/.cache/dilla-tmp/selfupdate-windows-pipe-recovery.test.exe
+  ./internal/selfupdate`: PASS, including the updated native test sources;
+  compilation only.
+- `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./internal/selfupdate`: PASS.
+- Scoped `git diff --check`: PASS.
+
+No timeout, native ACL/PID/SCM/client authorization, activation readiness or
+data-preservation requirement is relaxed. Installed Windows recovery of this
+closed-client state and the updated duplicate-server test remain pending the
+next native run. The integrator owns review, integration and dispatch.

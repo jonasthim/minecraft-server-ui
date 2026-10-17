@@ -741,8 +741,7 @@ func (s *windowsUpdater) servePipe(ctx context.Context) error {
 }
 
 // Keep the production flags and connection-state handling in the same helpers
-// exercised by native tests on uniquely named pipes. This diagnostic extraction
-// deliberately preserves the current nonblocking connection behavior.
+// exercised by native tests on uniquely named pipes.
 func createWindowsUpdaterPipe(name *uint16, descriptor *windows.SECURITY_DESCRIPTOR) (windows.Handle, error) {
 	security := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: descriptor}
 	return windows.CreateNamedPipe(name, windows.PIPE_ACCESS_DUPLEX|windows.FILE_FLAG_FIRST_PIPE_INSTANCE, windows.PIPE_TYPE_MESSAGE|windows.PIPE_READMODE_MESSAGE|windows.PIPE_NOWAIT|windows.PIPE_REJECT_REMOTE_CLIENTS, 1, 128, 128, 1000, &security)
@@ -750,11 +749,21 @@ func createWindowsUpdaterPipe(name *uint16, descriptor *windows.SECURITY_DESCRIP
 
 func connectWindowsUpdaterPipe(ctx context.Context, handle windows.Handle) error {
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		err := windows.ConnectNamedPipe(handle, nil)
 		if err == nil || err == windows.ERROR_PIPE_CONNECTED {
 			return nil
 		}
-		if err != windows.ERROR_PIPE_LISTENING {
+		if err == windows.ERROR_NO_DATA {
+			// A client connected and closed before accept. Reset the same
+			// first-instance handle; its private DACL and name ownership stay
+			// intact. This connection never reaches command authorization.
+			if err := windows.DisconnectNamedPipe(handle); err != nil {
+				return err
+			}
+		} else if err != windows.ERROR_PIPE_LISTENING {
 			return err
 		}
 		select {
