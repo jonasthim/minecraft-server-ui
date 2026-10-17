@@ -45,3 +45,20 @@ Screenshots from the final intercepted browser run were visually inspected:
 The browser uses explicitly intercepted authentication, instance metadata and retention responses against the shipping UI. It proves UI behavior and context fences, not HTTP authorization, request rollback or real backup deletion; root owns HTTP integration verification. A cancelled browser request can already have reached the server, so server-side fresh authority, revisions and serialization remain authoritative. Policy and archive tests use temporary local files, including inert deletion fixtures; real archive validation remains exercised by existing capture/download tests.
 
 No real Minecraft/client/version-layout matrix, installed service, native Windows retention behavior, EULA acceptance, external provider or stable support claim is inferred. No real backup data, user preview port12826, dependencies, credentials, commits or staging were changed. Root acceptance review, shared contract integration evidence and ledger update remain required; this worker does not accept Task31D or claim product completion.
+
+## Review correction round1 — R1
+
+Independent review of frozen `2eb2f2c` found one Important reporting defect: the publication-success flag caused every later failure to be labeled as retention failure, including staging cleanup after protected manual/safety captures. Applied the correction on the composed workspace at `2cc0222`; unrelated updater qualification changes are excluded.
+
+Publication success, actual retention error and actual staging cleanup error are now tracked independently. A validated archive stays ready on all postpublication failures. Result audits distinguish `validated_retention_failed`, `validated_cleanup_failed`, combined `validated_retention_and_cleanup_failed`, and other finalization failures. The final error is wrapped only after deferred staging cleanup and result auditing, so safe job output names the actual failure and explicitly says the validated archive remains available. Private error details stay out of that job output. Earlier capture/publication failures keep their existing failed-state and saving-recovery behavior.
+
+Focused regressions inject staging cleanup failure through the existing fault seam for manual, safety and automatic captures, plus simultaneous malformed-policy retention/cleanup failure. They assert failed overall jobs, correctly classified result audits, retained ready metadata, actual downloadable and validated ZIPs, retained staging directories, safe cause-specific output and absence of the misleading “Local data may be partial” message. With only the injection point added, all three cleanup-only trigger cases failed against the reviewed implementation with the incorrect `validated_retention_failed` audit; they pass after the correction. The original malformed-policy retention regression and original prepublication failure/save-on cases remain passing.
+
+Fresh scoped verification:
+
+- `go test ./internal/backup -run 'TestPublishedBackupStageCleanupFailure|TestMalformedRetentionPolicy|TestBackupFailuresNeverPublishAndAlwaysRelease' -count=1` — PASS.
+- The same selected tests under `go test -race` — PASS,3.883s.
+- `go vet ./internal/backup` — PASS.
+- Owned-file `git diff --check` — PASS.
+
+Changed only `internal/backup/service.go`, `internal/backup/policy_test.go`, and this report for R1. No UI/shared-contract changes, broad suite rerun, commits, staging, service/game execution, real backup data or user-preview access. Scoped independent re-review and integrator acceptance remain pending.

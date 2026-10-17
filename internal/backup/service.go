@@ -398,6 +398,7 @@ func (s *Service) capture(ctx context.Context, id, job string, actor domain.User
 		return err
 	}
 	validated := false
+	var retentionErr, cleanupErr error
 	defer func() {
 		panicValue := recover()
 		if panicValue != nil {
@@ -411,8 +412,21 @@ func (s *Service) capture(ctx context.Context, id, job string, actor domain.User
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		outcome := "validated"
+		completionMessage := ""
 		if err != nil && validated {
-			outcome = "validated_retention_failed"
+			switch {
+			case retentionErr != nil && cleanupErr != nil:
+				outcome = "validated_retention_and_cleanup_failed"
+				completionMessage = "Backup validated and ready; automatic retention and staging cleanup failed. The validated archive remains available. Inspect the retention policy and backup recovery status before retrying."
+			case retentionErr != nil:
+				outcome = "validated_retention_failed"
+				completionMessage = "Backup validated and ready; automatic retention failed. The validated archive remains available. Inspect the retention policy and backup recovery status before retrying."
+			case cleanupErr != nil:
+				outcome = "validated_cleanup_failed"
+				completionMessage = "Backup validated and ready; staging cleanup failed. The validated archive remains available. Inspect backup recovery status before retrying."
+			default:
+				outcome = "validated_finalization_failed"
+			}
 		} else if err != nil {
 			outcome = "failed_or_partial"
 			result.State = domain.BackupFailed
@@ -421,6 +435,12 @@ func (s *Service) capture(ctx context.Context, id, job string, actor domain.User
 			err = errors.Join(err, markErr)
 		}
 		err = errors.Join(err, s.audit(cleanup, id, actor, "create_result", backupID, outcome))
+		if validated && err != nil {
+			if completionMessage == "" {
+				completionMessage = "Backup validated and ready; backup finalization failed. The validated archive remains available. Inspect backup recovery status before retrying."
+			}
+			err = domain.Wrap(domain.CodeUnavailable, completionMessage, err)
+		}
 	}()
 	backupRoot, err := openSource(dirs.Backups)
 	if err != nil {
@@ -444,11 +464,14 @@ func (s *Service) capture(ctx context.Context, id, job string, actor domain.User
 		return err
 	}
 	defer func() {
-		if e := backupRoot.verify(); e != nil {
-			err = errors.Join(err, e)
-			return
+		cleanupErr = backupRoot.verify()
+		if cleanupErr == nil {
+			cleanupErr = s.failAt("stage_cleanup")
 		}
-		err = errors.Join(err, backupRoot.root.RemoveAll(stageName))
+		if cleanupErr == nil {
+			cleanupErr = backupRoot.root.RemoveAll(stageName)
+		}
+		err = errors.Join(err, cleanupErr)
 	}()
 	stage, err := openSource(filepath.Join(dirs.Backups, stageName))
 	if err != nil {
@@ -574,8 +597,9 @@ func (s *Service) capture(ctx context.Context, id, job string, actor domain.User
 	}
 	validated = true
 	if trigger == domain.BackupAutomatic {
-		if err := s.applyCurrentRetention(ctx, id, time.Now().UTC()); err != nil {
-			return domain.Wrap(domain.CodeUnavailable, "Backup validated and ready; automatic retention failed. Inspect the retention policy and backup recovery status before retrying.", err)
+		retentionErr = s.applyCurrentRetention(ctx, id, time.Now().UTC())
+		if retentionErr != nil {
+			return retentionErr
 		}
 	}
 	return nil

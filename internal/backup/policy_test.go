@@ -348,3 +348,79 @@ func TestRetentionDeletionFailureRetainsRecoveryJournal(t *testing.T) {
 		t.Fatal(count, err)
 	}
 }
+
+func TestPublishedBackupStageCleanupFailurePreservesArchiveAndReportsCause(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		trigger          domain.BackupTrigger
+		corruptPolicy    bool
+		outcome, message string
+	}{
+		{"manual", domain.BackupManual, false, "validated_cleanup_failed", "staging cleanup failed"},
+		{"safety", domain.BackupSafety, false, "validated_cleanup_failed", "staging cleanup failed"},
+		{"automatic", domain.BackupAutomatic, false, "validated_cleanup_failed", "staging cleanup failed"},
+		{"retention_and_cleanup", domain.BackupAutomatic, true, "validated_retention_and_cleanup_failed", "automatic retention and staging cleanup failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _ := fixture(t, false)
+			if tc.corruptPolicy {
+				if _, err := s.db.Exec(`PRAGMA ignore_check_constraints=ON`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.db.Exec(`INSERT INTO backup_retention_policies(instance_id,keep_last,keep_days,revision,updated_at,updated_by)VALUES('alpha',-1,1,1,'now',1)`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.fault = func(phase string) error {
+				if phase == "stage_cleanup" {
+					return errors.New("injected staging cleanup failure with private-path-detail")
+				}
+				return nil
+			}
+			job, err := s.Enqueue(t.Context(), "alpha", domain.BackupWorld, tc.trigger, testActor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = s.queue.Resume(); err != nil {
+				t.Fatal(err)
+			}
+			done := await(t, s.queue, job.ID)
+			if done.State != domain.JobFailed {
+				t.Fatal("postpublication failure hidden", done)
+			}
+			records, err := s.List(t.Context(), "alpha")
+			if err != nil || len(records) != 1 || records[0].State != domain.BackupReady {
+				t.Fatal("published backup no longer ready", records, err)
+			}
+			download, err := s.Download(t.Context(), "alpha", records[0].ID, testActor)
+			if err != nil {
+				t.Fatal("validated archive unavailable", err)
+			}
+			if err = download.Close(); err != nil {
+				t.Fatal(err)
+			}
+			dirs, _ := s.paths.For("alpha")
+			if info, err := os.Stat(filepath.Join(dirs.Backups, ".stage-"+records[0].ID)); err != nil || !info.IsDir() {
+				t.Fatal("failed staging cleanup fixture did not leave its directory", err)
+			}
+			var outcome struct {
+				Outcome string `json:"outcome"`
+			}
+			var raw string
+			if err = s.db.QueryRow(`SELECT details_json FROM audit_log WHERE action='backups.create_result' AND target=?`, records[0].ID).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			if err = json.Unmarshal([]byte(raw), &outcome); err != nil || outcome.Outcome != tc.outcome {
+				t.Fatal("cleanup misclassified", raw, err)
+			}
+			logs, err := s.queue.Logs(t.Context(), job.ID, 0, 100)
+			if err != nil || len(logs) == 0 {
+				t.Fatal(logs, err)
+			}
+			message := logs[len(logs)-1].Message
+			if !strings.Contains(message, "Backup validated and ready; "+tc.message) || !strings.Contains(message, "validated archive remains available") || (!tc.corruptPolicy && strings.Contains(message, "retention")) || strings.Contains(message, "private-path-detail") || strings.Contains(message, "Local data may be partial") {
+				t.Fatal("misleading or unsafe job message", message)
+			}
+		})
+	}
+}
