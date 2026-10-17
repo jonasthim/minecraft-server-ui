@@ -863,14 +863,16 @@ func (d *linuxInstallDriver) Rollback(ctx context.Context, tx transaction) error
 }
 
 func (d *linuxInstallDriver) restoreManagerEnablementAfterRollback(ctx context.Context, tx transaction, intent linuxIntent) error {
-	if tx.Mode == modeApply && intent.Prior == nil {
+	uninstalledPrior := intent.PriorInventory != nil && intent.PriorInventory.Status == "uninstalled"
+	if tx.Mode == modeApply && (intent.Prior == nil || uninstalledPrior) {
 		// A fresh install captured no manager unit. Its rollback removes the
-		// candidate unit before daemon-reload, so asking systemd to disable that
-		// now-absent unit fails on supported distributions. Verify the exact
-		// captured absence instead of weakening the general enable/disable API.
+		// candidate unit before daemon-reload. Reinstalling from an uninstalled
+		// inventory has the same captured-absent unit layout even though the
+		// retained updater receipt supplies intent.Prior. Verify exact absence
+		// instead of weakening the general enable/disable API.
 		status, err := d.inspectService(ctx)
-		if err != nil || status.LoadState != "not-found" || !linuxStatusStopped(status) {
-			return errors.Join(errors.New("fresh rollback did not restore the captured absent manager unit"), err)
+		if err != nil || !linuxManagerUnitAbsent(status) {
+			return errors.Join(errors.New("rollback did not restore the captured absent manager unit"), err)
 		}
 		return nil
 	}
@@ -879,6 +881,10 @@ func (d *linuxInstallDriver) restoreManagerEnablementAfterRollback(ctx context.C
 		enabled = setLinuxManagerEnabled
 	}
 	return enabled(ctx, intent.ServiceWasEnabled)
+}
+
+func linuxManagerUnitAbsent(status linuxServiceStatus) bool {
+	return status.LoadState == "not-found" && linuxStatusStopped(status)
 }
 
 func rollbackIntent(intent linuxIntent) linuxIntent {
@@ -913,8 +919,11 @@ func (d *linuxInstallDriver) restorePriorInventory(ctx context.Context, tx trans
 		return errors.New("captured prior Linux inventory is unavailable")
 	}
 	desired := *intent.PriorInventory
+	desired.Assets = append([]linuxOwnedAsset(nil), intent.PriorInventory.Assets...)
 	if intent.Prior != nil {
-		desired.Status = "installed"
+		if desired.Status != "installed" && desired.Status != "uninstalled" {
+			return errors.New("captured prior inventory status is inconsistent with prior receipt")
+		}
 		desired.Image = *intent.Prior
 	}
 	if len(desired.Assets) != len(intent.Assets) {

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -419,4 +420,245 @@ func TestRollbackAssetsRebindsSnapshotsForPriorInventoryRestoration(t *testing.T
 	if err := d.restorePriorInventory(context.Background(), tx, intent); err == nil || err.Error() != "Linux inventory is not the exact operation image being rolled back" {
 		t.Fatalf("prior inventory restore did not advance to its expected inventory CAS: %v", err)
 	}
+}
+
+func TestRestorePriorInventoryReturnsToUninstalledStateAfterFailedReinstall(t *testing.T) {
+	ctx := context.Background()
+	d, prior, closeFixture := newLinuxInventoryRestoreDriver(t, "uninstalled")
+	defer closeFixture()
+
+	intent, tx := managedLinuxApplyFixture()
+	prior.OperationID = strings.Repeat("9", 64)
+	priorOriginal := cloneLinuxInventoryFixture(prior)
+	intent.PriorInventory = &prior
+	intent.Prior = imagePointer(prior.Image)
+	intent.Principal = &prior.Principal
+	intent.ServiceWasActive = false
+	intent.ServiceWasEnabled = false
+	tx.ID = strings.Repeat("8", 64)
+	intent.ID = tx.ID
+	tx.Prior = imagePointer(prior.Image)
+	intent.Target = tx.Target
+	for i := range intent.Assets {
+		intent.Assets[i].Before = prior.Assets[i].State
+	}
+
+	if err := d.publishInventory(ctx, prior, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.restorePriorInventory(ctx, tx, intent); err != nil {
+		t.Fatalf("restore captured uninstalled inventory after failed reinstall: %v", err)
+	}
+	after, present, err := d.readInventory(ctx)
+	if err != nil || !present || after.Status != "uninstalled" || !sameImage(after.Image, prior.Image) {
+		t.Fatalf("restored inventory = %+v, present=%v err=%v", after, present, err)
+	}
+	if !reflect.DeepEqual(priorOriginal, *intent.PriorInventory) {
+		t.Fatal("rollback mutated immutable captured uninstalled inventory")
+	}
+}
+
+func TestRollbackFromUninstalledSkipsEnablementOnlyForExactAbsentUnit(t *testing.T) {
+	intent, tx := managedLinuxApplyFixture()
+	prior := linuxInventoryFixture("uninstalled")
+	intent.PriorInventory = &prior
+	intent.Prior = imagePointer(prior.Image)
+	tx.Prior = imagePointer(prior.Image)
+	enableCalls := 0
+	d := &linuxInstallDriver{hooks: linuxNativeHooks{
+		service: func(context.Context) (linuxServiceStatus, error) {
+			return linuxServiceStatus{LoadState: "not-found", ActiveState: "inactive", SubState: "dead"}, nil
+		},
+		enabled: func(context.Context, bool) error {
+			enableCalls++
+			return errors.New("must not call enablement for a captured absent unit")
+		},
+	}}
+	ctx := withLinuxServiceTestHooks(context.Background(), linuxServiceTestHooks{
+		run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			t.Fatalf("unexpected host service command in rollback fixture: %s %v", name, args)
+			return nil, errors.New("unexpected host service command")
+		},
+	})
+	if err := d.restoreManagerEnablementAfterRollback(ctx, tx, intent); err != nil {
+		t.Fatalf("rollback of reinstall from an uninstalled state: %v", err)
+	}
+	if enableCalls != 0 {
+		t.Fatalf("rollback called enablement for absent unit: calls=%d", enableCalls)
+	}
+}
+
+func TestRollbackFromUninstalledRejectsUnexpectedLoadedManagerUnit(t *testing.T) {
+	d := &linuxInstallDriver{hooks: linuxNativeHooks{
+		service: func(context.Context) (linuxServiceStatus, error) {
+			return linuxServiceStatus{LoadState: "loaded", ActiveState: "inactive", SubState: "dead", UnitFileState: "disabled"}, nil
+		},
+		enabled: func(context.Context, bool) error {
+			t.Fatal("rollback changed enablement for an unexpected loaded unit")
+			return nil
+		},
+	}}
+	intent, tx := managedLinuxApplyFixture()
+	prior := linuxInventoryFixture("uninstalled")
+	intent.PriorInventory = &prior
+	intent.Prior = imagePointer(prior.Image)
+	tx.Prior = imagePointer(prior.Image)
+	ctx := withLinuxServiceTestHooks(context.Background(), linuxServiceTestHooks{
+		run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			t.Fatalf("unexpected host service command in rollback fixture: %s %v", name, args)
+			return nil, errors.New("unexpected host service command")
+		},
+	})
+	if err := d.restoreManagerEnablementAfterRollback(ctx, tx, intent); err == nil {
+		t.Fatal("rollback accepted an unexpected loaded manager unit")
+	}
+}
+
+func TestRestorePriorInventoryDoesNotMutateCapturedPreimageBeforeCAS(t *testing.T) {
+	ctx := context.Background()
+	d, prior, closeFixture := newLinuxInventoryRestoreDriver(t, "installed")
+	defer closeFixture()
+
+	intent, tx := managedLinuxApplyFixture()
+	prior.OperationID = strings.Repeat("9", 64)
+	prior.Image.SHA256 = prior.Assets[0].State.SHA256
+	priorOriginal := cloneLinuxInventoryFixture(prior)
+	intent.PriorInventory = &prior
+	intent.Prior = imagePointer(prior.Image)
+	intent.Principal = &prior.Principal
+	intent.ServiceWasActive = false
+	intent.ServiceWasEnabled = false
+	tx.ID = strings.Repeat("8", 64)
+	intent.ID = tx.ID
+	tx.Prior = imagePointer(prior.Image)
+	intent.Target = tx.Target
+	for i := range intent.Assets {
+		intent.Assets[i].Before = prior.Assets[i].State
+	}
+	if err := d.publishInventory(ctx, prior, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep each old inode allocated while linking an exact-content replacement,
+	// so the fixture proves that rollback updates recorded identities.
+	for _, spec := range fixedLinuxAssets {
+		snapshot := d.assets[spec.Role]
+		if snapshot == nil || !snapshot.State().Present {
+			continue
+		}
+		oldPath := snapshot.path
+		if err := snapshot.Close(); err != nil {
+			t.Fatal(err)
+		}
+		oldCopy := oldPath + ".held-old"
+		if err := os.Rename(oldPath, oldCopy); err != nil {
+			t.Fatal(err)
+		}
+		body, err := os.ReadFile(oldCopy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(oldPath, body, os.FileMode(spec.Mode)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(oldPath, os.FileMode(spec.Mode)); err != nil {
+			t.Fatal(err)
+		}
+		rebound, err := inspectLinuxAsset(ctx, spec.Role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rebound.State().Inode == prior.Assets[assetIndexForRole(spec.Role)].State.Inode {
+			_ = rebound.Close()
+			t.Fatalf("replacement %s unexpectedly reused the captured inode", spec.Role)
+		}
+		d.assets[spec.Role] = rebound
+	}
+
+	if err := d.restorePriorInventory(ctx, tx, intent); err != nil {
+		t.Fatalf("restore prior installed inventory after same-content inode replacement: %v", err)
+	}
+	after, present, err := d.readInventory(ctx)
+	if err != nil || !present || after.Status != "installed" || !sameImage(after.Image, prior.Image) {
+		t.Fatalf("restored inventory = %+v, present=%v err=%v", after, present, err)
+	}
+	if !reflect.DeepEqual(priorOriginal, *intent.PriorInventory) {
+		t.Fatal("rollback mutated immutable captured installed inventory before inventory CAS")
+	}
+	for i, spec := range fixedLinuxAssets {
+		if after.Assets[i].State != d.assets[spec.Role].State() {
+			t.Fatalf("restored inventory state for %s = %+v, actual %+v", spec.Role, after.Assets[i].State, d.assets[spec.Role].State())
+		}
+	}
+}
+
+func newLinuxInventoryRestoreDriver(t *testing.T, status string) (*linuxInstallDriver, linuxInventory, func()) {
+	t.Helper()
+	base := t.TempDir()
+	assetRoot := filepath.Join(base, "assets")
+	if err := os.Mkdir(assetRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	paths := make(map[linuxAssetRole]string, len(fixedLinuxAssets))
+	for _, spec := range fixedLinuxAssets {
+		path := filepath.Join(assetRoot, string(spec.Role), filepath.Base(spec.Path))
+		paths[spec.Role] = path
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if status == "installed" && spec.Role != linuxAssetUpdateTrust || spec.Role == linuxAssetBootstrapTrust {
+			body := []byte("rollback inventory fixture: " + string(spec.Role))
+			if spec.Role == linuxAssetBootstrapTrust {
+				body = linuxTrustFixture()
+			}
+			if err := os.WriteFile(path, body, os.FileMode(spec.Mode)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, os.FileMode(spec.Mode)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	previous := linuxAssetTestPolicy
+	linuxAssetTestPolicy = &linuxAssetTestPolicyConfig{root: assetRoot, uid: uint32(os.Geteuid()), paths: paths}
+	t.Cleanup(func() { linuxAssetTestPolicy = previous })
+
+	statePath := filepath.Join(base, "state")
+	if err := os.Mkdir(statePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state, err := os.OpenRoot(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &linuxInstallDriver{state: state, hooks: linuxNativeHooks{stateRoot: statePath, dataRoot: filepath.Join(base, "data"), testRoot: true}, assets: make(map[linuxAssetRole]*linuxAssetSnapshot)}
+	inventory := linuxInventory{Format: 1, Status: status, OperationID: strings.Repeat("7", 64), Image: linuxImage("a"), Principal: linuxPrincipal{UID: 1000, GID: 1000}, Assets: make([]linuxOwnedAsset, len(fixedLinuxAssets))}
+	for i, spec := range fixedLinuxAssets {
+		snapshot, err := inspectLinuxAsset(context.Background(), spec.Role)
+		if err != nil {
+			_ = state.Close()
+			t.Fatal(err)
+		}
+		d.assets[spec.Role] = snapshot
+		inventory.Assets[i] = linuxOwnedAsset{Role: spec.Role, State: snapshot.State()}
+	}
+	if status == "installed" {
+		inventory.Image.SHA256 = inventory.Assets[0].State.SHA256
+	}
+	closeFixture := func() {
+		for _, snapshot := range d.assets {
+			_ = snapshot.Close()
+		}
+		_ = state.Close()
+	}
+	return d, inventory, closeFixture
+}
+
+func assetIndexForRole(role linuxAssetRole) int {
+	for i, spec := range fixedLinuxAssets {
+		if spec.Role == role {
+			return i
+		}
+	}
+	return -1
 }

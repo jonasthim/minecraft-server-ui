@@ -443,6 +443,30 @@ class Qualification:
         again = self.cli("install", "uninstall", timeout=60)
         if self.json_result(again).get("outcome") != "unchanged":
             raise RuntimeError("second uninstall was not idempotent")
+
+        self.check("uninstalled", True)
+        receipt_path = Path("/var/lib/minecraft-ui-update/installed.json")
+        retained_receipt = installed_receipt_content(receipt_path)
+        if retained_receipt["version"] != "v0.0.2":
+            raise RuntimeError("uninstalled receipt does not retain the expected v2 image")
+        self.prepare_install("v0.0.3", expected_outcome="rolled_back", expected_exit=1)
+        self.check("uninstalled", True)
+        manager_executable = Path("/usr/local/bin/minecraft-ui")
+        if (manager_main_pid() != 0 or manager_executable.exists() or manager_executable.is_symlink()
+                or installed_receipt_content(receipt_path) != retained_receipt
+                or ordinary_file_identity(database_path) != database_identity
+                or database_snapshot(database_path) != database_state
+                or fingerprint(Path("/var/lib/minecraft-ui/qualification-data.marker")) != data
+                or fingerprint(Path("/var/lib/minecraft-ui/instances/installer-fixture/server/world/qualification-world.marker")) != world
+                or fingerprint(Path("/etc/minecraft-ui/environment")) != config
+                or fingerprint(Path("/etc/minecraft-ui/bootstrap-trust.json")) != trust):
+            raise RuntimeError("failed reinstall changed retained uninstalled state, receipt, database, or data")
+        self.record("failed-reinstall-from-retained-uninstalled-state", {
+            "outcome": "rolled_back", "uninstalled_state_preserved": True,
+            "receipt_content_preserved": True, "manager_database_preserved": True,
+            "world_data_config_trust_preserved": True,
+        })
+
         self.prepare_install("v0.0.2")
         if manager_identity()["version"] != "v0.0.2" or fingerprint(Path("/var/lib/minecraft-ui/qualification-data.marker")) != data or fingerprint(Path("/var/lib/minecraft-ui/instances/installer-fixture/server/world/qualification-world.marker")) != world:
             raise RuntimeError("retained-data reinstall did not restore v2 safely")
@@ -829,6 +853,53 @@ def fingerprint(path):
     return {"device": stat.st_dev, "inode": stat.st_ino, "uid": stat.st_uid,
             "gid": stat.st_gid, "mode": stat.st_mode & 0o777, "size": stat.st_size,
             "sha256": digest}
+
+
+def installed_receipt_content(path):
+    """Validate and hash receipt contents while allowing atomic inode republish."""
+    path = Path(path)
+    descriptor = -1
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) |
+                             getattr(os, "O_NONBLOCK", 0))
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size <= 0 or before.st_size > 4096:
+            raise RuntimeError("retained updater receipt is unsafe or oversized")
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 4097 - total)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > 4096:
+                raise RuntimeError("retained updater receipt is unsafe or oversized")
+        after = os.fstat(descriptor)
+        entry = os.stat(path, follow_symlinks=False)
+        if (before.st_dev != after.st_dev or before.st_ino != after.st_ino
+                or before.st_size != after.st_size or total != before.st_size
+                or not stat.S_ISREG(entry.st_mode) or entry.st_nlink != 1
+                or entry.st_dev != after.st_dev or entry.st_ino != after.st_ino
+                or entry.st_size != after.st_size):
+            raise RuntimeError("retained updater receipt changed while reading")
+        raw = b"".join(chunks)
+        value = strict_json(raw.decode("utf-8", "strict"))
+    except RuntimeError:
+        raise
+    except (OSError, UnicodeDecodeError, ValueError, TypeError):
+        raise RuntimeError("retained updater receipt is unavailable or invalid") from None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if (not isinstance(value, dict) or set(value) != {"format", "version", "schema", "sha256"}
+            or type(value["format"]) is not int or value["format"] != 1
+            or not isinstance(value["version"], str)
+            or re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", value["version"]) is None
+            or type(value["schema"]) is not int or value["schema"] <= 0
+            or not isinstance(value["sha256"], str) or not HEX64.fullmatch(value["sha256"])):
+        raise RuntimeError("retained updater receipt is unavailable or invalid")
+    return {"version": value["version"], "content_sha256": hashlib.sha256(raw).hexdigest()}
 
 
 def install_qualification_helper(source, destination, owner_uid=0, owner_gid=0):

@@ -207,6 +207,31 @@ class InstallerHarnessFixtureTests(unittest.TestCase):
             self.assertNotEqual(requested[0], requested[1])
             self.assertTrue(all(path.is_dir() for path in requested))
 
+    def test_retained_receipt_comparison_uses_validated_content_not_inode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            receipt = root / "installed.json"
+            body = json.dumps({"format": 1, "version": "v0.0.2", "schema": 24,
+                               "sha256": "a" * 64}, separators=(",", ":")).encode()
+            receipt.write_bytes(body)
+            before = MODULE.installed_receipt_content(receipt)
+            replacement = root / "replacement.json"
+            replacement.write_bytes(body)
+            replacement.replace(receipt)
+
+            self.assertEqual(MODULE.installed_receipt_content(receipt), before)
+
+    def test_retained_receipt_validation_rejects_unlisted_secret_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt = Path(directory) / "installed.json"
+            receipt.write_text(json.dumps({"format": 1, "version": "v0.0.2", "schema": 24,
+                                           "sha256": "a" * 64, "token": "PRIVATE-CANARY"}))
+
+            with self.assertRaisesRegex(RuntimeError, "unavailable or invalid") as error:
+                MODULE.installed_receipt_content(receipt)
+
+            self.assertNotIn("PRIVATE-CANARY", str(error.exception))
+
     def test_failure_source_line_is_only_from_exact_harness_frame(self):
         try:
             source = "def caller():\n    fail()\ndef fail():\n    raise RuntimeError('CANARY-DO-NOT-LEAK')\ncaller()\n"
