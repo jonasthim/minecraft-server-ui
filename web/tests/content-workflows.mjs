@@ -16,7 +16,9 @@ try {
  const project = (id, source = 'modrinth', kind = 'mod') => ({ source, fetched_at: now, id, slug: id, kind, title: id, description: 'Fixture project', official_url: 'https://modrinth.com/mod/' + id, compatibility });
  const version = (id, project_id = 'parent', source = 'modrinth') => ({ source, fetched_at: now, id, project_id, name: id, number: id, official_url: 'https://modrinth.com/mod/' + project_id, compatibility, dependencies: [], files: [{ id: id + '-file', filename: id + '.jar', size: 10, hashes: { sha256: 'a'.repeat(64) }, role: 'mod', manual_reason: '', official_url: 'https://modrinth.com' }] });
  const detail = id => ({ instance: { id, name: id, flavor: 'fabric', minecraft_version: tuple.minecraft, java_major: 21, memory_mib: 2048, game_port: id === 'alpha' ? 25565 : 25566, created_at: now, updated_at: now }, config: {}, eula: { accepted: false }, provisioning: 'not_installed', settings: { desired_runtime: [] } });
- let installed = false; let hold = false; let release; let held; let previewCount = 0; let packState = 'succeeded'; let packBlock = false; let holdDone; let badExact = false; let dependencyEnabled = true; let emptyReleases = false;
+ let installed = false; let hold = false; let release; let held; let previewCount = 0; let packState = 'succeeded'; let packBlock = false; let holdDone; let badExact = false; let dependencyEnabled = true; let emptyReleases = false; let deleteFails = false; let resolveParent = false; let appliedPreview;
+ const previews = new Map(); const deletedPreviews = [];
+ const previewBlockers = () => [...previews.values()].filter(preview => preview.blockers.length).map(preview => 'Unresolved content preview ' + preview.id);
  await page.route('**/api/v1/**', async route => {
   const req = route.request(); const url = new URL(req.url()); const path = url.pathname.replace('/api/v1', ''); calls.push(path + url.search);
   const json = body => route.fulfill({ json: body });
@@ -31,7 +33,7 @@ try {
   if (path.endsWith('/players')) return json({ snapshot: { instance_id: path.split('/')[2], observed_at: now, known: false, complete: false, players: [], gap: true, reason: 'Intercepted fixture: no game telemetry' } });
   if (path === '/catalog/providers') return json({ providers: ['modrinth', 'curseforge', 'hangar'].map(provider => ({ provider, enabled: true, reason: '' })) });
   if (path.endsWith('/content/config')) return json({ files: [], truncated: false, unsupported: 0 });
-  if (path.endsWith('/content')) return json({ revision: installed ? '2' : '1', tuple, items: installed ? [{ id: 'dep-installed', name: 'dependency', version: 'dep-release', kind: 'mod', enabled: dependencyEnabled, selection: { provider: 'modrinth', project_id: 'dependency', version_id: 'dep-release', file_id: 'dep-release-file' }, sha256: 'a'.repeat(64), descriptor: {}, dependencies: [] }] : [], automatic_blockers: [] });
+  if (path.endsWith('/content')) return json({ revision: installed ? '2' : '1', tuple, items: installed ? [{ id: 'dep-installed', name: 'dependency', version: 'dep-release', kind: 'mod', enabled: dependencyEnabled, selection: { provider: 'modrinth', project_id: 'dependency', version_id: 'dep-release', file_id: 'dep-release-file' }, sha256: 'a'.repeat(64), descriptor: {}, dependencies: [] }] : [], automatic_blockers: previewBlockers() });
   if (path.endsWith('/modpack')) return json({ baseline: null, blockers: [], customizations: { entries: [], notices: [], complete: true } });
   if (path.includes('/search')) {
    const offset = Number(url.searchParams.get('offset') || 0); const kind = url.searchParams.get('kind');
@@ -48,14 +50,17 @@ try {
   if (path.endsWith('/content/previews') && req.method() === 'POST') {
    const mutation = req.postDataJSON(); mutations.push(mutation); previewCount++;
    const parent = mutation.selection?.project_id === 'parent';
-   return json({ id: 'preview-' + previewCount, instance_id: 'alpha', tuple, revision: '1', action: mutation.action, changes: [], blockers: parent ? [installed ? 'Publisher identity unresolved' : 'Required dependency missing'] : [], dependencies: parent ? [{ provider: 'modrinth', project_id: 'dependency', version_id: 'dep-release', name: 'dependency', relation: 'required', required: true }, { provider: '', project_id: '', version_id: '', name: 'unknown identity', relation: 'required', required: true }, { provider: 'modrinth', project_id: 'optional', version_id: '', name: 'optional', relation: 'optional', required: false }, { provider: 'modrinth', project_id: 'incompatible', version_id: '', name: 'incompatible', relation: 'incompatible', required: false }, { provider: 'modrinth', project_id: 'parent', version_id: '', name: 'cycle', relation: 'required', required: true }] : [], unknown: false });
+   const value = { id: 'preview-' + previewCount, instance_id: 'alpha', tuple, revision: '1', action: mutation.action, changes: [], blockers: parent && !resolveParent ? [installed ? 'Publisher identity unresolved' : 'Required dependency missing'] : [], dependencies: parent ? [{ provider: 'modrinth', project_id: 'dependency', version_id: 'dep-release', name: 'dependency', relation: 'required', required: true }, { provider: '', project_id: '', version_id: '', name: 'unknown identity', relation: 'required', required: true }, { provider: 'modrinth', project_id: 'optional', version_id: '', name: 'optional', relation: 'optional', required: false }, { provider: 'modrinth', project_id: 'incompatible', version_id: '', name: 'incompatible', relation: 'incompatible', required: false }, { provider: 'modrinth', project_id: 'parent', version_id: '', name: 'cycle', relation: 'required', required: true }] : [], unknown: false }; previews.set(value.id, value); return json(value);
   }
-  if (path.includes('/content/previews/') && req.method() === 'DELETE') return route.fulfill({ status: 204 });
+  if (path.includes('/content/previews/') && req.method() === 'DELETE') {
+   if (deleteFails) return route.fulfill({ status: 503, json: { error: { message: 'Fixture preview deletion failed' } } });
+   const id = path.split('/').at(-1); deletedPreviews.push(id); previews.delete(id); return route.fulfill({ status: 204 });
+  }
   if (path.endsWith('/modpack/previews') && req.method() === 'POST') { const input = req.postDataJSON(); mutations.push(input); return json({ id: 'pack-preview', source: { name: 'fixture pack', official_url: 'https://modrinth.com', selection: input.pack }, tuple, selections: {}, summary: 'Fixture strict preview', changes: [], blockers: packBlock ? ['Pack blocked by strict compatibility'] : [], manual: [], excluded: [] }); }
   if (path.endsWith('/modpack/previews/pack-preview/apply')) return json({ job: { id: 'pack-job', state: 'queued', kind: 'pack', phase: 'queued' } });
   if (path === '/jobs/pack-job') return json({ job: { id: 'pack-job', state: packState, kind: 'pack', phase: 'terminal', error: packState === 'failed' ? 'Fixture pack failure' : '' } });
-  if (path.endsWith('/apply')) return json({ job: { id: 'content-job', state: 'queued', kind: 'content', phase: 'queued' } });
-  if (path === '/jobs/content-job') { installed = true; if (mutations.at(-1)?.action === 'enable') dependencyEnabled = true; return json({ job: { id: 'content-job', state: 'succeeded', kind: 'content', phase: 'complete' } }); }
+  if (path.endsWith('/apply')) { appliedPreview = path.split('/').at(-2); return json({ job: { id: 'content-job', state: 'queued', kind: 'content', phase: 'queued' } }); }
+  if (path === '/jobs/content-job') { previews.delete(appliedPreview); installed = true; if (mutations.at(-1)?.action === 'enable') dependencyEnabled = true; return json({ job: { id: 'content-job', state: 'succeeded', kind: 'content', phase: 'complete' } }); }
   return route.fulfill({ status: 500, json: { error: { message: 'Unexpected fixture request ' + path } } });
  });
  await page.goto(base + '/instances/alpha/content');
@@ -78,8 +83,19 @@ try {
  await page.getByText('Incompatible dependency:', { exact: false }).waitFor();
  assert.equal(await page.getByRole('button', { name: 'Review dependency unknown identity', exact: true }).count(), 0);
  assert.equal(await page.getByRole('button', { name: 'Review dependency cycle', exact: true }).count(), 0);
+ const originalPreviewId = 'preview-' + previewCount;
+ deleteFails = true;
+ await page.getByRole('button', { name: 'Review dependency dependency', exact: true }).click();
+ await page.getByRole('alert').filter({ hasText: 'Fixture preview deletion failed' }).waitFor();
+ assert(previews.has(originalPreviewId), 'failed deletion must retain the original server preview');
+ await page.getByRole('heading', { name: 'Review install', exact: true }).waitFor();
+ assert.equal(await page.getByRole('button', { name: 'Return and re-preview parent', exact: true }).count(), 0, 'failed deletion must not abandon the navigable parent');
+ assert.equal(calls.some(call => call === '/catalog/modrinth/projects/dependency/versions/dep-release'), false);
+ deleteFails = false;
  await page.getByRole('button', { name: 'Review dependency dependency', exact: true }).focus(); await page.keyboard.press('Enter');
  await page.getByText('dep-release', { exact: true }).waitFor();
+ assert.equal(previews.has(originalPreviewId), false, 'dependency entry must remove original blocked server preview');
+ assert(deletedPreviews.includes(originalPreviewId));
  await page.getByRole('button', { name: 'Preview installation of dep-release.jar', exact: true }).click();
  await page.getByRole('button', { name: 'Apply while stopped', exact: true }).click();
  await page.getByText('Content operation completed and saved files were verified.', { exact: true }).waitFor();
@@ -113,6 +129,21 @@ try {
  assert.deepEqual(mutations.at(-1), mutations[0]);
  await page.screenshot({ path: '/tmp/task31b-dependency-mobile.png', fullPage: true });
  results.push('unknown identities/cycles/incompatibilities explained, optional explicit navigation, installed enable preview, exact incompatible release blocked');
+ // Resolve the remaining publisher metadata in the fixture, then finish the
+ // actual guided parent flow. Retained previews drive automatic blockers here,
+ // mirroring the backend lifecycle rather than returning an always-empty list.
+ await page.getByRole('button', { name: 'Review dependency optional', exact: true }).click();
+ resolveParent = true;
+ await page.getByRole('button', { name: 'Return and re-preview parent', exact: true }).click();
+ await page.getByRole('button', { name: 'Apply while stopped', exact: true }).click();
+ await page.getByText('Content operation completed and saved files were verified.', { exact: true }).waitFor();
+ assert.equal(previews.size, 0, 'successful dependency and parent flow must leave no abandoned preview');
+ assert.deepEqual(previewBlockers(), []);
+ assert.equal(await page.getByText('Automatic updates blocked', { exact: true }).count(), 0);
+ results.push('original blocked preview deleted before navigation; delete failure preserves retryable parent; completed flow leaves no retained preview blocker');
+ if (process.env.CONTENT_PREVIEW_LIFECYCLE_ONLY === '1') {
+   assert.deepEqual(errors, []); console.log(JSON.stringify({ evidence: 'intercepted preview lifecycle regression only', results }, null, 2)); await context.close();
+ } else {
  const navigate = async path => { await page.evaluate(path => { history.pushState(null, '', path); dispatchEvent(new PopStateEvent('popstate')); }, path); };
  const startHold = () => { hold = true; return new Promise(resolve => { held = resolve; }); };
  const finishHold = async () => { const done = new Promise(resolve => { holdDone = resolve; }); release(); await done; holdDone = null; };
@@ -195,4 +226,5 @@ try {
  assert.deepEqual(errors, []);
  console.log(JSON.stringify({ evidence: 'intercepted shipping UI only', results }, null, 2));
  await context.close();
+ }
 } finally { await browser.close(); }

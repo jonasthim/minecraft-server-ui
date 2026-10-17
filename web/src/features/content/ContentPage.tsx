@@ -118,14 +118,20 @@ function ContentPanelState({ instanceId }: { instanceId: string }) {
   const [updateLookup, setUpdateLookup] = useState<Installed['selection'] | null>(null);
   useEffect(() => { if (updateLookup) { void browser.identity(updateLookup.provider, updateLookup.project_id); setUpdateLookup(null); } }, [updateLookup, browser]);
   async function dependencyPlan(dependency: Preview['dependencies'][number]) {
-    if (!lastMutation || !['modrinth', 'curseforge', 'hangar'].includes(dependency.provider) || !dependency.project_id) return;
+    if (!preview || !lastMutation || !['modrinth', 'curseforge', 'hangar'].includes(dependency.provider) || !dependency.project_id) return;
     if ([...parents.map(parent => parent.mutation.selection), lastMutation.selection].some(selection => selection?.provider === dependency.provider && selection.project_id === dependency.project_id)) { setError('Dependency cycle detected. Return to the parent and resolve the publisher metadata before continuing.'); return; }
     const existing = manifest?.items.filter(item => item.selection?.provider === dependency.provider && item.selection.project_id === dependency.project_id) ?? [];
     if (existing.length > 1) { setError('Multiple installed entries have this publisher identity. Resolve the duplicate identity before selecting a dependency update.'); return; }
-    setParents(previous => [...previous, { mutation: lastMutation, project, offset: browser.page?.offset ?? 0, exactVersionId: browser.exact?.id }]);
-    setPreview(null); setLastMutation(null); setUpdateItem(existing[0] ?? null); setUpload(null); setFile(null); setTrial(false);
-    await browser.identity(dependency.provider as Provider, dependency.project_id, dependency.version_id || undefined);
-    catalogRef.current?.focus();
+    const parent = { mutation: lastMutation, project, offset: browser.page?.offset ?? 0, exactVersionId: browser.exact?.id };
+    await perform(async () => {
+      // A blocked preview is retained server state and blocks automatic updates.
+      // Only leave it after deletion succeeds; a failure keeps the parent retryable.
+      await api(endpoint + '/previews/' + encodeURIComponent(preview.id), { method: 'DELETE' });
+      setParents(previous => [...previous, parent]);
+      setPreview(null); setLastMutation(null); setUpdateItem(existing[0] ?? null); setUpload(null); setFile(null); setTrial(false);
+      await browser.identity(dependency.provider as Provider, dependency.project_id, dependency.version_id || undefined);
+      catalogRef.current?.focus();
+    });
   }
   async function enableDependency(item: Installed) {
     if (!lastMutation) return;

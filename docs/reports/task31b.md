@@ -48,3 +48,29 @@ abdc0e6df089680941c3b540c073f6aab71170f7f2a12cbc238a33e623991cbe  web/src/featur
 e6eaf7648ccb0c1f5bd22810c09659a2a682ac120061bc113a84cad3372d8d89  web/src/features/modpacks/ModpacksPage.tsx
 0e6b4539198460904c99ce6820c069bdc9ae0530379764062a479a7531459c6c  web/tests/content-workflows.mjs
 ```
+
+## Review fix round 1 — retained parent preview lifecycle
+
+2026-10-17, integrator baseline `c863c63`. The reviewer identified that entering a dependency discarded the browser's parent preview reference without deleting the server row. That retained blocked row could consume the 32-preview allowance and block automatic updates for its retention period.
+
+`dependencyPlan` now saves the exact parent mutation/project/page/exact-release context locally, then deletes the original preview through the existing authorized endpoint **before** changing navigation state. A failed delete displays the API failure and keeps the original preview, selection and dependency action available for retry. A successful delete enters the same guided path; returning still creates a fresh strict preview from the saved mutation. No backend contract or trust/compatibility gate changed.
+
+The intercepted fixture now retains preview rows in a map, derives manifest automatic blockers from those rows, deletes rows only for actual DELETE requests or successful apply completion, and can reject preview deletion. The new regression checks that deletion failure retains the server row and navigable parent without a dependency lookup; retry removes the original server row; after explicit dependency and parent completion, no preview rows or automatic blockers remain. Its red run failed waiting for the deletion failure alert because the old implementation never issued DELETE. The fixed run passed.
+
+Narrow verification only:
+
+```text
+CONTENT_PREVIEW_LIFECYCLE_ONLY=1 node web/tests/content-workflows.mjs  # passed
+npm --prefix web run typecheck                                    # passed
+npm --prefix web run lint                                         # passed
+git diff --check -- web/src/features/content web/tests/content-workflows.mjs docs/reports/task31b.md
+```
+
+The lifecycle-only mode exercises the existing content dependency checks and the new retained-state lifecycle; it skips pack, provider-delay and role cases already recorded above. Evidence remains intercepted shipping UI logic, without real provider/game qualification. Used isolated Vite `15431`; user preview `12826` was not touched. No staging or commit.
+
+Updated frozen hashes (supersede the corresponding original entries above):
+
+```text
+4589ed1c97d9ace71044def6d361a3c3def1c3193924116fa0be19616ced712c  web/src/features/content/ContentPage.tsx
+05833565a544707b659e5bc60c265d03cfb8912f8d3b6d8a84502193ed5d0806  web/tests/content-workflows.mjs
+```
