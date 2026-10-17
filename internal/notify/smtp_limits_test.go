@@ -174,26 +174,62 @@ func TestSMTPResponseReadCancellationClosesPeer(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer listener.Close()
-	entered := make(chan struct{})
-	finished := make(chan struct{})
+	entered := make(chan error, 1)
+	finished := make(chan error, 1)
+	peerDone := make(chan struct{})
+	t.Cleanup(func() {
+		_ = listener.Close()
+		select {
+		case <-peerDone:
+		case <-time.After(3 * time.Second):
+			t.Error("SMTP fixture peer did not finish")
+		}
+	})
 	go func() {
-		defer close(finished)
+		defer close(peerDone)
 		conn, e := listener.Accept()
 		if e != nil {
+			entered <- e
 			return
 		}
 		defer conn.Close()
-		close(entered)
-		_, _ = io.Copy(io.Discard, conn)
+		if e = conn.SetDeadline(time.Now().Add(2 * time.Second)); e != nil {
+			entered <- e
+			return
+		}
+		if _, e = io.WriteString(conn, "220 local cancellation test\r\n"); e != nil {
+			entered <- e
+			return
+		}
+		reader := bufio.NewReader(io.LimitReader(conn, smtpLineBytes+1))
+		line, e := reader.ReadString('\n')
+		if e != nil || line != "EHLO localhost\r\n" {
+			entered <- fmt.Errorf("expected EHLO before cancellation: command=%q error=%v", line, e)
+			return
+		}
+		// Dial and greeting have completed. Withhold the EHLO response so the
+		// client is blocked specifically in SMTP response I/O when cancelled.
+		entered <- nil
+		_, e = io.Copy(io.Discard, conn)
+		finished <- e
 	}()
 	host, portText, _ := net.SplitHostPort(listener.Addr().String())
 	port, _ := strconv.Atoi(portText)
 	c := privateChannel{Channel: Channel{Provider: Email, AllowPrivate: true}, Destination: Destination{SMTPHost: host, SMTPPort: port, TLSMode: "starttls", From: "from@example.org", Recipient: "to@example.org"}}
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	result := make(chan error, 1)
 	go func() { result <- sendEmailTLS(ctx, c, nil, nil) }()
-	<-entered
+	select {
+	case e := <-entered:
+		if e != nil {
+			t.Fatal(e)
+		}
+	case e := <-result:
+		t.Fatalf("SMTP client finished before EHLO response phase: %v", e)
+	case <-time.After(time.Second):
+		t.Fatal("SMTP client did not reach EHLO response phase")
+	}
 	cancel()
 	select {
 	case e := <-result:
@@ -204,7 +240,10 @@ func TestSMTPResponseReadCancellationClosesPeer(t *testing.T) {
 		t.Fatal("SMTP cancellation did not drain")
 	}
 	select {
-	case <-finished:
+	case e := <-finished:
+		if e != nil {
+			t.Fatalf("SMTP peer did not observe client closure: %v", e)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("SMTP peer connection remained open")
 	}
