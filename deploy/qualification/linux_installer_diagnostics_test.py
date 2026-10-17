@@ -1,6 +1,10 @@
 import importlib.util
+import json
+import os
 from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("linux_installer_diagnostics.py")
@@ -10,6 +14,136 @@ SPEC.loader.exec_module(MODULE)
 
 
 class InstallerDiagnosticTests(unittest.TestCase):
+    def test_protected_snapshot_reports_only_fixed_slot_metadata(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            state = base / "state"
+            install = state / "install"
+            binary = base / "bin"
+            operation = install / ("a" * 64)
+            operation.mkdir(parents=True)
+            state.chmod(0o700)
+            install.chmod(0o700)
+            operation.chmod(0o700)
+            binary.mkdir()
+            data = base / "data"
+            control = data / "selfupdate" / "control"
+            control.mkdir(parents=True)
+            secret = "token=do-not-report"
+            (control / "maintenance-challenge.json").write_text(secret)
+            (state / "installation-transaction.pending").write_text(secret)
+            (state / "installation-launch.json").symlink_to(base / "outside-secret")
+            (base / "outside-secret").write_text(secret)
+            (operation / "result.json.pending").write_text(secret)
+            (operation / "inputs").mkdir()
+            (operation / "inputs" / "private-member-name").write_text(secret)
+            (operation / "unexpected-secret-filename").write_text(secret)
+            (binary / "minecraft-ui.previous").write_text(secret)
+            (binary / "minecraft-ui.secret-suffix").write_text(secret)
+            (binary / ("minecraft-ui.install-" + "a" * 64)).write_text(secret)
+
+            snapshot = MODULE._protected_state_snapshot(str(state), str(install), str(binary), os.geteuid(), str(data))
+            encoded = json.dumps(snapshot, sort_keys=True)
+
+            self.assertEqual(snapshot["state"]["slots"]["installation-transaction.pending"]["kind"], "file")
+            self.assertEqual(snapshot["state"]["slots"]["installation-launch.json"]["kind"], "symlink")
+            self.assertEqual(snapshot["install"]["operations"][0]["slots"]["result.json.pending"]["state"], "present")
+            self.assertEqual(snapshot["install"]["operations"][0]["slots"]["inputs"]["kind"], "directory")
+            self.assertEqual(snapshot["install"]["operations"][0]["entries_state"], "present")
+            self.assertEqual(snapshot["install"]["unknown_entries"], 1)
+            self.assertEqual(snapshot["bin_scratch"]["unknown_minecraft_ui_entries"], 2)
+            self.assertEqual(snapshot["operation_scratch"][0]["metadata"]["kind"], "file")
+            self.assertEqual(snapshot["control_presence"]["slots"]["maintenance-challenge.json"], "present")
+            self.assertEqual(snapshot["control_presence"]["slots"]["challenge.json"], "absent")
+            for forbidden in (secret, "private-member-name", "unexpected-secret-filename", "minecraft-ui.secret-suffix"):
+                self.assertNotIn(forbidden, encoded)
+
+    def test_snapshot_refuses_symlink_directories_without_traversing_them(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            real = base / "real"
+            real.mkdir()
+            secret = real / "secret"
+            secret.write_text("sensitive")
+            state_link = base / "state-link"
+            install_link = base / "install-link"
+            os.symlink(real, state_link)
+            os.symlink(real, install_link)
+            binary = base / "bin"
+            binary.mkdir()
+
+            snapshot = MODULE._protected_state_snapshot(str(state_link), str(install_link), str(binary),
+                                                        os.geteuid(), str(base / "missing-data"))
+
+            self.assertEqual(snapshot["state"]["state"], "refused")
+            self.assertEqual(snapshot["install"]["state"], "refused")
+            self.assertNotIn("sensitive", repr(snapshot))
+
+    def test_operation_fstat_failure_closes_descriptor_and_returns_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            state = base / "state"
+            install = state / "install"
+            operation = install / ("c" * 64)
+            operation.mkdir(parents=True)
+            state.chmod(0o700)
+            install.chmod(0o700)
+            operation.chmod(0o700)
+            binary = base / "bin"
+            binary.mkdir()
+            captured = []
+
+            def fail_fstat(fd):
+                captured.append(fd)
+                raise OSError("fixture fstat failure")
+
+            with patch.object(MODULE, "_operation_directory_info", side_effect=fail_fstat):
+                snapshot = MODULE._protected_state_snapshot(str(state), str(install), str(binary),
+                                                            os.geteuid(), str(base / "missing-data"))
+
+            self.assertEqual(snapshot["install"]["operations"], [{"id": "c" * 64, "state": "refused"}])
+            self.assertEqual(len(captured), 1)
+            with self.assertRaises(OSError):
+                os.fstat(captured[0])
+
+    def test_snapshot_bounds_operation_and_entry_enumeration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            state = base / "state"
+            install = state / "install"
+            binary = base / "bin"
+            install.mkdir(parents=True)
+            state.chmod(0o700)
+            install.chmod(0o700)
+            binary.mkdir()
+            for value in range(20):
+                operation = install / (format(value + 1, "064x"))
+                operation.mkdir()
+                operation.chmod(0o700)
+                for entry in range(12):
+                    (operation / ("unknown-" + str(entry))).touch()
+            for value in range(80):
+                (install / ("unknown-root-" + str(value))).touch()
+
+            snapshot = MODULE._protected_state_snapshot(str(state), str(install), str(binary),
+                                                        os.geteuid(), str(base / "missing-data"))
+
+            self.assertLessEqual(len(snapshot["install"]["operations"]), MODULE.MAX_INSTALL_OPERATIONS)
+            self.assertLessEqual(snapshot["install"]["unknown_entries"], MODULE.MAX_INSTALL_ENTRIES)
+            self.assertTrue(snapshot["install"]["truncated"])
+            self.assertNotIn("unknown-root-", repr(snapshot))
+            self.assertNotIn("unknown-0", repr(snapshot))
+
+    def test_payload_cap_omits_snapshot_after_adding_diagnostics(self):
+        payload = {"format": 1, "scope": "fixed", "units": [],
+                   "journal": {"bounded": True, "events": [], "worker_results": [], "entry_failures": []},
+                   "protected_state": {"fixture": "x" * (MODULE.MAX_PAYLOAD_BYTES * 2)}}
+
+        encoded = MODULE._bounded_payload(payload)
+
+        self.assertLessEqual(len(encoded.encode("utf-8")), MODULE.MAX_PAYLOAD_BYTES)
+        self.assertNotIn("protected_state", json.loads(encoded))
+
     def test_journal_scrubber_keeps_stage_and_omits_raw_message(self):
         summary = MODULE.summarize_journal([
             '{"_SYSTEMD_UNIT":"minecraft-ui-install-' + 'a' * 64 + '.service",'

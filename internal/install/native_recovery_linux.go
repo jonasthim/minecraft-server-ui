@@ -33,7 +33,11 @@ func (d *linuxInstallDriver) RecoverPending(ctx context.Context) error {
 		if _, _, err := readProtectedPending(ctx, d.state, "installation.json.pending", maxLinuxInventoryBytes, d.hooks.testRoot); !errors.Is(err, os.ErrNotExist) {
 			return errors.Join(errors.New("orphaned Linux inventory publication requires review"), err)
 		}
-		orphaned, err := checkLinuxOperationDirectories(ctx, d.state, d.hooks.stateRoot)
+		owner := uint32(0)
+		if d.hooks.testRoot {
+			owner = uint32(os.Geteuid())
+		}
+		orphaned, err := checkLinuxOperationDirectoriesWithPolicy(ctx, d.state, d.hooks.stateRoot, owner, d.hooks.testRoot)
 		if err != nil || orphaned {
 			return errors.Join(errors.New("orphaned installer operation state requires review"), err)
 		}
@@ -198,6 +202,11 @@ func (d *linuxInstallDriver) recoverEffectsPending(ctx context.Context) error {
 	if err := decodeLinuxStrictJSON(body, linuxMaxEffectsBytes, &next); err != nil || next.Format != 1 || next.OperationID != d.intent.ID || len(next.Effects) > 128 {
 		return errors.New("pending native effects evidence is malformed")
 	}
+	for _, effect := range next.Effects {
+		if !validLinuxNativeEffect(effect) {
+			return errors.New("pending native effects contain an invalid effect record")
+		}
+	}
 	canonical, err := json.Marshal(next)
 	if err != nil || !bytes.Equal(canonical, body) {
 		return errors.New("pending native effects evidence is not canonical")
@@ -238,10 +247,10 @@ func validNativeEvidenceTransition(current, next linuxNativeEvidence) bool {
 			return false
 		}
 		old, new := current.Effects[i], next.Effects[i]
-		if old == new {
+		if sameLinuxNativeEffect(old, new) {
 			continue
 		}
-		if i != len(current.Effects)-1 || old.Complete || !new.Complete || old.Role != new.Role || old.Direction != new.Direction || old.Before != new.Before || old.Staged != new.Staged || !validLinuxCapturedState(old.Role, new.Actual) {
+		if i != len(current.Effects)-1 || old.Complete || !new.Complete || old.Role != new.Role || old.Direction != new.Direction || linuxEffectStagingProtocol(old) != linuxEffectStagingProtocol(new) || old.Before != new.Before || old.Staged != new.Staged || !validLinuxCapturedState(old.Role, new.Actual) {
 			return false
 		}
 	}
@@ -282,7 +291,7 @@ func (d *linuxInstallDriver) validatePendingEffectState(ctx context.Context, cur
 		return nil
 	}
 	for i := range current.Effects {
-		if current.Effects[i] == next.Effects[i] {
+		if sameLinuxNativeEffect(current.Effects[i], next.Effects[i]) {
 			continue
 		}
 		effect := next.Effects[i]

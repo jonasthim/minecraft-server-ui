@@ -4,11 +4,16 @@ package install
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func linuxAssetWriteFixture(t *testing.T, path string, role linuxAssetRole, body string) linuxAssetState {
@@ -162,6 +167,207 @@ func TestReconcileLinuxAssetPublicationScratchCombinations(t *testing.T) {
 			t.Fatalf("unrelated scratch changed: %q, %v", body, err)
 		}
 	})
+}
+
+func TestAnonymousAssetStagePreLinkInterruptionIsRecoverable(t *testing.T) {
+	ctx := context.Background()
+	snapshot, target, _ := linuxAssetFixture(t, linuxAssetManager, false)
+	defer snapshot.Close()
+	before := snapshot.State()
+	id := strings.Repeat("e", 64)
+	source, err := os.CreateTemp(t.TempDir(), "candidate-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Write([]byte("signed candidate binary")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	next := linuxAssetNext([]byte("signed candidate binary"), 0755)
+	var staged linuxAssetState
+	oldBeforeLink := linuxAssetTestPolicy.beforeLink
+	defer func() { linuxAssetTestPolicy.beforeLink = oldBeforeLink }()
+	linuxAssetTestPolicy.beforeLink = func(role linuxAssetRole) error { return errors.New("simulated worker death before link") }
+	_, publishErr := publishLinuxAssetRecorded(ctx, id, snapshot, source, next, func(state linuxAssetState) error { staged = state; return nil })
+	_ = source.Close()
+	if publishErr == nil || !staged.Present || staged.Inode == 0 {
+		t.Fatalf("publish stage = %+v, %v", staged, publishErr)
+	}
+	if _, err := os.Lstat(target + ".install-" + id); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pre-link stage escaped into namespace: %v", err)
+	}
+	current, err := inspectLinuxAsset(ctx, linuxAssetManager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.State() != before {
+		_ = current.Close()
+		t.Fatal("public asset changed before link")
+	}
+	_ = current.Close()
+	got, err := reconcileLinuxAssetEffectWithProtocol(ctx, id, linuxAssetManager, before, staged, linuxAssetStagingAnonymousV1)
+	if err != nil || got != before {
+		t.Fatalf("anonymous pre-link recovery = %+v, %v", got, err)
+	}
+	if _, err := reconcileLinuxAssetEffect(ctx, id, linuxAssetManager, before, staged); err == nil {
+		t.Fatal("legacy named-stage effect accepted missing scratch for absent preimage")
+	}
+}
+
+func TestAnonymousAssetCleanupPreservesMutatedSameInodeScratch(t *testing.T) {
+	ctx := context.Background()
+	snapshot, target, _ := linuxAssetFixture(t, linuxAssetManager, false)
+	defer snapshot.Close()
+	id := strings.Repeat("f", 64)
+	body := []byte("expected candidate")
+	source, err := os.CreateTemp(t.TempDir(), "candidate-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	pending := filepath.Base(target) + ".install-" + id
+	linuxAssetTestPolicy.beforeRename = func(role linuxAssetRole) error {
+		file, err := snapshot.parent.OpenFile(pending, os.O_WRONLY|os.O_TRUNC, 0)
+		if err != nil {
+			return err
+		}
+		_, writeErr := file.Write([]byte("mutated same inode"))
+		return errors.Join(writeErr, file.Close(), errors.New("injected pre-rename failure"))
+	}
+	defer func() { linuxAssetTestPolicy.beforeRename = nil }()
+	_, err = publishLinuxAssetRecorded(ctx, id, snapshot, source, linuxAssetNext(body, 0755), func(linuxAssetState) error { return nil })
+	_ = source.Close()
+	if err == nil {
+		t.Fatal("publication succeeded after staged bytes changed")
+	}
+	file, err := snapshot.parent.Open(pending)
+	if err != nil {
+		t.Fatalf("cleanup removed changed same-inode scratch: %v", err)
+	}
+	actual, readErr := io.ReadAll(file)
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil || string(actual) != "mutated same inode" {
+		t.Fatalf("preserved scratch=%q err=%v", actual, errors.Join(readErr, closeErr))
+	}
+}
+
+func TestAnonymousAssetStageSIGKILLBeforeLinkLeavesNoNamedScratch(t *testing.T) {
+	const childMarker = "MINECRAFT_UI_ANONYMOUS_STAGE_KILL_CHILD"
+	if os.Getenv(childMarker) == "1" {
+		linuxAssetTestPolicy = &linuxAssetTestPolicyConfig{
+			root: os.Getenv(childMarker + "_ROOT"), uid: uint32(os.Geteuid()),
+			paths: map[linuxAssetRole]string{linuxAssetManager: os.Getenv(childMarker + "_TARGET")},
+			beforeLink: func(linuxAssetRole) error {
+				if err := os.WriteFile(os.Getenv(childMarker+"_READY"), []byte("ready"), 0600); err != nil {
+					return err
+				}
+				select {}
+			},
+		}
+		snapshot, err := inspectLinuxAsset(context.Background(), linuxAssetManager)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer snapshot.Close()
+		source, err := os.Open(os.Getenv(childMarker + "_SOURCE"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer source.Close()
+		body, err := os.ReadFile(os.Getenv(childMarker + "_SOURCE"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = publishLinuxAssetRecorded(context.Background(), strings.Repeat("7", 64), snapshot, source, linuxAssetNext(body, 0755), func(staged linuxAssetState) error {
+			encoded, err := json.Marshal(staged)
+			if err != nil {
+				return err
+			}
+			file, err := os.OpenFile(os.Getenv(childMarker+"_EFFECT"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if err != nil {
+				return err
+			}
+			_, writeErr := file.Write(encoded)
+			return errors.Join(writeErr, file.Sync(), file.Close())
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("child unexpectedly completed before parent kill")
+	}
+
+	root := t.TempDir()
+	target := filepath.Join(root, "assets", "manager", "minecraft-ui")
+	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "candidate")
+	if err := os.WriteFile(source, []byte("candidate binary before link"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ready := filepath.Join(root, "ready")
+	effectPath := filepath.Join(root, "effect.json")
+	command := exec.Command(os.Args[0], "-test.run=^TestAnonymousAssetStageSIGKILLBeforeLinkLeavesNoNamedScratch$")
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, childMarker+"=") && !strings.HasPrefix(entry, childMarker+"_") {
+			command.Env = append(command.Env, entry)
+		}
+	}
+	command.Env = append(command.Env, childMarker+"=1", childMarker+"_ROOT="+root, childMarker+"_TARGET="+target, childMarker+"_SOURCE="+source, childMarker+"_READY="+ready, childMarker+"_EFFECT="+effectPath)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+			t.Fatal("child did not reach the anonymous-stage pre-link checkpoint")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	waitErr := command.Wait()
+	exitErr, ok := waitErr.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("child termination = %v, want signal SIGKILL", waitErr)
+	}
+	waitStatus, statusOK := exitErr.Sys().(syscall.WaitStatus)
+	if !statusOK || !waitStatus.Signaled() || waitStatus.Signal() != syscall.SIGKILL {
+		t.Fatalf("child termination = %v, want signal SIGKILL", waitErr)
+	}
+	if _, err := os.Lstat(target + ".install-" + strings.Repeat("7", 64)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("SIGKILL left named pre-link scratch: %v", err)
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("SIGKILL changed public asset: %v", err)
+	}
+	effectBytes, err := os.ReadFile(effectPath)
+	if err != nil {
+		t.Fatalf("pre-link effect was not durably captured: %v", err)
+	}
+	var staged linuxAssetState
+	if err := decodeLinuxStrictJSON(effectBytes, 4096, &staged); err != nil {
+		t.Fatal(err)
+	}
+	prior := linuxAssetTestPolicy
+	linuxAssetTestPolicy = &linuxAssetTestPolicyConfig{root: root, uid: uint32(os.Geteuid()), paths: map[linuxAssetRole]string{linuxAssetManager: target}}
+	defer func() { linuxAssetTestPolicy = prior }()
+	if got, err := reconcileLinuxAssetEffectWithProtocol(context.Background(), strings.Repeat("7", 64), linuxAssetManager, linuxAssetState{}, staged, linuxAssetStagingAnonymousV1); err != nil || got != (linuxAssetState{}) {
+		t.Fatalf("fresh-process pre-link reconciliation = %+v, %v", got, err)
+	}
 }
 
 func readLinuxAssetFixtureState(t *testing.T, path string, role linuxAssetRole) linuxAssetState {

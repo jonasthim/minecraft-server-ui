@@ -16,11 +16,21 @@ import (
 // reconcileLinuxAssetEffect only classifies and clears scratch left by one
 // durable native-effect record. It never changes the public asset binding.
 func reconcileLinuxAssetEffect(ctx context.Context, operationID string, role linuxAssetRole, before, staged linuxAssetState) (linuxAssetState, error) {
+	return reconcileLinuxAssetEffectWithProtocol(ctx, operationID, role, before, staged, "")
+}
+
+func reconcileLinuxAssetEffectWithProtocol(ctx context.Context, operationID string, role linuxAssetRole, before, staged linuxAssetState, protocol string) (linuxAssetState, error) {
 	if ctx == nil || ctx.Err() != nil || !validLinuxAssetOperationID(operationID) {
 		if ctx != nil && ctx.Err() != nil {
 			return linuxAssetState{}, ctx.Err()
 		}
 		return linuxAssetState{}, errors.New("invalid Linux asset effect reconciliation arguments")
+	}
+	if protocol != "" && protocol != linuxAssetStagingAnonymousV1 {
+		return linuxAssetState{}, errors.New("unknown Linux asset staging protocol")
+	}
+	if protocol != "" && !staged.Present {
+		return linuxAssetState{}, errors.New("anonymous staging protocol is invalid for a removal effect")
 	}
 	spec, ok := linuxAssetSpecForRole(role)
 	if !ok || !validLinuxAssetRecordedState(role, before) || !validLinuxAssetRecordedState(role, staged) {
@@ -42,7 +52,7 @@ func reconcileLinuxAssetEffect(ctx context.Context, operationID string, role lin
 		return linuxAssetState{}, errors.New("Linux asset effect parent is not provisioned")
 	}
 	if publication {
-		return reconcileLinuxAssetPublication(ctx, snapshot, spec, operationID, before, staged)
+		return reconcileLinuxAssetPublication(ctx, snapshot, spec, operationID, before, staged, protocol)
 	}
 	return reconcileLinuxAssetRemoval(ctx, snapshot, spec, before)
 }
@@ -59,7 +69,7 @@ func validLinuxAssetRecordedState(role linuxAssetRole, state linuxAssetState) bo
 	return err == nil && len(digest) == sha256.Size && strings.ToLower(state.SHA256) == state.SHA256
 }
 
-func reconcileLinuxAssetPublication(ctx context.Context, public *linuxAssetSnapshot, spec linuxAssetSpec, operationID string, before, staged linuxAssetState) (linuxAssetState, error) {
+func reconcileLinuxAssetPublication(ctx context.Context, public *linuxAssetSnapshot, spec linuxAssetSpec, operationID string, before, staged linuxAssetState, protocol string) (linuxAssetState, error) {
 	name := filepath.Base(public.path)
 	pending := name + ".install-" + operationID
 	pendingState, pendingFile, err := inspectLinuxAssetScratch(ctx, public, pending, spec)
@@ -73,7 +83,7 @@ func reconcileLinuxAssetPublication(ctx context.Context, public *linuxAssetSnaps
 	removePending := false
 	switch {
 	case !pendingState.Present && publicState == before:
-		if !before.Present && staged.Present {
+		if !before.Present && staged.Present && protocol != linuxAssetStagingAnonymousV1 {
 			return linuxAssetState{}, errors.New("Linux asset publication has neither public nor staged file")
 		}
 	case !pendingState.Present && publicState == staged:

@@ -297,7 +297,7 @@ func (d *linuxInstallDriver) Replace(ctx context.Context, tx transaction) error 
 				return err
 			}
 			actual, publishErr := publishLinuxAssetRecorded(ctx, tx.ID, snapshot, source, plan.After, func(staged linuxAssetState) error {
-				return d.recordEffect(ctx, plan.Role, "publish", plan.Before, staged)
+				return d.recordPublishEffect(ctx, plan.Role, plan.Before, staged)
 			})
 			closeErr := source.Close()
 			if publishErr != nil || closeErr != nil {
@@ -1147,11 +1147,13 @@ func (d *linuxInstallDriver) rollbackAssets(ctx context.Context, tx transaction,
 	}
 	for i := len(intent.Assets) - 1; i >= 0; i-- {
 		plan := intent.Assets[i]
-		before, staged, found := latestLinuxEffect(evidence.Effects, plan.Role)
+		before, staged, protocol, found := latestLinuxEffectRecord(evidence.Effects, plan.Role)
 		if found {
-			if _, err := reconcileLinuxAssetEffect(ctx, tx.ID, plan.Role, before, staged); err != nil {
+			if _, err := reconcileLinuxAssetEffectWithProtocol(ctx, tx.ID, plan.Role, before, staged, protocol); err != nil {
 				return err
 			}
+		} else if err := refuseUnrecordedLinuxAssetScratch(ctx, tx.ID, plan.Role); err != nil {
+			return err
 		}
 		current, err := inspectLinuxAsset(ctx, plan.Role)
 		if err != nil {
@@ -1213,7 +1215,7 @@ func (d *linuxInstallDriver) rollbackAssets(ctx context.Context, tx transaction,
 			}
 			restorePlan := plan.Before
 			restorePlan.Device, restorePlan.Inode = 0, 0
-			actual, publishErr := publishLinuxAssetRecorded(ctx, tx.ID, snapshot, file, restorePlan, func(staged linuxAssetState) error { return d.recordEffect(ctx, plan.Role, "publish", state, staged) })
+			actual, publishErr := publishLinuxAssetRecorded(ctx, tx.ID, snapshot, file, restorePlan, func(staged linuxAssetState) error { return d.recordPublishEffect(ctx, plan.Role, state, staged) })
 			closeErr := file.Close()
 			if publishErr != nil || closeErr != nil {
 				_ = snapshot.Close()
@@ -1251,6 +1253,30 @@ func (d *linuxInstallDriver) rollbackAssets(ctx context.Context, tx transaction,
 	return nil
 }
 
+func refuseUnrecordedLinuxAssetScratch(ctx context.Context, operationID string, role linuxAssetRole) error {
+	if ctx == nil || ctx.Err() != nil || !validLinuxAssetOperationID(operationID) {
+		if ctx != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.New("invalid unrecorded Linux asset scratch inspection")
+	}
+	snapshot, err := inspectLinuxAsset(ctx, role)
+	if err != nil {
+		return err
+	}
+	defer snapshot.Close()
+	if !snapshot.parentComplete {
+		return nil
+	}
+	name := filepath.Base(snapshot.path) + ".install-" + operationID
+	if _, err := snapshot.parent.Lstat(name); err == nil {
+		return fmt.Errorf("unrecorded Linux asset scratch %s requires manual repair", role)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect unrecorded Linux asset scratch %s: %w", role, err)
+	}
+	return nil
+}
+
 func (d *linuxInstallDriver) rebindRollbackAssetSnapshot(ctx context.Context, role linuxAssetRole, expected linuxAssetState) error {
 	snapshot, err := inspectLinuxAsset(ctx, role)
 	if err != nil {
@@ -1265,12 +1291,17 @@ func (d *linuxInstallDriver) rebindRollbackAssetSnapshot(ctx context.Context, ro
 }
 
 func latestLinuxEffect(effects []linuxNativeEffect, role linuxAssetRole) (linuxAssetState, linuxAssetState, bool) {
+	before, staged, _, found := latestLinuxEffectRecord(effects, role)
+	return before, staged, found
+}
+
+func latestLinuxEffectRecord(effects []linuxNativeEffect, role linuxAssetRole) (linuxAssetState, linuxAssetState, string, bool) {
 	for i := len(effects) - 1; i >= 0; i-- {
 		if effects[i].Role == role {
-			return effects[i].Before, effects[i].Staged, true
+			return effects[i].Before, effects[i].Staged, linuxEffectStagingProtocol(effects[i]), true
 		}
 	}
-	return linuxAssetState{}, linuxAssetState{}, false
+	return linuxAssetState{}, linuxAssetState{}, "", false
 }
 
 func checkReadOnlyLinuxLayout(ctx context.Context, state *os.Root, inventory *linuxInventory) (CheckReport, error) {
@@ -1459,12 +1490,18 @@ func readLinuxCheckReceiptAndPending(ctx context.Context, supplied *os.Root) (se
 	return inspection, nil
 }
 
+const maxLinuxInstallerOperationDirectories = 4096
+
 func checkLinuxOperationDirectories(ctx context.Context, state *os.Root, statePath string) (bool, error) {
+	return checkLinuxOperationDirectoriesWithPolicy(ctx, state, statePath, 0, false)
+}
+
+func checkLinuxOperationDirectoriesWithPolicy(ctx context.Context, state *os.Root, statePath string, owner uint32, testRoot bool) (bool, error) {
 	info, err := state.Lstat(installDirectory)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	if err != nil || validateDirectory(info, 0, true) != nil {
+	if err != nil || validateDirectory(info, owner, true) != nil {
 		return false, errors.Join(errors.New("installer operation directory is unsafe"), err)
 	}
 	install, err := state.OpenRoot(installDirectory)
@@ -1472,9 +1509,17 @@ func checkLinuxOperationDirectories(ctx context.Context, state *os.Root, statePa
 		return false, err
 	}
 	defer install.Close()
-	entries, err := readLinuxRootDir(install)
+	directory, err := install.Open(".")
 	if err != nil {
 		return false, err
+	}
+	entries, readErr := directory.ReadDir(maxLinuxInstallerOperationDirectories + 1)
+	closeErr := directory.Close()
+	if len(entries) == 0 && errors.Is(readErr, io.EOF) {
+		readErr = nil
+	}
+	if readErr != nil || closeErr != nil || len(entries) > maxLinuxInstallerOperationDirectories {
+		return false, errors.Join(errors.New("installer operation directory exceeds its entry bound"), readErr, closeErr)
 	}
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
@@ -1492,7 +1537,7 @@ func checkLinuxOperationDirectories(ctx context.Context, state *os.Root, statePa
 			_ = op.Close()
 			return false, err
 		}
-		if err := validateTerminalOperationContents(ctx, op, false); err != nil {
+		if err := validateTerminalOperationContents(ctx, op, testRoot); err != nil {
 			_ = op.Close()
 			return false, fmt.Errorf("installer operation contains pending or unknown state: %w", err)
 		}
@@ -1503,7 +1548,12 @@ func checkLinuxOperationDirectories(ctx context.Context, state *os.Root, statePa
 			_ = op.Close()
 			return false, err
 		}
-		if _, present, err := readLinuxInstallerResultAt(ctx, statePath, id, 0); err != nil || !present {
+		resultOwner := owner
+		if testRoot {
+			resultOwner = uint32(os.Geteuid())
+		}
+		result, present, err := readLinuxInstallerResultAt(ctx, statePath, id, resultOwner)
+		if err != nil || !present || result.FailedStage != "" || result.Outcome != OutcomeInstalled && result.Outcome != OutcomeUninstalled && result.Outcome != OutcomeRolledBack {
 			_ = op.Close()
 			return false, errors.Join(errors.New("retained installer terminal result is invalid"), err)
 		}

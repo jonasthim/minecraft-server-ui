@@ -111,6 +111,7 @@ type linuxAssetTestPolicyConfig struct {
 	root         string
 	uid          uint32
 	paths        map[linuxAssetRole]string
+	beforeLink   func(linuxAssetRole) error
 	beforeRename func(linuxAssetRole) error
 	afterRename  func(linuxAssetRole) error
 }
@@ -648,31 +649,45 @@ func publishLinuxAssetImpl(ctx context.Context, operationID string, snapshot *li
 	}
 	name := filepath.Base(snapshot.path)
 	pending := name + ".install-" + operationID
-	created, err := snapshot.parent.OpenFile(pending, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	dir, err := snapshot.parent.Open(".")
 	if err != nil {
-		return linuxAssetState{}, fmt.Errorf("create exclusive Linux asset pending file: %w", err)
+		return linuxAssetState{}, fmt.Errorf("open pinned Linux asset parent: %w", err)
 	}
-	createdInfo, err := created.Stat()
+	defer dir.Close()
+	dirFD, err := linuxAssetDirFD(dir)
 	if err != nil {
-		_ = created.Close()
-		_ = snapshot.parent.Remove(pending)
-		return linuxAssetState{}, fmt.Errorf("inspect staged Linux asset: %w", err)
+		return linuxAssetState{}, err
 	}
+	fd, err := unix.Openat(dirFD, ".", unix.O_TMPFILE|unix.O_RDWR|unix.O_CLOEXEC, 0600)
+	if err != nil {
+		return linuxAssetState{}, fmt.Errorf("create anonymous Linux asset stage (O_TMPFILE required): %w", err)
+	}
+	created := os.NewFile(uintptr(fd), "anonymous-linux-asset-stage")
+	if created == nil {
+		_ = unix.Close(fd)
+		return linuxAssetState{}, errors.New("open anonymous Linux asset stage descriptor")
+	}
+	defer created.Close()
 	activated := false
 	var exactStage *linuxAssetState
 	cleanup := func() {
-		if activated || createdInfo == nil {
+		if activated {
 			return
 		}
-		if current, e := snapshot.parent.Lstat(pending); e == nil && os.SameFile(createdInfo, current) {
-			if exactStage != nil {
-				state, stateErr := readLinuxAssetAt(ctx, snapshot.parent, pending, mustLinuxAssetSpec(snapshot.role))
-				if stateErr != nil || state != *exactStage {
-					return
+		if current, e := snapshot.parent.Lstat(pending); e == nil {
+			if held, heldErr := created.Stat(); heldErr == nil && os.SameFile(held, current) {
+				if exactStage != nil {
+					actual, stagedFile, inspectErr := inspectLinuxAssetPending(ctx, snapshot, pending, held)
+					if stagedFile != nil {
+						_ = stagedFile.Close()
+					}
+					if inspectErr != nil || actual != *exactStage {
+						return
+					}
 				}
+				_ = snapshot.parent.Remove(pending)
+				_ = syncLinuxAssetDir(snapshot.parent)
 			}
-			_ = snapshot.parent.Remove(pending)
-			_ = syncLinuxAssetDir(snapshot.parent)
 		}
 	}
 	if _, err := source.Seek(0, io.SeekStart); err != nil {
@@ -690,12 +705,8 @@ func publishLinuxAssetImpl(ctx context.Context, operationID string, snapshot *li
 	if copyErr == nil {
 		copyErr = created.Sync()
 	}
-	closeErr := created.Close()
 	if copyErr == nil {
-		copyErr = closeErr
-	}
-	if copyErr == nil {
-		copyErr = syncLinuxAssetDir(snapshot.parent)
+		_, copyErr = verifyAnonymousLinuxAssetStage(ctx, created, snapshot.role, next, 0)
 	}
 	if copyErr == nil {
 		copyErr = checkLinuxAssetSnapshot(ctx, snapshot)
@@ -704,17 +715,12 @@ func publishLinuxAssetImpl(ctx context.Context, operationID string, snapshot *li
 		cleanup()
 		return linuxAssetState{}, fmt.Errorf("stage Linux asset publication: %w", copyErr)
 	}
-	stagedState, stagedFile, err := inspectLinuxAssetPending(ctx, snapshot, pending, createdInfo)
+	stagedState, err := verifyAnonymousLinuxAssetStage(ctx, created, snapshot.role, next, 0)
 	if err != nil {
-		cleanup()
 		return linuxAssetState{}, err
 	}
-	defer stagedFile.Close()
-	if stagedState.SHA256 != next.SHA256 || stagedState.Size != next.Size || stagedState.Mode != next.Mode {
-		cleanup()
-		return linuxAssetState{}, errors.New("Linux asset pending file does not match requested publication")
-	}
-	exactStage = &stagedState
+	recordedStage := stagedState
+	exactStage = &recordedStage
 	if record != nil {
 		if err := record(stagedState); err != nil {
 			cleanup()
@@ -726,16 +732,44 @@ func publishLinuxAssetImpl(ctx context.Context, operationID string, snapshot *li
 		return linuxAssetState{}, err
 	}
 	if err := checkLinuxAssetSnapshot(ctx, snapshot); err != nil {
+		return linuxAssetState{}, err
+	}
+	afterCallback, err := verifyAnonymousLinuxAssetStage(ctx, created, snapshot.role, next, 0)
+	if err != nil || afterCallback != stagedState {
+		return linuxAssetState{}, errors.New("Linux anonymous stage changed during durable effect recording")
+	}
+	if linuxAssetTestPolicy != nil && linuxAssetTestPolicy.beforeLink != nil {
+		if err := linuxAssetTestPolicy.beforeLink(snapshot.role); err != nil {
+			return linuxAssetState{}, fmt.Errorf("interrupt before linking Linux asset stage: %w", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return linuxAssetState{}, err
+	}
+	if err := checkLinuxAssetSnapshot(ctx, snapshot); err != nil {
+		return linuxAssetState{}, err
+	}
+	if _, err := verifyAnonymousLinuxAssetStage(ctx, created, snapshot.role, next, 0); err != nil {
+		return linuxAssetState{}, err
+	}
+	if err := linkAnonymousLinuxAssetStage(fd, dirFD, pending); err != nil {
+		return linuxAssetState{}, fmt.Errorf("link anonymous Linux asset stage: %w", err)
+	}
+	stagedFileInfo, err := created.Stat()
+	if err != nil {
 		cleanup()
 		return linuxAssetState{}, err
 	}
-	afterCallback, afterFile, err := inspectLinuxAssetPending(ctx, snapshot, pending, createdInfo)
-	if afterFile != nil {
-		_ = afterFile.Close()
-	}
-	if err != nil || afterCallback != stagedState {
+	linkedState, stagedFile, err := inspectLinuxAssetPending(ctx, snapshot, pending, stagedFileInfo)
+	if err != nil {
 		cleanup()
-		return linuxAssetState{}, errors.New("Linux asset state changed during durable effect recording")
+		return linuxAssetState{}, err
+	}
+	_ = stagedFile.Close()
+	syncErr := syncLinuxAssetDir(snapshot.parent)
+	if linkedState != afterCallback || syncErr != nil {
+		cleanup()
+		return linuxAssetState{}, errors.Join(errors.New("linked Linux asset stage failed identity or durability verification"), syncErr)
 	}
 	if linuxAssetTestPolicy != nil && linuxAssetTestPolicy.beforeRename != nil {
 		if err := linuxAssetTestPolicy.beforeRename(snapshot.role); err != nil {
@@ -751,7 +785,7 @@ func publishLinuxAssetImpl(ctx context.Context, operationID string, snapshot *li
 		cleanup()
 		return linuxAssetState{}, err
 	}
-	published, err := renameLinuxAsset(ctx, snapshot, pending, name, createdInfo)
+	published, err := renameLinuxAsset(ctx, snapshot, pending, name, stagedFileInfo)
 	if err != nil {
 		activated = published
 		if !published {
@@ -768,7 +802,7 @@ func publishLinuxAssetImpl(ctx context.Context, operationID string, snapshot *li
 	actual, actualErr := readLinuxAssetAt(ctx, snapshot.parent, name, mustLinuxAssetSpec(snapshot.role))
 	if actualErr == nil {
 		publishedInfo, infoErr := snapshot.parent.Lstat(name)
-		if infoErr != nil || createdInfo == nil || !os.SameFile(createdInfo, publishedInfo) || actual.SHA256 != next.SHA256 || actual.Size != next.Size || actual.Mode != next.Mode {
+		if infoErr != nil || !os.SameFile(stagedFileInfo, publishedInfo) || actual.SHA256 != next.SHA256 || actual.Size != next.Size || actual.Mode != next.Mode {
 			actualErr = errors.New("published Linux asset failed identity or content verification")
 		}
 	}
@@ -797,6 +831,59 @@ func inspectLinuxAssetPending(ctx context.Context, snapshot *linuxAssetSnapshot,
 		return linuxAssetState{}, nil, err
 	}
 	return state, file, nil
+}
+
+// verifyAnonymousLinuxAssetStage validates bytes and ownership through the
+// retained O_TMPFILE descriptor. nlink is zero before linkat and one after.
+func verifyAnonymousLinuxAssetStage(ctx context.Context, file *os.File, role linuxAssetRole, expected linuxAssetState, nlink uint64) (linuxAssetState, error) {
+	var zero linuxAssetState
+	if ctx == nil || file == nil || !validLinuxAssetNext(role, linuxAssetState{Present: expected.Present, SHA256: expected.SHA256, Size: expected.Size, Mode: expected.Mode}) {
+		return zero, errors.New("invalid anonymous Linux asset stage verification arguments")
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return zero, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || info.Mode().Perm() != os.FileMode(expected.Mode) || stat.Uid != linuxAssetExpectedUID() || stat.Nlink != nlink || info.Size() != expected.Size || stat.Dev == 0 || stat.Ino == 0 {
+		return zero, errors.New("anonymous Linux asset stage descriptor has unexpected identity or metadata")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return zero, err
+	}
+	hash, size, err := hashLinuxAsset(ctx, file, linuxAssetLimit(role))
+	if err != nil {
+		return zero, err
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return zero, err
+	}
+	after, err := file.Stat()
+	if err != nil {
+		return zero, err
+	}
+	afterStat, ok := after.Sys().(*syscall.Stat_t)
+	if !ok || !os.SameFile(info, after) || after.Size() != info.Size() || after.Mode().Perm() != info.Mode().Perm() || afterStat.Uid != stat.Uid || afterStat.Nlink != stat.Nlink || afterStat.Dev != stat.Dev || afterStat.Ino != stat.Ino {
+		return zero, errors.New("anonymous Linux asset stage metadata changed while hashing")
+	}
+	if hash != expected.SHA256 || size != expected.Size {
+		return zero, errors.New("anonymous Linux asset stage bytes changed")
+	}
+	return linuxAssetState{Present: true, SHA256: hash, Size: size, Mode: uint32(info.Mode().Perm()), Device: uint64(stat.Dev), Inode: stat.Ino}, nil
+}
+
+func linkAnonymousLinuxAssetStage(fileFD, parentFD int, name string) error {
+	err := unix.Linkat(fileFD, "", parentFD, name, unix.AT_EMPTY_PATH)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, unix.EPERM) && !errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	// Some kernels permit O_TMPFILE but restrict AT_EMPTY_PATH. The fallback
+	// still names only the procfd symlink for this held descriptor.
+	procFD := fmt.Sprintf("/proc/self/fd/%d", fileFD)
+	return unix.Linkat(unix.AT_FDCWD, procFD, parentFD, name, unix.AT_SYMLINK_FOLLOW)
 }
 
 func validLinuxAssetOperationID(id string) bool {

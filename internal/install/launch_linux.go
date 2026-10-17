@@ -259,30 +259,9 @@ func checkLinuxInstallerStartupAt(ctx context.Context, config launchLinuxConfig)
 	}
 	if errors.Is(journalErr, os.ErrNotExist) {
 		if errors.Is(permitErr, os.ErrNotExist) {
-			installInfo, installErr := state.Lstat(installDirectory)
-			if installErr == nil {
-				if err := validateLaunchLinuxDirectory(installInfo, config.uid, true); err != nil {
-					return false, errLinuxRecoveryRequired(err)
-				}
-				install, err := state.OpenRoot(installDirectory)
-				if err != nil {
-					return false, errLinuxRecoveryRequired(err)
-				}
-				dir, openErr := install.Open(".")
-				var entries []string
-				var readErr error
-				if openErr == nil {
-					entries, readErr = dir.Readdirnames(-1)
-					readErr = errors.Join(readErr, dir.Close())
-				} else {
-					readErr = openErr
-				}
-				closeErr := install.Close()
-				if readErr != nil || closeErr != nil || len(entries) != 0 {
-					return false, errLinuxRecoveryRequired(errors.Join(errors.New("orphan installer operation state"), readErr, closeErr))
-				}
-			} else if !errors.Is(installErr, os.ErrNotExist) {
-				return false, errLinuxRecoveryRequired(installErr)
+			orphaned, operationErr := checkLinuxOperationDirectoriesWithPolicy(ctx, state, config.stateRoot, config.uid, config.testRoot)
+			if operationErr != nil || orphaned {
+				return false, errLinuxRecoveryRequired(errors.Join(errors.New("orphan installer operation state"), operationErr))
 			}
 			return false, nil
 		}

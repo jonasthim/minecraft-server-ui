@@ -43,6 +43,54 @@ func TestTerminalOperationDirectoryRejectsPendingAndUnknownResidue(t *testing.T)
 	}
 }
 
+func TestRecoverPendingAcceptsOwnedTerminalOperationResidueInTestRoot(t *testing.T) {
+	ctx := context.Background()
+	statePath := t.TempDir()
+	state, err := os.OpenRoot(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	store, err := newJournalStoreWithConfig(ctx, state, journalStoreConfig{testRoot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	id := strings.Repeat("a", 64)
+	installPath := filepath.Join(statePath, installDirectory)
+	operationPath := filepath.Join(installPath, id)
+	if err := os.Mkdir(installPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(operationPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	effects := []byte(`{"format":1,"operation_id":"` + id + `","effects":[]}`)
+	result, err := json.Marshal(struct {
+		Outcome     Outcome `json:"outcome"`
+		OperationID string  `json:"operation_id"`
+		Image       *Image  `json:"image,omitempty"`
+		FailedStage string  `json:"failed_stage"`
+	}{OutcomeRolledBack, id, nil, ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{
+		intentFileName:   []byte(`{"format":1}`),
+		linuxEffectsName: effects,
+		linuxResultName:  result,
+	} {
+		if err := os.WriteFile(filepath.Join(operationPath, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := &linuxInstallDriver{state: state, store: store, hooks: linuxNativeHooks{stateRoot: statePath, testRoot: true}}
+	if err := d.RecoverPending(ctx); err != nil {
+		t.Fatalf("tx-nil pending recovery rejected its protected terminal operation fixture: %v", err)
+	}
+}
+
 func TestRecoverPendingTerminalResultRequiresExactTerminalTransaction(t *testing.T) {
 	path := t.TempDir()
 	root, err := os.OpenRoot(path)
@@ -91,6 +139,59 @@ func TestRecoverPendingTerminalResultRequiresExactTerminalTransaction(t *testing
 	preserved, err := root.ReadFile(linuxResultName + ".pending")
 	if err != nil || !bytes.Equal(preserved, foreign) {
 		t.Fatalf("foreign result pending was changed: %q err=%v", preserved, err)
+	}
+}
+
+func TestNativeEvidenceCompletionCannotChangeStagingProtocol(t *testing.T) {
+	before := linuxAssetState{}
+	staged := linuxAssetState{Present: true, SHA256: strings.Repeat("a", 64), Size: 10, Mode: 0755, Device: 1, Inode: 2}
+	actual := staged
+	protocol := linuxAssetStagingAnonymousV1
+	current := linuxNativeEvidence{Format: 1, OperationID: strings.Repeat("b", 64), Effects: []linuxNativeEffect{{Role: linuxAssetManager, Direction: "publish", StagingProtocol: &protocol, Before: before, Staged: staged}}}
+	next := current
+	next.Effects = append([]linuxNativeEffect(nil), current.Effects...)
+	next.Effects[0].StagingProtocol = nil
+	next.Effects[0].Actual = actual
+	next.Effects[0].Complete = true
+	if validNativeEvidenceTransition(current, next) {
+		t.Fatal("accepted completion that changed the durable staging protocol")
+	}
+	next.Effects[0].StagingProtocol = &protocol
+	if !validNativeEvidenceTransition(current, next) {
+		t.Fatal("rejected completion with immutable staging protocol")
+	}
+
+	encodedCurrent, err := json.Marshal(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var independentlyDecodedCurrent linuxNativeEvidence
+	if err := decodeLinuxStrictJSON(encodedCurrent, linuxMaxEffectsBytes, &independentlyDecodedCurrent); err != nil {
+		t.Fatal(err)
+	}
+	added := linuxNativeEffect{Role: linuxAssetUpdater, Direction: "publish", StagingProtocol: &protocol, Before: before, Staged: staged}
+	independentlyDecodedNext := independentlyDecodedCurrent
+	independentlyDecodedNext.Effects = append(append([]linuxNativeEffect(nil), independentlyDecodedCurrent.Effects...), added)
+	encodedNext, err := json.Marshal(independentlyDecodedNext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var independentlyDecodedNextAgain linuxNativeEvidence
+	if err := decodeLinuxStrictJSON(encodedNext, linuxMaxEffectsBytes, &independentlyDecodedNextAgain); err != nil {
+		t.Fatal(err)
+	}
+	if !validNativeEvidenceTransition(independentlyDecodedCurrent, independentlyDecodedNextAgain) {
+		t.Fatal("independently decoded current effects blocked a valid subsequent publication")
+	}
+
+	empty := ""
+	invalid := linuxNativeEffect{Role: linuxAssetManager, Direction: "publish", StagingProtocol: &empty, Before: before, Staged: staged}
+	if validLinuxNativeEffect(invalid) {
+		t.Fatal("accepted a present but empty staging protocol")
+	}
+	invalid.Direction, invalid.Staged, invalid.StagingProtocol = "remove", linuxAssetState{}, &protocol
+	if validLinuxNativeEffect(invalid) {
+		t.Fatal("accepted a staging protocol on a removal effect")
 	}
 }
 

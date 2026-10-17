@@ -31,6 +31,7 @@ Each packet requires independent source review and integrator verification befor
 - Before publishing a maintenance challenge, the installer may remove only the exact captured controls of a verified terminal ordinary updater operation under the actual updater lock. Privileged updater records and executable scratch remain until the manager has drained and the data lock is held. The manager never receives both challenge protocols at once.
 - A durable native evidence marker records that ordinary updater reconciliation finished before asset replacement. Recovery must not require the current executable to match the prior receipt while an installer replacement is between its asset and receipt publications.
 - Read-only check may report the current verified terminal updater receipt when it supersedes the installer inventory's manager image. The database schema and every other owned deployment asset must still match; operator-managed optional updater trust is separately validated.
+- Asset copies must remain anonymous until their verified inode and content are durably recorded. Use Linux `O_TMPFILE` in the destination filesystem, record before linking the fixed staging name, then perform the existing exact publication checks. This closes the reproduced worker-kill window before ownership recording. Unsupported filesystems fail safely without a named-copy fallback; unknown existing scratch remains untouched and prevents a terminal success claim.
 
 ## Current acceptance
 

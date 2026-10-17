@@ -16,13 +16,16 @@ import (
 )
 
 type linuxNativeEffect struct {
-	Role      linuxAssetRole  `json:"role"`
-	Direction string          `json:"direction"`
-	Before    linuxAssetState `json:"before"`
-	Staged    linuxAssetState `json:"staged"`
-	Actual    linuxAssetState `json:"actual"`
-	Complete  bool            `json:"complete"`
+	Role            linuxAssetRole  `json:"role"`
+	Direction       string          `json:"direction"`
+	StagingProtocol *string         `json:"staging_protocol,omitempty"`
+	Before          linuxAssetState `json:"before"`
+	Staged          linuxAssetState `json:"staged"`
+	Actual          linuxAssetState `json:"actual"`
+	Complete        bool            `json:"complete"`
 }
+
+const linuxAssetStagingAnonymousV1 = "anonymous-v1"
 
 type linuxNativeEvidence struct {
 	Format            int                 `json:"format"`
@@ -80,17 +83,43 @@ func (d *linuxInstallDriver) readEvidence(ctx context.Context) (linuxNativeEvide
 		return evidence, nil, nil, errors.New("installer evidence exceeds its bound")
 	}
 	for _, effect := range evidence.Effects {
-		if _, ok := linuxAssetSpecForRole(effect.Role); !ok || (effect.Direction != "publish" && effect.Direction != "remove") || !validLinuxCapturedState(effect.Role, effect.Before) || !validLinuxCapturedState(effect.Role, effect.Staged) || !validLinuxCapturedState(effect.Role, effect.Actual) {
+		if !validLinuxNativeEffect(effect) {
 			return evidence, nil, nil, errors.New("installer native effect record is invalid")
-		}
-		if effect.Direction == "publish" && (!effect.Staged.Present || effect.Staged.Device == 0 || effect.Staged.Inode == 0) {
-			return evidence, nil, nil, errors.New("installer publication effect has no exact staged identity")
-		}
-		if effect.Direction == "remove" && effect.Staged.Present {
-			return evidence, nil, nil, errors.New("installer removal effect has staged bytes")
 		}
 	}
 	return evidence, body, info, nil
+}
+
+func validLinuxNativeEffect(effect linuxNativeEffect) bool {
+	protocol := linuxEffectStagingProtocol(effect)
+	if effect.StagingProtocol != nil && protocol != linuxAssetStagingAnonymousV1 {
+		return false
+	}
+	if _, ok := linuxAssetSpecForRole(effect.Role); !ok || (effect.Direction != "publish" && effect.Direction != "remove") || !validLinuxCapturedState(effect.Role, effect.Before) || !validLinuxCapturedState(effect.Role, effect.Staged) || !validLinuxCapturedState(effect.Role, effect.Actual) || (protocol != "" && (effect.Direction != "publish" || protocol != linuxAssetStagingAnonymousV1)) {
+		return false
+	}
+	if effect.Direction == "publish" {
+		return effect.Staged.Present && effect.Staged.Device != 0 && effect.Staged.Inode != 0
+	}
+	return !effect.Staged.Present && effect.StagingProtocol == nil
+}
+
+func sameLinuxNativeEffect(a, b linuxNativeEffect) bool {
+	return a.Role == b.Role && a.Direction == b.Direction && linuxEffectProtocolEqual(a, b) && a.Before == b.Before && a.Staged == b.Staged && a.Actual == b.Actual && a.Complete == b.Complete
+}
+
+func linuxEffectProtocolEqual(a, b linuxNativeEffect) bool {
+	if (a.StagingProtocol == nil) != (b.StagingProtocol == nil) {
+		return false
+	}
+	return linuxEffectStagingProtocol(a) == linuxEffectStagingProtocol(b)
+}
+
+func linuxEffectStagingProtocol(effect linuxNativeEffect) string {
+	if effect.StagingProtocol == nil {
+		return ""
+	}
+	return *effect.StagingProtocol
 }
 
 func (d *linuxInstallDriver) writeEvidence(ctx context.Context, body []byte, priorInfo os.FileInfo) error {
@@ -205,11 +234,23 @@ func removeExactEvidencePending(root *os.Root, info os.FileInfo, body []byte) er
 }
 
 func (d *linuxInstallDriver) recordEffect(ctx context.Context, role linuxAssetRole, direction string, before, staged linuxAssetState) error {
+	return d.recordEffectProtocol(ctx, role, direction, "", before, staged)
+}
+
+func (d *linuxInstallDriver) recordPublishEffect(ctx context.Context, role linuxAssetRole, before, staged linuxAssetState) error {
+	return d.recordEffectProtocol(ctx, role, "publish", linuxAssetStagingAnonymousV1, before, staged)
+}
+
+func (d *linuxInstallDriver) recordEffectProtocol(ctx context.Context, role linuxAssetRole, direction, protocol string, before, staged linuxAssetState) error {
 	evidence, _, info, err := d.readEvidence(ctx)
 	if err != nil {
 		return err
 	}
-	evidence.Effects = append(evidence.Effects, linuxNativeEffect{Role: role, Direction: direction, Before: before, Staged: staged, Actual: linuxAssetState{}})
+	var protocolPointer *string
+	if protocol != "" {
+		protocolPointer = &protocol
+	}
+	evidence.Effects = append(evidence.Effects, linuxNativeEffect{Role: role, Direction: direction, StagingProtocol: protocolPointer, Before: before, Staged: staged, Actual: linuxAssetState{}})
 	body, err := json.Marshal(evidence)
 	if err != nil {
 		return err

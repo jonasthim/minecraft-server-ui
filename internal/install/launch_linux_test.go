@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -57,6 +58,138 @@ func TestCheckLinuxInstallerStartupRequiresAuthorityBeforeFilesystemIO(t *testin
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("authority refusal touched installer state: entries=%v err=%v", entries, err)
 	}
+}
+
+func TestCheckLinuxInstallerStartupAcceptsOnlyCompleteTerminalOperationResidue(t *testing.T) {
+	t.Run("empty install directory selects ordinary recovery", func(t *testing.T) {
+		state := filepath.Join(t.TempDir(), "state")
+		if err := os.Mkdir(state, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(state, installDirectory), 0700); err != nil {
+			t.Fatal(err)
+		}
+		ctx := withLaunchLinuxConfig(context.Background(), launchLinuxConfig{
+			stateRoot: state, manager: filepath.Join(t.TempDir(), "manager"),
+			procRoot: "/proc", uid: uint32(os.Geteuid()), authority: func() error { return nil }, testRoot: true,
+		})
+		allowed, err := CheckLinuxInstallerStartup(ctx)
+		if err != nil || allowed {
+			t.Fatalf("empty installer operation directory blocked ordinary recovery: allowed=%v err=%v", allowed, err)
+		}
+	})
+
+	t.Run("complete terminal result selects ordinary recovery", func(t *testing.T) {
+		fixture := newLinuxLaunchFlowFixture(t)
+		defer fixture.release()
+		if err := os.Remove(filepath.Join(fixture.config.stateRoot, journalName)); err != nil {
+			t.Fatal(err)
+		}
+		operationPath := fixture.operationPath
+		effects := []byte(`{"format":1,"operation_id":"` + fixture.tx.ID + `","effects":[]}`)
+		if err := os.WriteFile(filepath.Join(operationPath, linuxEffectsName), effects, 0600); err != nil {
+			t.Fatal(err)
+		}
+		result, err := json.Marshal(struct {
+			Outcome     Outcome `json:"outcome"`
+			OperationID string  `json:"operation_id"`
+			Image       *Image  `json:"image,omitempty"`
+			FailedStage string  `json:"failed_stage"`
+		}{OutcomeInstalled, fixture.tx.ID, &fixture.image, ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(operationPath, linuxResultName), result, 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		ctx := withLaunchLinuxConfig(context.Background(), fixture.config)
+		allowed, err := CheckLinuxInstallerStartup(ctx)
+		if err != nil || allowed {
+			t.Fatalf("valid terminal installer residue blocked ordinary recovery: allowed=%v err=%v", allowed, err)
+		}
+	})
+
+	t.Run("operation without terminal result still requires recovery", func(t *testing.T) {
+		fixture := newLinuxLaunchFlowFixture(t)
+		defer fixture.release()
+		if err := os.Remove(filepath.Join(fixture.config.stateRoot, journalName)); err != nil {
+			t.Fatal(err)
+		}
+		effects := []byte(`{"format":1,"operation_id":"` + fixture.tx.ID + `","effects":[]}`)
+		if err := os.WriteFile(filepath.Join(fixture.operationPath, linuxEffectsName), effects, 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		ctx := withLaunchLinuxConfig(context.Background(), fixture.config)
+		allowed, err := CheckLinuxInstallerStartup(ctx)
+		if allowed || !errors.Is(err, errLinuxInstallerRecoveryRequired) {
+			t.Fatalf("operation without terminal result was accepted: allowed=%v err=%v", allowed, err)
+		}
+	})
+
+	t.Run("pending result still requires recovery", func(t *testing.T) {
+		fixture := newLinuxLaunchFlowFixture(t)
+		defer fixture.release()
+		if err := os.Remove(filepath.Join(fixture.config.stateRoot, journalName)); err != nil {
+			t.Fatal(err)
+		}
+		operationPath := fixture.operationPath
+		effects := []byte(`{"format":1,"operation_id":"` + fixture.tx.ID + `","effects":[]}`)
+		if err := os.WriteFile(filepath.Join(operationPath, linuxEffectsName), effects, 0600); err != nil {
+			t.Fatal(err)
+		}
+		result, err := json.Marshal(struct {
+			Outcome     Outcome `json:"outcome"`
+			OperationID string  `json:"operation_id"`
+			Image       *Image  `json:"image,omitempty"`
+			FailedStage string  `json:"failed_stage"`
+		}{OutcomePending, fixture.tx.ID, &fixture.image, ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(operationPath, linuxResultName), result, 0600); err != nil {
+			t.Fatal(err)
+		}
+		ctx := withLaunchLinuxConfig(context.Background(), fixture.config)
+		allowed, err := CheckLinuxInstallerStartup(ctx)
+		if allowed || !errors.Is(err, errLinuxInstallerRecoveryRequired) {
+			t.Fatalf("pending operation result was accepted as terminal: allowed=%v err=%v", allowed, err)
+		}
+	})
+
+	t.Run("unknown operation entry still requires recovery", func(t *testing.T) {
+		fixture := newLinuxLaunchFlowFixture(t)
+		defer fixture.release()
+		if err := os.Remove(filepath.Join(fixture.config.stateRoot, journalName)); err != nil {
+			t.Fatal(err)
+		}
+		operationPath := fixture.operationPath
+		effects := []byte(`{"format":1,"operation_id":"` + fixture.tx.ID + `","effects":[]}`)
+		if err := os.WriteFile(filepath.Join(operationPath, linuxEffectsName), effects, 0600); err != nil {
+			t.Fatal(err)
+		}
+		result, err := json.Marshal(struct {
+			Outcome     Outcome `json:"outcome"`
+			OperationID string  `json:"operation_id"`
+			Image       *Image  `json:"image,omitempty"`
+			FailedStage string  `json:"failed_stage"`
+		}{OutcomeInstalled, fixture.tx.ID, &fixture.image, ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(operationPath, linuxResultName), result, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(operationPath, "foreign.json"), []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		ctx := withLaunchLinuxConfig(context.Background(), fixture.config)
+		allowed, err := CheckLinuxInstallerStartup(ctx)
+		if allowed || !errors.Is(err, errLinuxInstallerRecoveryRequired) {
+			t.Fatalf("unknown operation entry was accepted: allowed=%v err=%v", allowed, err)
+		}
+	})
 }
 
 func TestReadLinuxLaunchPermitStrictFormat(t *testing.T) {
