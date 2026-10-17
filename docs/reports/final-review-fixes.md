@@ -20,7 +20,7 @@ The exact retention boundaries are:
 
 Both quota admission paths retry their existing unchanged count/byte checks after running existing expiry across instances that own stages. Thus abandoned receipts in another instance can release the shared 16-GiB capacity. Content still allows 256 stages and packs 20,000; each retains the existing 8-GiB instance and 16-GiB global byte limits. A legitimate live/recovery owner or malformed hold may still exhaust quota until that work is resolved. Cleanup is conservative during that hold.
 
-The owning service mutex serializes its uploads, preparation/staging and expiry across all instances. Content and pack own separate stage areas and quotas. Cleanup additionally holds a SQL transaction from the ownership recheck and candidate selection through filesystem unlink and metadata deletion. It takes a SQLite write reservation before selecting candidates. The production database's single connection serializes durable queue/reference publication across that interval; no newly queued job can appear between selection and unlink. All queries/deletes inside cleanup use the transaction. Contained path/root, unlink and directory-sync helpers perform filesystem-only work, with no nested database acquisition. Context cancellation rolls the transaction back.
+The owning service mutex serializes its uploads, preparation/staging and expiry across all instances. Content and pack own separate stage areas and quotas. Cleanup additionally holds a SQL transaction from the ownership recheck and candidate selection through filesystem unlink and metadata deletion. It takes a SQLite write reservation before selecting candidates. The production database's single connection serializes durable queue/reference publication across that interval; no newly queued job can appear between selection and unlink. All queries/deletes inside cleanup use the transaction. Contained path/root, unlink and directory-sync helpers perform filesystem-only work, with no nested database acquisition. R1 below supersedes the original caller-context transaction lifetime: cancellation must not release ownership while filesystem effects continue.
 
 Filesystem deletion precedes metadata removal. A later filesystem, SQL or commit failure is returned; rollback may leave an unowned reservation whose bytes are already absent. A subsequent cleanup tolerates missing files and releases that reservation. It does not report partial cleanup as success.
 
@@ -62,3 +62,43 @@ Quota tests run three cycles of expiry plus fresh successful stage admission. Th
 - `git diff --check` passed on this wave. No generated types changed.
 
 No full repository suite, production-embed rebuild or hosted CI was rerun for this scoped wave. The integrator coordinates combined verification after concurrent shared Windows fixes. No game/client, EULA acceptance, installed host service, native Windows runtime, real restore or stable version/layout support qualification is claimed. No staging/commit/push, unrelated host mutation or vault write was performed.
+
+## R1 follow-up: cancellation retains cleanup ownership through filesystem effects
+
+Assigned follow-up base: `661e2bc` (original correction wave `e515655`). The scoped review accepted I1's retention policy and M1, and found a new Important R1 in cleanup ownership on caller cancellation. This follow-up changes only content/pack cleanup lifetime and focused tests; it does not reopen those accepted policies or UI behavior.
+
+### Correction and lifetime assessment
+
+The original `db.BeginTx(ctx)` lifetime was unsafe: `database/sql.Tx.awaitDone` can roll back and release the pooled connection asynchronously when the caller cancels, while a synchronous filesystem operation in the cleanup goroutine is still admitted. The service mutex does not serialize independent durable queue publication. Inspection of the local Go `database/sql` implementation confirmed this distinction.
+
+Both cleanup implementations now acquire an explicit `db.Conn(ctx)` using the original caller context. Waiting for that admission is cancellable. After admission, `conn.BeginTx(context.WithoutCancel(ctx), nil)` gives the ownership transaction an explicit lifetime. Caller cancellation/deadline cannot start its asynchronous rollback. Existing write reservation, ownership predicates, stage TTL, quotas, history and recovery guards remain intact.
+
+SQL statements and filesystem preparation still receive the original caller context. Cleanup checks cancellation between stages and before commit. Cancellation before a stage is admitted aborts that stage. Cancellation after the final check may allow an already admitted synchronous unlink/sync to finish; the database ownership fence remains held throughout. This is deliberate: an ordinary context check cannot cancel a filesystem syscall or close the check-to-unlink window. It is unsafe to release ownership on a hard deadline while such effects may still run. Cancellation stops further work as soon as control returns to a checked boundary.
+
+Deferred ordering is explicit: filesystem helper/root cleanup finishes first, explicit transaction rollback finishes next, and only then does `Conn.Close` return the reserved connection to the pool. There is no background cleanup goroutine and no database reentry under the transaction. Original-context cancellation can interrupt statement execution, but no subsequent filesystem work starts on its error path. The detached transaction lifetime is not used to continue ordinary queries/uploads after cancellation.
+
+The same partial-failure policy remains: if an admitted unlink finishes and the cancelled metadata DELETE cannot commit, cleanup returns cancellation and retains retryable stage metadata for already absent bytes. A publication can proceed only after filesystem work stops and ownership is released. An abort before unlink instead leaves valid stage bytes available to the subsequent publisher. This preserves both allowed cancellation outcomes without pretending every expired receipt remains usable after completed cleanup.
+
+### Focused red/green and cancellation coverage
+
+New `TestStageCleanupCancellationKeepsPublicationFence` cases exist in both packages. They use real staged bytes, the existing fault-injection mechanism and a real asynchronous queued-job INSERT with its own short deadline. One case cancels before filesystem work; the second cancels after the last pre-unlink check, immediately before the admitted unlink. While cleanup remains at either seam, independent publication must remain blocked rather than acquiring the database after caller cancellation. The producer's deadline prevents the old reproduction's synchronous-insert deadlock on a corrected fence. After cleanup returns, a fresh publication succeeds. The first case verifies the queued receipt remains hash/size readable; the second verifies unlink finished before publication and cancelled metadata remains charged/retryable.
+
+Both packages failed these tests before the lifetime fix with `cancellation released ownership before filesystem effects stopped: <nil>`, demonstrating that the independent INSERT completed inside the cleanup boundary. The final focused race run passed: content 2.268 s and pack 2.266 s.
+
+A check-only mutation restored `db.BeginTx(ctx)` while retaining the new `ctx.Err` checks. The after-unlink-admission case failed in both packages (content 0.014 s, pack 0.017 s) with the same early-publication assertion. The correct connection/transaction ownership code was restored immediately. This demonstrates that cancellation prechecks alone do not satisfy R1.
+
+`TestStageCleanupCancellationWhileWaitingForAdmission` reserves the sole production-style pooled connection, starts actual cleanup asynchronously, observes its admission wait, then cancels the caller while keeping the blocker connection reserved. Cleanup must return `context.Canceled` before the blocker is released, with stage bytes and metadata intact. This guards against detaching the admission wait together with the transaction lifetime.
+
+The tests explicitly exercise manual cancellation, which invokes the same `database/sql` transaction-lifetime cancellation mechanism as a caller deadline. No separate filesystem-hang/deadline stress or native platform execution is claimed. The review's saved overlay snapshots an older test file; it was read as reproduction evidence and was not copied over current tests or used as the final corrected regression.
+
+### Follow-up verification and freeze
+
+Commands executed on this follow-up:
+
+- Red: `go test ./internal/content ./internal/modpack -run '^TestStageCleanupCancellationKeepsPublicationFence$' -count=1 -timeout=30s` failed in both packages before the ownership correction.
+- Green: `go test -race ./internal/content ./internal/modpack -run '^TestStageCleanupCancellation' -count=1 -timeout=30s` passed (2.268 s / 2.266 s), including admission cancellation.
+- Check-only mutation: `go test ./internal/content ./internal/modpack -run '^TestStageCleanupCancellationKeepsPublicationFence$/cancel_after_unlink_admission$' -count=1 -timeout=30s` failed in both packages; correct production code was restored.
+- `go vet ./internal/content ./internal/modpack` passed.
+- `git diff --check` passed.
+
+Final complete changed-package check: `go test -race ./internal/content ./internal/modpack -count=1 -timeout=180s` passed (content 37.012 s; pack 20.764 s). Self-review traced defer ordering, original-context SQL/FS error exits and the cancellation boundary; no further code changes were needed. All six follow-up-owned files are frozen for the integrator's targeted R1 review. No shared contracts, UI, queue, schema, dependencies or unrelated Windows files changed. The integrator owns the narrowly scoped R1 review and the next combined hosted CI run. No additional broad review, staging, commit, push, host/game mutation or vault write was performed.

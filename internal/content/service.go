@@ -182,10 +182,16 @@ func (s *Service) expire(ctx context.Context, id string) error {
 	return s.cleanupStages(ctx, id, 0, true)
 }
 func (s *Service) cleanupStages(ctx context.Context, id string, actor int64, expired bool) error {
-	// Keep queue/reference publication serialized through unlink + receipt deletion.
-	// Production SQLite uses one connection; taking a write reservation also
-	// preserves the boundary if a caller supplies a larger connection pool.
-	tx, err := s.db.BeginTx(ctx, nil)
+	// Admission remains cancellable, but neither the reserved connection nor
+	// the transaction may be released by database/sql while filesystem effects
+	// are still running. Every operation below still uses the caller's context;
+	// explicit rollback finishes before Close returns the connection to the pool.
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return err
 	}
@@ -232,12 +238,18 @@ func (s *Service) cleanupStages(ctx context.Context, id string, actor int64, exp
 		}
 	}
 	for _, stage := range ids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if e = s.removeStageFile(ctx, id, stage); e != nil {
 			return e
 		}
 		if _, e = tx.ExecContext(ctx, "DELETE FROM content_stages WHERE id=? AND instance_id=?", stage, id); e != nil {
 			return e
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

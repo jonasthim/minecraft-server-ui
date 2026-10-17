@@ -259,6 +259,11 @@ func (s *Service) removeStageFile(ctx context.Context, id, stage string) error {
 			return e
 		}
 	}
+	if s.fault != nil {
+		if err := s.fault("stage_cleanup_unlink"); err != nil {
+			return err
+		}
+	}
 	if e = r.Remove(name); e != nil && !os.IsNotExist(e) {
 		return e
 	}

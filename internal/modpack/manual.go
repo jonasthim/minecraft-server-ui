@@ -148,10 +148,16 @@ func (s *Service) Discard(ctx context.Context, id, preview string, actor domain.
 	return s.cleanupStages(ctx, id, false)
 }
 func (s *Service) cleanupStages(ctx context.Context, id string, expired bool) error {
-	// Keep queue/reference publication serialized through unlink + receipt deletion.
-	// Production SQLite uses one connection; taking a write reservation also
-	// preserves the boundary if a caller supplies a larger connection pool.
-	tx, err := s.db.BeginTx(ctx, nil)
+	// Admission remains cancellable, but neither the reserved connection nor
+	// the transaction may be released by database/sql while filesystem effects
+	// are still running. Every operation below still uses the caller's context;
+	// explicit rollback finishes before Close returns the connection to the pool.
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return err
 	}
@@ -204,8 +210,16 @@ func (s *Service) cleanupStages(ctx context.Context, id string, expired bool) er
 		}
 	}
 	for _, stageID := range ids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !validHex(stageID, 32) {
 			return conflict("invalid stage record")
+		}
+		if s.fault != nil {
+			if err := s.fault("stage_cleanup_unlink"); err != nil {
+				return err
+			}
 		}
 		if e = root.Remove(stageID + ".blob"); e != nil && !os.IsNotExist(e) {
 			return e
@@ -216,6 +230,9 @@ func (s *Service) cleanupStages(ctx context.Context, id string, expired bool) er
 		if _, e = tx.ExecContext(ctx, "DELETE FROM modpack_stages WHERE instance_id=? AND id=?", id, stageID); e != nil {
 			return e
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

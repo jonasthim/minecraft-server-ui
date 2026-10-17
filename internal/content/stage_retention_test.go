@@ -2,6 +2,7 @@ package content
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -282,5 +283,164 @@ func TestStageCleanupRetriesAfterMetadataFailure(t *testing.T) {
 	}
 	if err = database.QueryRow("SELECT count(*) FROM content_stages WHERE id=?", st.ID).Scan(&count); err != nil || count != 0 {
 		t.Fatal("retry failed to release quota reservation", count, err)
+	}
+}
+
+// Cancellation may abort before unlink or arrive after an unlink is admitted.
+// In both cases the database fence must remain owned until filesystem work
+// stops. A separately bounded asynchronous producer must not publish inside it.
+func TestStageCleanupCancellationKeepsPublicationFence(t *testing.T) {
+	for _, tc := range []struct {
+		name, phase string
+		removed     bool
+	}{
+		{name: "cancel before filesystem work", phase: "stage_cleanup", removed: false},
+		{name: "cancel after unlink admission", phase: "stage_cleanup_unlink", removed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setup(t, true)
+			s, database := f.s, f.db
+			st, err := s.stage(t.Context(), "alpha", 1, "test.jar", strings.NewReader("bytes"), 5)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = database.Exec("UPDATE content_stages SET created_at='2000-01-01T00:00:00Z'"); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			publication := make(chan error, 1)
+			insert := func(ctx context.Context) error {
+				_, err := database.ExecContext(ctx, "INSERT INTO jobs(id,instance_id,kind,state,payload,created_at) VALUES('cancel-race','alpha','instance_update_prepare','queued',?,'now')", `{"request":{"manual":{"item":"`+st.ID+`"}}}`)
+				return err
+			}
+			reached := false
+			s.fault = func(phase string) error {
+				if phase != tc.phase {
+					return nil
+				}
+				reached = true
+				cancel()
+				// The producer uses its own deadline: cancellation of cleanup must not
+				// cancel the publication attempt or let it acquire the database early.
+				enqueueCtx, done := context.WithTimeout(t.Context(), 100*time.Millisecond)
+				defer done()
+				go func() { publication <- insert(enqueueCtx) }()
+				select {
+				case err := <-publication:
+					if !errors.Is(err, context.DeadlineExceeded) {
+						return fmt.Errorf("cancellation released ownership before filesystem effects stopped: %v", err)
+					}
+				case <-t.Context().Done():
+					return t.Context().Err()
+				}
+				if _, err := os.Stat(filepath.Join(f.dirs.State, "content", st.ID+".blob")); err != nil {
+					return fmt.Errorf("fixture lost bytes before admitted unlink: %w", err)
+				}
+				return nil
+			}
+			s.mu.Lock()
+			err = s.cleanupStages(ctx, "alpha", 0, true)
+			s.mu.Unlock()
+			if !reached {
+				t.Fatal("cancellation seam was not reached", err)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatal("cleanup did not report cancellation", err)
+			}
+			_, statErr := os.Stat(filepath.Join(f.dirs.State, "content", st.ID+".blob"))
+			if tc.removed && !os.IsNotExist(statErr) {
+				t.Fatal("admitted unlink did not finish before ownership release", statErr)
+			}
+			if !tc.removed && statErr != nil {
+				t.Fatal("aborted cleanup removed a newly publishable receipt", statErr)
+			}
+			// Only now may a fresh queued publication complete. Before-unlink aborts
+			// retain valid bytes; admitted unlinks finish first and leave retryable
+			// metadata because the cancelled DELETE cannot commit.
+			if err = insert(t.Context()); err != nil {
+				t.Fatal("ownership was not released after filesystem work stopped", err)
+			}
+			var count int
+			if err = database.QueryRow("SELECT count(*) FROM content_stages WHERE id=?", st.ID).Scan(&count); err != nil || count != 1 {
+				t.Fatal("cancelled cleanup lost retryable receipt metadata", count, err)
+			}
+			if !tc.removed {
+				_, file, err := s.openStage(t.Context(), "alpha", st.ID)
+				if err != nil {
+					t.Fatal("queued receipt is unusable after abort", err)
+				}
+				file.Close()
+			}
+		})
+	}
+}
+
+func TestStageCleanupCancellationWhileWaitingForAdmission(t *testing.T) {
+	f := setup(t, true)
+	s, database := f.s, f.db
+	st, err := s.stage(t.Context(), "alpha", 1, "test.jar", strings.NewReader("bytes"), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Exec("UPDATE content_stages SET created_at='2000-01-01T00:00:00Z'"); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := database.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan error, 1)
+	finished := make(chan struct{})
+	baseline := database.Stats().WaitCount
+	go func() {
+		defer close(finished)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		result <- s.cleanupStages(ctx, "alpha", 0, true)
+	}()
+	// Failure cleanup releases admission before waiting for the worker, so a
+	// mutant that ignores caller cancellation cannot hang package teardown.
+	defer func() {
+		blocker.Close()
+		select {
+		case <-finished:
+		case <-time.After(3 * time.Second):
+			t.Error("cleanup did not stop after admission was released")
+		}
+	}()
+	waitCtx, stopWait := context.WithTimeout(t.Context(), 3*time.Second)
+	defer stopWait()
+	for database.Stats().WaitCount == baseline {
+		select {
+		case err := <-result:
+			t.Fatal("cleanup unexpectedly passed reserved connection", err)
+		case <-waitCtx.Done():
+			t.Fatal("cleanup never waited for connection admission", waitCtx.Err())
+		default:
+			runtime.Gosched()
+		}
+	}
+	cancel()
+	select {
+	case err = <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal("admission did not report caller cancellation", err)
+		}
+	case <-waitCtx.Done():
+		t.Fatal("cancelled cleanup kept waiting for admission", waitCtx.Err())
+	}
+	if _, err = os.Stat(filepath.Join(f.dirs.State, "content", st.ID+".blob")); err != nil {
+		t.Fatal("cancelled admission changed bytes", err)
+	}
+	if err = blocker.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err = database.QueryRow("SELECT count(*) FROM content_stages WHERE id=?", st.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatal("cancelled admission changed receipt metadata", count, err)
 	}
 }
