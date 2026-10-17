@@ -126,3 +126,22 @@ installation/upgrade/failed-health rollback, target OS/version coverage, real
 server/client/restore matrix, production key custody/bootstrap trust and stable
 publication remain separate integrator/release-owner gates. No service, account,
 world, production trust or release was changed by this task.
+
+## Integrator native candidate acceptance
+
+Independent review of519ebe1 passed specification and quality with zero findings.
+[Run39028355162](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39028355162)
+atc863c63866de3d2ae0626069cc18b13ddf5d8ec3 then passed both native build/probe jobs
+and the packaging/actual-file verification job. Linux and Windows each executed
+the genuine manager and updater version commands forv0.0.1; manager capability
+probes bound the current schema. The producer consumed those native bytes and
+receipts; the shipping checker accepted both update stages and both bootstrap
+bundles. No input executable was run by the packaging job.
+
+Root reviewed the successful probe, verifier and artifact-retention logs. Input
+artifacts12098524347 and12099551145 are retained for seven days; development
+candidate artifact12099477276 is retained for fourteen days (44,802,688 bytes,
+ZIP SHA2567307f161d0a37c1a3bc2b59f283fe767d02582e049d950f808398c61ca7bd49f).
+This closes Task29's native candidate-production acceptance. All trust remains
+ephemeral fixture/public-key evidence; installation, update recovery, games,
+production publisher identity and stable release qualification remain separate.

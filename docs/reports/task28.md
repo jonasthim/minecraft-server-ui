@@ -151,3 +151,19 @@ the next run without claiming the first failure was already resolved natively.
 Local whitespace/static source review passed; PowerShell/Windows execution of the
 correction is pending integrator dispatch. The integrator alone updates package
 and qualification acceptance in the ledger.
+
+### Reviewed native rerun
+
+[Run 39027670987](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39027670987)
+at `097c743eeeacd818167a0d2c09e5c92798c56bc7` passed all three targets.
+The integrator inspected the downloaded scrubbed artifacts. Windows reports the
+same exact expected, SCM and process account SID with a successful owner query;
+`scm_uses_local_alias` is true and the literal input name differs. This establishes
+the alias explanation for the rerun. All35 path cases, private ACL/account checks,
+fresh setup/admin, persisted session/login across native stop/start and restart,
+old-process exit, final zero-process stop and cleanup pass. Both Ubuntu targets
+again pass their helper, API and lifecycle assertions with result exit code0.
+
+Source review and this installed-manager evidence close Task28's stated scope.
+The workflow does not install the updater, launch Minecraft, accept the EULA,
+connect a game client or qualify other Windows/Linux families.
