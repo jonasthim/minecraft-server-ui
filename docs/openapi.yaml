@@ -7640,6 +7640,103 @@
         }
       }
     },
+    "/api/v1/system/update/discover": {
+      "post": {
+        "operationId": "selfUpdateDiscover",
+        "summary": "Administrator: discover latest stable publisher release; listing metadata does not verify artifacts or activate updates.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "personalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfUpdateDiscovery"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication, authorization, validation or update availability failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Conflicting pending operation, bounded input, or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "description": "Requires configured publisher trust and administrator authority. No query parameters or request body. Results are cached for five minutes; no-release is distinct from upstream failure. Signed exact-version verification and explicit activation remain required."
+      }
+    },
     "/api/v1/system/update/check": {
       "post": {
         "operationId": "selfUpdateCheck",
@@ -10702,7 +10799,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 516,
-            "description": "Exact lowercase list, say plain text (1\u2013512 UTF-8 bytes, no selectors), or admin seed. No aliases, wrappers, lifecycle/save/config or player-privilege commands."
+            "description": "Exact lowercase list, say plain text (1–512 UTF-8 bytes, no selectors), or admin seed. No aliases, wrappers, lifecycle/save/config or player-privilege commands."
           }
         },
         "required": [
@@ -15126,6 +15223,90 @@
           "hashes",
           "reason"
         ]
+      },
+      "SelfUpdateReleaseSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "title",
+          "notes",
+          "notes_truncated",
+          "published_at",
+          "url"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "notes_truncated": {
+            "type": "boolean"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 64
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 512
+          }
+        }
+      },
+      "SelfUpdateDiscovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "current_version",
+          "checked_at",
+          "cached",
+          "comparison",
+          "release"
+        ],
+        "properties": {
+          "current_version": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 64
+          },
+          "cached": {
+            "type": "boolean"
+          },
+          "comparison": {
+            "type": "string",
+            "enum": [
+              "newer",
+              "same",
+              "older",
+              "unknown",
+              "no_release"
+            ]
+          },
+          "release": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SelfUpdateReleaseSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       }
     },
     "parameters": {

@@ -18,18 +18,45 @@ import (
 // repository. The transport revalidates destination addresses on every dial.
 // Redirect queries are bearer-like upstream credentials and never enter errors.
 type Source struct {
-	trust  Trust
-	client *http.Client
+	trust           Trust
+	client          *http.Client
+	discoveryClient *http.Client
 }
 
 func NewSource(trust Trust) (*Source, error) {
 	if err := trust.Validate(); err != nil {
 		return nil, err
 	}
+	transport := publicReleaseTransport(map[string]bool{"github.com": true, "release-assets.githubusercontent.com": true})
+	c := &http.Client{Transport: transport, Timeout: 120 * time.Second}
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 3 {
+			return errors.New("release redirect limit exceeded")
+		}
+		if len(via) == 0 {
+			return errors.New("invalid release redirect")
+		}
+		assetSeen := false
+		for _, old := range via {
+			if old.URL.Hostname() == "release-assets.githubusercontent.com" {
+				assetSeen = true
+			}
+		}
+		if err := releaseURL(req.URL.String(), via[0].URL.String(), assetSeen); err != nil {
+			return err
+		}
+		req.Header.Del("Authorization")
+		req.Header.Del("Cookie")
+		req.Header.Del("Referer")
+		return nil
+	}
+	return &Source{trust: trust, client: c, discoveryClient: newDiscoveryClient()}, nil
+}
+func publicReleaseTransport(hosts map[string]bool) *http.Transport {
 	transport := &http.Transport{Proxy: nil, DisableCompression: true, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 20 * time.Second, IdleConnTimeout: 20 * time.Second, MaxConnsPerHost: 2}
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
-		if err != nil || port != "443" || (host != "github.com" && host != "release-assets.githubusercontent.com") {
+		if err != nil || port != "443" || !hosts[host] {
 			return nil, errors.New("release destination is not permitted")
 		}
 		addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
@@ -56,30 +83,9 @@ func NewSource(trust Trust) (*Source, error) {
 		}
 		return nil, errors.New("release host connection failed")
 	}
-	c := &http.Client{Transport: transport, Timeout: 120 * time.Second}
-	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) > 3 {
-			return errors.New("release redirect limit exceeded")
-		}
-		if len(via) == 0 {
-			return errors.New("invalid release redirect")
-		}
-		assetSeen := false
-		for _, old := range via {
-			if old.URL.Hostname() == "release-assets.githubusercontent.com" {
-				assetSeen = true
-			}
-		}
-		if err := releaseURL(req.URL.String(), via[0].URL.String(), assetSeen); err != nil {
-			return err
-		}
-		req.Header.Del("Authorization")
-		req.Header.Del("Cookie")
-		req.Header.Del("Referer")
-		return nil
-	}
-	return &Source{trust: trust, client: c}, nil
+	return transport
 }
+
 func releaseURL(raw, initial string, assetSeen bool) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Opaque != "" || u.User != nil || u.Fragment != "" || u.Port() != "" || u.Host != u.Hostname() || len(raw) > 8192 {

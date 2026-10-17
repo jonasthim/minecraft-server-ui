@@ -1279,6 +1279,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/update/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Administrator: discover latest stable publisher release; listing metadata does not verify artifacts or activate updates.
+         * @description Requires configured publisher trust and administrator authority. No query parameters or request body. Results are cached for five minutes; no-release is distinct from upstream failure. Signed exact-version verification and explicit activation remain required.
+         */
+        post: operations["selfUpdateDiscover"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/update/check": {
         parameters: {
             query?: never;
@@ -3029,6 +3049,25 @@ export interface components {
                 [key: string]: string;
             };
             reason: string;
+        };
+        SelfUpdateReleaseSummary: {
+            version: string;
+            title: string;
+            notes: string;
+            notes_truncated: boolean;
+            /** Format: date-time */
+            published_at: string;
+            /** Format: uri */
+            url: string;
+        };
+        SelfUpdateDiscovery: {
+            current_version: string;
+            /** Format: date-time */
+            checked_at: string;
+            cached: boolean;
+            /** @enum {string} */
+            comparison: "newer" | "same" | "older" | "unknown" | "no_release";
+            release: components["schemas"]["SelfUpdateReleaseSummary"] | null;
         };
     };
     responses: never;
@@ -8957,6 +8996,89 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SelfUpdateStatus"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicting pending operation, bounded input, or upstream failure */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication, authorization, validation or update availability failure */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    selfUpdateDiscover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelfUpdateDiscovery"];
                 };
             };
             /** @description Authentication, authorization, validation or update availability failure */

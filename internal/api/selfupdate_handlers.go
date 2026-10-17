@@ -6,11 +6,13 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/auth"
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"github.com/jonasthim/minecraft-server-ui/internal/selfupdate"
+	"io"
 	"net/http"
 )
 
 type SelfUpdateService interface {
 	Status(context.Context) selfupdate.Status
+	Discover(context.Context, domain.User) (selfupdate.Discovery, error)
 	Check(context.Context, string, domain.User) (selfupdate.CheckResult, error)
 	Stage(context.Context, string, domain.User) (selfupdate.Stage, error)
 	Apply(context.Context, selfupdate.ApplyInput, domain.User) error
@@ -34,6 +36,21 @@ func MountSelfUpdate(r chi.Router, s SelfUpdateService) {
 			})
 		})
 		r.Get("/system/update", func(w http.ResponseWriter, r *http.Request) { WriteJSON(w, 200, s.Status(r.Context())) })
+		r.Post("/system/update/discover", func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				body, err := io.ReadAll(io.LimitReader(r.Body, 1))
+				if err != nil || len(body) != 0 {
+					WriteError(w, domain.E(domain.CodeValidationFailed, "Release discovery does not accept a request body."))
+					return
+				}
+			}
+			out, err := s.Discover(r.Context(), *auth.UserFrom(r.Context()))
+			if err != nil {
+				WriteError(w, err)
+				return
+			}
+			WriteJSON(w, 200, out)
+		})
 		versionHandler := func(stage bool) http.HandlerFunc {
 			return func(w http.ResponseWriter, r *http.Request) {
 				var in struct {

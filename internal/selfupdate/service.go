@@ -29,10 +29,11 @@ type Config struct {
 	Native         Native
 }
 type Service struct {
-	cfg    Config
-	source *Source
-	mu     sync.Mutex
-	now    func() time.Time
+	cfg       Config
+	source    *Source
+	mu        sync.Mutex
+	now       func() time.Time
+	discovery discoveryState
 }
 type Status struct {
 	CurrentVersion      string  `json:"current_version"`
