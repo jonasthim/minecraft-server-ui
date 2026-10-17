@@ -103,6 +103,11 @@ jobs:
           mkdir -p bin
           go build -trimpath -ldflags '-s -w -X main.version=0.0.0-dev' -o "bin/minecraft-ui-$EXPECTED_GOOS-amd64$BINARY_EXTENSION" ./cmd/minecraft-ui
           go build -trimpath -ldflags '-s -w -X main.version=0.0.0-dev' -o "bin/minecraft-ui-update-$EXPECTED_GOOS-amd64$BINARY_EXTENSION" ./cmd/minecraft-ui-update
+      - name: Provision locked dependencies for both notice targets
+        if: runner.os == 'Linux'
+        run: |
+          go mod download
+          git diff --exit-code -- go.mod go.sum
       - name: Check dependency notices
         if: runner.os == 'Linux'
         run: make check-notices
