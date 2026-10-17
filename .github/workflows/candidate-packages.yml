@@ -185,6 +185,7 @@ jobs:
           $sourceRead = '$source = [System.IO.File]::ReadAllText($EntryScript)'
           $sourceReadReplacement = @'
           $source = [System.IO.File]::ReadAllText($EntryScript)
+          $source = $source.Replace("`r`n", "`n")
           $initNeedle = '$ErrorActionPreference = ''Stop'''
           if (($source.Split(@($initNeedle),[System.StringSplitOptions]::None)).Count -ne 2) { throw 'PowerShell 5.1 source init diagnostic seam drift' }
           $source = $source.Replace($initNeedle,$initNeedle+[Environment]::NewLine+'$script:OUTER_DIAGNOSTIC_STAGE = ''entry_start'''+[Environment]::NewLine+'$script:OUTER_DIAGNOSTIC_BOUND = $false')
@@ -218,7 +219,7 @@ jobs:
               '                if (!SetFileInformationByHandle(handle,4,ref disposition,1)) throw Failure();'
               '            }'
               '        }'
-          ) -join [Environment]::NewLine
+          ) -join "`n"
           $deleteOwnedReplacement = @(
               '        public static void DeleteOwned(string path, string identity, string sddl, bool directory) {'
               '            SafeFileHandle handle;'
