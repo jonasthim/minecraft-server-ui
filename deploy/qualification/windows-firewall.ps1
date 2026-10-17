@@ -104,10 +104,15 @@ function ConvertTo-NormalizedAddressSet([object[]]$Addresses) {
 function Test-FirewallAddressNormalization {
  $original = @('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/0')
  $cidr = @('128.0.0.0/1','0.0.0.0/2','64.0.0.0/3','96.0.0.0/4','112.0.0.0/5','120.0.0.0/6','124.0.0.0/7','126.0.0.0/8','::/0')
+ $ipv6Split = @('::/1','8000::/1')
+ $combinedIPv6Split = @('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/1','8000::/1')
  $expected = @('4:0:2130706431','4:2147483648:4294967295','6:0:340282366920938463463374607431768211455')
+ $expectedIPv6 = @('6:0:340282366920938463463374607431768211455')
  $left = @(ConvertTo-NormalizedAddressSet $original)
  $right = @(ConvertTo-NormalizedAddressSet $cidr)
- if (($left -join '|') -cne ($expected -join '|') -or ($right -join '|') -cne ($expected -join '|')) { throw 'firewall address equivalence fixture failed' }
+ $split = @(ConvertTo-NormalizedAddressSet $ipv6Split)
+ $combined = @(ConvertTo-NormalizedAddressSet $combinedIPv6Split)
+ if (($left -join '|') -cne ($expected -join '|') -or ($right -join '|') -cne ($expected -join '|') -or ($split -join '|') -cne ($expectedIPv6 -join '|') -or ($combined -join '|') -cne ($expected -join '|')) { throw 'firewall address equivalence fixture failed' }
  foreach ($invalid in @('C:\private\path','10.0.0.0/255.0.255.0','::/129','1.2.3.4-1.2.3.3','127.0.0.1%7')) {
   $refused = $false
   try { $null = ConvertTo-NormalizedAddressSet @($invalid) } catch { $refused = $true }
@@ -225,7 +230,9 @@ $caseDefinitions = @(
  [pscustomobject]@{Label='ipv4_ranges';Name='MinecraftUI-Task33a-Firewall-Probe-IPv4';IncludeRemoteAddress=$true;Addresses=@('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255')},
  [pscustomobject]@{Label='ipv6_any';Name='MinecraftUI-Task33a-Firewall-Probe-IPv6';IncludeRemoteAddress=$true;Addresses=@('::/0')},
  [pscustomobject]@{Label='original';Name='MinecraftUI-Task33a-Firewall-Probe-Original';IncludeRemoteAddress=$true;Addresses=@('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/0')},
- [pscustomobject]@{Label='cidr_equivalent';Name='MinecraftUI-Task33a-Firewall-Probe-CIDR';IncludeRemoteAddress=$true;Addresses=@('128.0.0.0/1','0.0.0.0/2','64.0.0.0/3','96.0.0.0/4','112.0.0.0/5','120.0.0.0/6','124.0.0.0/7','126.0.0.0/8','::/0')}
+ [pscustomobject]@{Label='cidr_equivalent';Name='MinecraftUI-Task33a-Firewall-Probe-CIDR';IncludeRemoteAddress=$true;Addresses=@('128.0.0.0/1','0.0.0.0/2','64.0.0.0/3','96.0.0.0/4','112.0.0.0/5','120.0.0.0/6','124.0.0.0/7','126.0.0.0/8','::/0')},
+ [pscustomobject]@{Label='ipv6_split';Name='MinecraftUI-Task33a-Firewall-Probe-IPv6Split';IncludeRemoteAddress=$true;Addresses=@('::/1','8000::/1')},
+ [pscustomobject]@{Label='ipv4_ranges_ipv6_split';Name='MinecraftUI-Task33a-Firewall-Probe-CombinedIPv6Split';IncludeRemoteAddress=$true;Addresses=@('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/1','8000::/1')}
 )
 $precheckPassed = $true
 $precheckErrorCategory = $null
