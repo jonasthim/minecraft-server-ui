@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"syscall"
 	"testing"
 
 	"github.com/jonasthim/minecraft-server-ui/internal/db"
@@ -403,10 +405,37 @@ func TestMigrateRejectsDataDirectorySubstitutionAtSQLiteConnectionBoundary(t *te
 			moved := filepath.Join(parent, "original-data-root")
 			var replacementPath string
 			var replacementBefore []byte
+			var holdAtRename []byte
+			var databaseAtRename []byte
+			var directoryAtRename os.FileInfo
+			var hookAttempted bool
+			var renameAttempted bool
+			var renameErr error
+			var migrationRan bool
 			deps := testMaintenanceDeps()
+			deps.migrate = func(context.Context, *sql.DB) error {
+				migrationRan = true
+				return errors.New("test migration callback must not run")
+			}
 			substitute := func() error {
-				if err := os.Rename(dir, moved); err != nil {
+				hookAttempted = true
+				var err error
+				holdAtRename, err = os.ReadFile(filepath.Join(dir, "maintenance", "hold.json"))
+				if err != nil {
 					return err
+				}
+				databaseAtRename, err = os.ReadFile(filepath.Join(dir, "manager.db"))
+				if err != nil {
+					return err
+				}
+				directoryAtRename, err = os.Stat(dir)
+				if err != nil {
+					return err
+				}
+				renameAttempted = true
+				renameErr = os.Rename(dir, moved)
+				if renameErr != nil {
+					return renameErr
 				}
 				if err := os.Mkdir(dir, 0700); err != nil {
 					return err
@@ -430,13 +459,57 @@ func TestMigrateRejectsDataDirectorySubstitutionAtSQLiteConnectionBoundary(t *te
 			case "after ping":
 				deps.afterDatabasePing = substitute
 			}
-			if _, err := migrateWithDeps(t.Context(), dir, "current-version", MigrationOptions{
+			_, migrateErr := migrateWithDeps(t.Context(), dir, "current-version", MigrationOptions{
 				SnapshotID: snapshot.ID, FromSchema: 1, ToSchema: db.LatestVersion(),
-			}, deps); err == nil {
+			}, deps)
+			if migrateErr == nil {
 				t.Fatal("migration accepted a replaced absolute data directory")
 			}
+			if migrationRan {
+				t.Fatal("SQL migration callback ran after data-directory substitution")
+			}
+			if !hookAttempted {
+				t.Fatal("connection-boundary substitution hook was not reached")
+			}
+			if !renameAttempted {
+				t.Fatal("connection-boundary rename was not attempted")
+			}
+			if renameErr != nil {
+				code, codeOK := boundedMaintenanceTestErrno(renameErr)
+				if runtime.GOOS != "windows" || !codeOK || (code != 5 && code != 32) {
+					nativeCode := int64(-1)
+					if codeOK {
+						nativeCode = int64(code)
+					}
+					t.Fatalf("directory substitution rename failed outside the expected Windows sharing/access denial: native_code=%d", nativeCode)
+				}
+				t.Logf("Windows data-directory rename denied: native_code=%d", code)
+				var stageErr *maintenanceError
+				if !errors.As(migrateErr, &stageErr) || stageErr.message != "manager database could not be safely opened for migration" {
+					t.Fatal("Windows rename denial did not stop at the expected database-open stage")
+				}
+				if replacementPath != "" || replacementBefore != nil {
+					t.Fatal("Windows rename refusal unexpectedly created a replacement")
+				}
+				currentDir, statErr := os.Stat(dir)
+				if statErr != nil || !os.SameFile(directoryAtRename, currentDir) {
+					t.Fatal("Windows rename refusal changed the original data directory")
+				}
+				if _, statErr := os.Stat(moved); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatal("Windows rename refusal created the moved data directory")
+				}
+				currentDatabase, readErr := os.ReadFile(filepath.Join(dir, "manager.db"))
+				if readErr != nil || !bytes.Equal(currentDatabase, databaseAtRename) {
+					t.Fatal("Windows rename refusal changed original database bytes")
+				}
+				currentHold, readErr := os.ReadFile(filepath.Join(dir, "maintenance", "hold.json"))
+				if readErr != nil || !bytes.Equal(currentHold, holdAtRename) {
+					t.Fatal("Windows rename refusal changed the published migration hold")
+				}
+				return
+			}
 			if len(replacementBefore) == 0 {
-				t.Fatal("connection-boundary substitution did not run")
+				t.Fatal("successful connection-boundary substitution produced no replacement database")
 			}
 			replacementAfter, err := os.ReadFile(replacementPath)
 			if err != nil || !bytes.Equal(replacementAfter, replacementBefore) {
@@ -447,6 +520,14 @@ func TestMigrateRejectsDataDirectorySubstitutionAtSQLiteConnectionBoundary(t *te
 			}
 		})
 	}
+}
+
+func boundedMaintenanceTestErrno(err error) (uint32, bool) {
+	var code syscall.Errno
+	if !errors.As(err, &code) || uint64(code) > 65535 {
+		return 0, false
+	}
+	return uint32(code), true
 }
 
 func TestMigrationConnectorReappliesRequiredPragmasOnReplacementConnection(t *testing.T) {

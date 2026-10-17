@@ -1,0 +1,11 @@
+# Windows SQLite connection-boundary substitution fixture
+
+## Observed CI result
+
+Native run `39049262990` passed on Linux. Its Windows run failed all three `TestMigrateRejectsDataDirectorySubstitutionAtSQLiteConnectionBoundary` subtests with `connection-boundary substitution did not run`. The prior fixture asserted that a replacement database had been created, but did not record whether the hook ran or whether `os.Rename` failed. That message did not identify the native error or establish a production guard failure. A separate Windows CLI migrate/resume path passed; it exercises production authorization and durability fencing, not this adversarial rename fixture.
+
+The test now records the hook, attempted directory rename, exact rename error, and database/hold bytes at the attempt. On Linux, where the rename succeeds, it continues to require migration refusal and byte-for-byte preservation of the replacement database. On Windows, it treats only native `ERROR_ACCESS_DENIED` (5) or `ERROR_SHARING_VIOLATION` (32) returned by that exact rename attempt as a native rename denial, and logs the bounded code. Code 5 could reflect ACL denial; this test does not establish that Windows directory or SQLite handle sharing caused the refusal. It proves the original directory identity, database bytes, and published hold bytes remain unchanged, and that no moved or replacement directory was created. Unknown, non-native, and other native errors still fail with only a bounded numeric code (`-1` when unavailable); no raw error string or path is printed. The test also requires the fixed migration stage `manager database could not be safely opened for migration` and installs a migration callback that fails the test if reached. If Windows permits the rename, the existing replacement-preservation assertions still run.
+
+## Verification limits
+
+`go test ./internal/managerstate` passes locally and exercises successful substitution on Linux. The Windows test binary compiles for amd64, and `go vet ./internal/managerstate` passes. This host cannot execute the Windows filesystem case. The updated hosted run must confirm which native error code occurs; no handle-sharing cause is asserted from code 5 or 32 alone.
