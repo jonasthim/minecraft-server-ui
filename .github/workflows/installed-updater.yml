@@ -1,0 +1,128 @@
+name: Installed updater qualification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-inputs:
+    name: Build updater inputs on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            goos: linux
+            extension: ''
+          - os: windows-2022
+            goos: windows
+            extension: .exe
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      EXPECTED_GOOS: ${{ matrix.goos }}
+      BINARY_EXTENSION: ${{ matrix.extension }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: x64
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Verify native host and build embedded inputs
+        run: |
+          test "$RUNNER_ARCH" = X64
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(go env GOHOSTOS)" = "$EXPECTED_GOOS"
+          test "$(go env GOOS)" = "$EXPECTED_GOOS"
+          test "$(go env GOARCH)" = amd64
+          npm ci --prefix web
+          npm run build --prefix web
+          mkdir -p updater-input
+          go build -trimpath -ldflags '-s -w -X main.version=v0.0.1' -o "updater-input/manager-initial$BINARY_EXTENSION" ./cmd/minecraft-ui
+          go build -trimpath -ldflags '-s -w -X main.version=v0.0.2' -o "updater-input/manager-success$BINARY_EXTENSION" ./cmd/minecraft-ui
+          go build -trimpath -ldflags '-s -w -X main.version=v0.0.2' -o "updater-input/updater$BINARY_EXTENSION" ./cmd/minecraft-ui-update
+          go build -trimpath -o "updater-input/qualifier$BINARY_EXTENSION" ./cmd/qualify-selfupdate
+          go build -trimpath -o "updater-input/manager-negative$BINARY_EXTENSION" ./cmd/qualify-selfupdate/negative
+          "./updater-input/manager-initial$BINARY_EXTENSION" version
+          "./updater-input/manager-success$BINARY_EXTENSION" version
+          "./updater-input/updater$BINARY_EXTENSION" version
+          git rev-parse HEAD > updater-input/commit.txt
+          go version > updater-input/go-version.txt
+          echo "$RUNNER_OS $RUNNER_ARCH $ImageOS $ImageVersion" > updater-input/build-runner.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: updater-input-${{ matrix.goos }}-${{ github.sha }}
+          path: updater-input/*
+          if-no-files-found: error
+          retention-days: 7
+  installed-updater:
+    name: Exercise updater on ${{ matrix.os }}
+    needs: native-inputs
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+          - os: ubuntu-24.04
+          - os: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: updater-input-linux-${{ github.sha }}
+          path: updater-input/linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: updater-input-windows-${{ github.sha }}
+          path: updater-input/windows
+      - name: Record exact disposable host
+        shell: bash
+        run: |
+          test "$RUNNER_ARCH" = X64
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          mkdir -p updater-results
+          git rev-parse HEAD > updater-results/commit.txt
+          echo "$RUNNER_OS $RUNNER_ARCH $ImageOS $ImageVersion" > updater-results/runner.txt
+      - name: Exercise Linux installed activation and recovery
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 23
+        run: |
+          chmod 0755 updater-input/linux/manager-initial updater-input/linux/manager-success updater-input/linux/updater updater-input/linux/qualifier updater-input/linux/manager-negative
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT bash deploy/qualification/linux-updater.sh "$GITHUB_WORKSPACE/updater-input/linux/manager-initial" "$GITHUB_WORKSPACE/updater-input/linux/manager-success" "$GITHUB_WORKSPACE/updater-input/linux/updater" "$GITHUB_WORKSPACE/updater-input/linux/qualifier" "$GITHUB_WORKSPACE/updater-input/linux/manager-negative" "$GITHUB_WORKSPACE/updater-input/windows/manager-success.exe" "$GITHUB_WORKSPACE/updater-input/windows/manager-negative.exe" "$GITHUB_WORKSPACE/updater-results"
+      - name: Exercise Windows installed activation and recovery
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 23
+        run: |
+          $native = Join-Path $env:GITHUB_WORKSPACE 'updater-input\windows'
+          $peer = Join-Path $env:GITHUB_WORKSPACE 'updater-input\linux'
+          & ./deploy/qualification/windows-updater.ps1 -InitialBinary (Join-Path $native 'manager-initial.exe') -SuccessBinary (Join-Path $native 'manager-success.exe') -UpdaterBinary (Join-Path $native 'updater.exe') -QualifierBinary (Join-Path $native 'qualifier.exe') -NegativeBinary (Join-Path $native 'manager-negative.exe') -PeerSuccessBinary (Join-Path $peer 'manager-success') -PeerNegativeBinary (Join-Path $peer 'manager-negative') -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE 'updater-results')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain scrubbed qualification reports only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-updater-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            updater-results/*.txt
+            updater-results/*.json
+          if-no-files-found: error
+          retention-days: 14
+# Disposable fixture trust only. No EULA/game launch, release or production key.
