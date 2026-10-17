@@ -15,6 +15,8 @@ import time
 import urllib.error
 import urllib.request
 
+from admin_recovery import qualify_recovery
+
 BASE = "http://127.0.0.1:8080"
 
 
@@ -88,7 +90,9 @@ def control(action):
 
 
 def main():
-    require(os.environ.get("GITHUB_ACTIONS") == "true", "ephemeral GitHub runner required")
+    require(os.environ.get("GITHUB_ACTIONS") == "true"
+            and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted",
+            "ephemeral hosted GitHub runner required")
     ready()
     require(request(client(), "/api/v1/auth/status")["needs_setup"] is True,
             "canonical database was not empty")
@@ -128,6 +132,9 @@ def main():
         require(request(login, "/api/v1/auth/login", credentials)["user"]["id"] == identity,
                 "persisted administrator cannot log in")
         print(f"PASS native {action}: persisted admin/session/login; old process gone", flush=True)
+    qualify_recovery(client=client, request=request, ready=ready, control=control,
+                     manager_pids=manager_pids, session=session, identity=identity,
+                     credentials=credentials)
     control("stop")
     require(not manager_pids(), "orphan installed manager after final stop")
     print("PASS final native stop: zero installed manager processes", flush=True)

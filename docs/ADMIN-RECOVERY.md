@@ -179,3 +179,11 @@ Use an elevated **Windows PowerShell 5.1 or later** session already authorized b
    (Get-Service MinecraftUI).WaitForStatus(
      [System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromMinutes(1))
    ```
+
+## Disposable native qualification procedure
+
+The installed-manager qualification harness calls `deploy/qualification/admin_recovery.py` after real empty-database onboarding and ordinary native restart checks. It is restricted to fresh GitHub-hosted runner state and is not an operator reset utility. The source command at `59b437c` is independently reviewed; hosted recovery results remain pending until recorded by the integrator.
+
+The harness uses the same Linux `flock` and Windows `FileStream.Lock(0,1)` snapshot mechanisms shown above. Its private snapshot directory is inside the disposable canonical data tree so the existing harness cleanup also covers interrupted runs. While locked, it tests lock contention, copies every existing SQLite sidecar, and compares source/copy SHA-256 values without publishing them. It validates the private snapshot with SQLite `integrity_check` and removes it before proceeding. Neither backups nor captured command output become CI artifacts.
+
+It then exercises the shipping installed command through redirected stdin closed at EOF, verifies real service stop/start and manager PID replacement, accepts the new password, rejects the old password/session/personal token, and preserves another user's login/session and existing user identities. Linux runs reset as the installed manager account; Windows uses the authorized Administrator context above. Scrubbed fixed assertion lines are added to the existing native manager report. Until actual disposable runner results are reviewed, these steps describe the harness's assertions rather than completed platform qualification.
