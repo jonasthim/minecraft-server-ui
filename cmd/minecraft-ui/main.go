@@ -126,15 +126,7 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		var receipt *selfupdate.DrainReceipt
-		var receiptErr error
-		if runErr == nil {
-			receipt, receiptErr = selfupdate.PrepareDrainReceipt(cleanup, database, cfg.DataDir, version)
-		}
-		runErr = errors.Join(runErr, receiptErr, database.Close())
-		if runErr == nil {
-			runErr = selfupdate.PublishDrainReceipt(cleanup, cfg.DataDir, receipt)
-		}
+		runErr = closeManagerDatabase(cleanup, database, cfg.DataDir, version, runErr)
 	}()
 	frontend, err := web.Dist()
 	if err != nil {
@@ -254,16 +246,16 @@ func serve(ctx context.Context, cfg config.Config) (runErr error) {
 		return err
 	}
 	var ready atomic.Bool
-	updateReadiness := selfupdate.NewReadiness(cfg.DataDir, version, db.LatestVersion(), func() bool {
+	readinessAllowed := func() bool {
 		if !ready.Load() || guard.blocked != nil {
 			return false
 		}
 		probe, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		return database.PingContext(probe) == nil
-	})
+	}
 	handler := api.NewRouter(api.Dependencies{DB: database, Logger: log, Web: frontend, Mount: func(r chi.Router) {
-		r.Method("GET", "/internal/update-ready", updateReadiness)
+		mountManagerReadiness(r, cfg.DataDir, version, db.LatestVersion(), readinessAllowed)
 		mountAPIWithFeatures(r, identity, queue, instances, func(r chi.Router) {
 			api.MountLifecycle(r, operations)
 			api.MountConsole(r, control)

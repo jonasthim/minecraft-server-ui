@@ -90,6 +90,16 @@ func ReadChallenge(ctx context.Context, dataDir string) (Challenge, error) {
 		return c, err
 	}
 	defer root.Close()
+	ordinary, err := fixedControlFilePresent(root, "challenge.json")
+	if err != nil {
+		return c, err
+	}
+	if !ordinary {
+		return c, os.ErrNotExist
+	}
+	if err := rejectMaintenanceChallenge(root); err != nil {
+		return c, err
+	}
 	body, err := readChecked(ctx, root, "challenge.json", 2048)
 	if err != nil {
 		return c, err
@@ -219,56 +229,73 @@ func PrepareDrainReceipt(ctx context.Context, database *sql.DB, dataDir, version
 	if challenge.FromVersion != version {
 		return nil, errors.New("drain challenge does not match running manager")
 	}
-	schema, err := db.CurrentVersion(ctx, database)
+	schema, err := verifyDrainedState(ctx, database, dataDir)
 	if err != nil {
 		return nil, err
 	}
-	tx, err := database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	hash, err := ExecutableSHA256(ctx)
 	if err != nil {
 		return nil, err
+	}
+	return &DrainReceipt{Format: 1, Nonce: challenge.Nonce, Version: version, Schema: schema, ExecutableSHA256: hash, Drained: true, CreatedAt: time.Now().UTC()}, nil
+}
+
+// verifyDrainedState is shared by actor-bound web updates and local OS-admin
+// maintenance. Callers bind its schema result to their own authorization.
+func verifyDrainedState(ctx context.Context, database *sql.DB, dataDir string) (int64, error) {
+	if database == nil {
+		return 0, errors.New("manager database is unavailable for drain verification")
+	}
+	schema, err := db.CurrentVersion(ctx, database)
+	if err != nil {
+		return 0, err
+	}
+	tx, err := database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return 0, err
 	}
 	defer tx.Rollback()
 	queries := []string{`SELECT COUNT(*) FROM jobs WHERE state='running'`, `SELECT COUNT(*) FROM backup_leases WHERE state IN ('armed','unresolved')`, `SELECT COUNT(*) FROM backup_restores WHERE state!='complete'`, `SELECT COUNT(*) FROM content_journals`, `SELECT COUNT(*) FROM modpack_journals`, `SELECT COUNT(*) FROM lifecycle_activations`, `SELECT COUNT(*) FROM instance_mutations`, `SELECT COUNT(*) FROM update_transactions WHERE state NOT IN ('complete','rolled_back','superseded')`, `SELECT COUNT(*) FROM backup_update_rollbacks WHERE state!='complete'`}
 	for _, query := range queries {
 		var n int64
 		if err := tx.QueryRowContext(ctx, query).Scan(&n); err != nil {
-			return nil, fmt.Errorf("verify drained manager transaction state: %w", err)
+			return 0, fmt.Errorf("verify drained manager transaction state: %w", err)
 		}
 		if n != 0 {
-			return nil, errors.New("manager has unfinished jobs, saving leases or file transactions; normal recovery is required")
+			return 0, errors.New("manager has unfinished jobs, saving leases or file transactions; normal recovery is required")
 		}
 	}
 	if err := instanceupdate.ValidateSupersession(ctx, tx); err != nil {
-		return nil, fmt.Errorf("verify drained update ownership: %w", err)
+		return 0, fmt.Errorf("verify drained update ownership: %w", err)
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM instances LIMIT 10001`)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return nil, err
+			return 0, err
 		}
 		ids = append(ids, id)
 	}
 	err = errors.Join(rows.Err(), rows.Close())
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	if len(ids) > 10000 {
-		return nil, errors.New("instance drain verification limit exceeded")
+		return 0, errors.New("instance drain verification limit exceeded")
 	}
 	paths, err := instance.NewPaths(dataDir)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	for _, id := range ids {
 		dirs, err := paths.For(id)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		for _, item := range []struct {
 			dir   string
@@ -279,28 +306,24 @@ func PrepareDrainReceipt(ctx context.Context, database *sql.DB, dataDir, version
 				continue
 			}
 			if e != nil {
-				return nil, e
+				return 0, e
 			}
 			for _, name := range item.names {
 				_, e := root.Lstat(name)
 				if !errors.Is(e, os.ErrNotExist) {
 					root.Close()
-					return nil, errors.New("instance file transaction blocker requires recovery")
+					return 0, errors.New("instance file transaction blocker requires recovery")
 				}
 			}
 			if e := root.Close(); e != nil {
-				return nil, e
+				return 0, e
 			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return 0, err
 	}
-	hash, err := ExecutableSHA256(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &DrainReceipt{Format: 1, Nonce: challenge.Nonce, Version: version, Schema: schema, ExecutableSHA256: hash, Drained: true, CreatedAt: time.Now().UTC()}, nil
+	return schema, nil
 }
 
 // PublishDrainReceipt must be called only after successful database.Close and
