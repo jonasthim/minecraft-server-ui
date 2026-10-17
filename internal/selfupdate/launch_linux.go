@@ -262,6 +262,14 @@ func readLaunchAt(ctx context.Context, paths nativePaths, state, bin *os.Root) (
 }
 
 func recoverLinux(ctx context.Context, paths nativePaths) error {
+	fenceState, err := openProtectedRoot(ctx, paths.State)
+	if err != nil {
+		return err
+	}
+	defer fenceState.Close()
+	if err := refuseLinuxInstallerState(ctx, fenceState); err != nil {
+		return err
+	}
 	permitted, err := readLaunch(ctx, paths)
 	if err != nil {
 		return err
@@ -293,6 +301,9 @@ func recoverLinux(ctx context.Context, paths nativePaths) error {
 // recoverLinuxAt serializes ordinary recovery. The production wrapper supplies
 // only checked fixed roots and the unchanged trust/bootstrap verifier.
 func recoverLinuxAt(ctx context.Context, paths nativePaths, state, bin *os.Root, driver nativeDriver, verify func(context.Context) error) error {
+	if err := refuseLinuxInstallerState(ctx, state); err != nil {
+		return err
+	}
 	permitted, err := readLaunchAt(ctx, paths, state, bin)
 	if err != nil {
 		return err
@@ -305,6 +316,9 @@ func recoverLinuxAt(ctx context.Context, paths nativePaths, state, bin *os.Root,
 		return errors.New("another native update operation is active")
 	}
 	defer release()
+	if err := refuseLinuxInstallerState(ctx, state); err != nil {
+		return err
+	}
 	if _, err := state.Lstat("activation.json"); err == nil {
 		if err := verify(ctx); err != nil {
 			return err

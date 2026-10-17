@@ -311,7 +311,7 @@ func (s *LinuxInstaller) SnapshotUpdater(ctx context.Context) (*LinuxUpdaterSnap
 			snap.installed = r.value
 			snap.present = true
 		}
-		if err = snapshotControlAbsent(ctx, s); err != nil {
+		if err = snapshotControlAbsent(ctx, s, snap); err != nil {
 			return fail(err)
 		}
 		s.registerSnapshot(snap)
@@ -510,21 +510,30 @@ func validateTerminalScratch(s *LinuxUpdaterSnapshot, j activationJournal) error
 	return nil
 }
 
-func snapshotControlAbsent(ctx context.Context, s *LinuxInstaller) error {
+func snapshotControlAbsent(ctx context.Context, s *LinuxInstaller, snapshot *LinuxUpdaterSnapshot) error {
 	root, err := s.hooks.openDataRoot(ctx, controlDirectory(s.maintenance.paths.Data))
 	if errors.Is(err, os.ErrNotExist) {
+		snapshot.controlAbsent = true
 		return nil
 	}
 	if err != nil {
 		return errors.New("manager control state is unavailable")
 	}
-	defer root.Close()
 	entries, err := installerReadDir(root)
 	if err != nil {
+		_ = root.Close()
 		return err
 	}
 	if len(entries) != 0 {
+		_ = root.Close()
 		return errors.New("manager control state requires reconciliation")
+	}
+	snapshot.controlRoot = root
+	snapshot.controlInfo, err = root.Stat(".")
+	if err != nil {
+		_ = root.Close()
+		snapshot.controlRoot = nil
+		return err
 	}
 	return nil
 }
@@ -846,6 +855,10 @@ func (s *LinuxInstaller) UnlockManager() error {
 }
 
 func (s *LinuxInstaller) ReconcileUpdater(ctx context.Context, snapshot *LinuxUpdaterSnapshot) error {
+	return s.reconcileUpdater(ctx, snapshot, nil)
+}
+
+func (s *LinuxInstaller) reconcileUpdater(ctx context.Context, snapshot *LinuxUpdaterSnapshot, maintenanceExpected *MaintenanceChallenge) error {
 	if s == nil {
 		return errors.New("installer session unavailable")
 	}
@@ -857,7 +870,14 @@ func (s *LinuxInstaller) ReconcileUpdater(ctx context.Context, snapshot *LinuxUp
 	if _, _, err := s.validateSnapshot(snapshot); err != nil {
 		return err
 	}
-	if !snapshot.terminal {
+	maintenanceProof, err := validateMaintenanceReconcileProof(ctx, s, snapshot, maintenanceExpected)
+	if err != nil {
+		return err
+	}
+	if maintenanceProof != nil {
+		defer maintenanceProof.close()
+	}
+	if !snapshot.terminal && maintenanceExpected == nil {
 		return nil
 	}
 	fence := s.hooks.fence
@@ -869,6 +889,17 @@ func (s *LinuxInstaller) ReconcileUpdater(ctx context.Context, snapshot *LinuxUp
 	}
 	if err := s.verify(ctx); err != nil {
 		return err
+	}
+	if maintenanceProof != nil {
+		if err := maintenanceProof.verify(ctx, s, snapshot, false); err != nil {
+			return err
+		}
+	}
+	if !snapshot.terminal {
+		if maintenanceProof == nil {
+			return nil
+		}
+		return maintenanceProof.verify(ctx, s, snapshot, false)
 	}
 	jf := snapshot.journal
 	if jf == nil {
@@ -934,7 +965,11 @@ func (s *LinuxInstaller) ReconcileUpdater(ctx context.Context, snapshot *LinuxUp
 			return err
 		}
 	}
-	if snapshot.controlRoot != nil {
+	if maintenanceProof != nil {
+		if err := maintenanceProof.verify(ctx, s, snapshot, false); err != nil {
+			return err
+		}
+	} else if snapshot.controlRoot != nil {
 		current, err := s.hooks.openDataRoot(ctx, controlDirectory(s.maintenance.paths.Data))
 		if err != nil {
 			return errors.New("manager control root changed")
@@ -1008,6 +1043,11 @@ func (s *LinuxInstaller) ReconcileUpdater(ctx context.Context, snapshot *LinuxUp
 	if err := remove(s.state, "activation.json"); err != nil {
 		return err
 	}
+	if maintenanceProof != nil {
+		if err := maintenanceProof.verify(ctx, s, snapshot, true); err != nil {
+			return err
+		}
+	}
 	if err := fence(ctx, s.bin); err != nil {
 		return err
 	}
@@ -1016,6 +1056,11 @@ func (s *LinuxInstaller) ReconcileUpdater(ctx context.Context, snapshot *LinuxUp
 	}
 	if snapshot.controlRoot != nil {
 		if err := fence(ctx, snapshot.controlRoot); err != nil {
+			return err
+		}
+	}
+	if maintenanceProof != nil {
+		if err := fence(ctx, maintenanceProof.root); err != nil {
 			return err
 		}
 	}

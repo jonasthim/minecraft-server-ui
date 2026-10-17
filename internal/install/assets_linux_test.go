@@ -148,6 +148,122 @@ func TestPublishLinuxAssetActivatesOnlyVerifiedSource(t *testing.T) {
 	}
 }
 
+func TestPublishLinuxAssetRecordedCallsBeforeRenameWithExactStagedIdentity(t *testing.T) {
+	snapshot, target, _ := linuxAssetFixture(t, linuxAssetManager, true)
+	content := []byte("recorded manager candidate")
+	sourcePath := filepath.Join(filepath.Dir(target), "recorded-source")
+	if err := os.WriteFile(sourcePath, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	var recorded linuxAssetState
+	calls := 0
+	actual, err := publishLinuxAssetRecorded(context.Background(), strings.Repeat("a", 64), snapshot, source, linuxAssetNext(content, 0755), func(state linuxAssetState) error {
+		calls++
+		recorded = state
+		body, readErr := os.ReadFile(target)
+		if readErr != nil || string(body) != "old asset" {
+			return errors.New("record ran after public target changed")
+		}
+		if !state.Present || state.SHA256 != linuxAssetNext(content, 0755).SHA256 || state.Inode == 0 {
+			return errors.New("record did not receive exact staged identity")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || actual != recorded {
+		t.Fatalf("record calls/state = %d / %+v, published = %+v", calls, recorded, actual)
+	}
+}
+
+func TestPublishLinuxAssetRecordedFailureLeavesPriorAndCleansOwnedStage(t *testing.T) {
+	snapshot, target, _ := linuxAssetFixture(t, linuxAssetManager, true)
+	content := []byte("candidate")
+	sourcePath := filepath.Join(filepath.Dir(target), "record-failure-source")
+	if err := os.WriteFile(sourcePath, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if _, err := publishLinuxAssetRecorded(context.Background(), strings.Repeat("a", 64), snapshot, source, linuxAssetNext(content, 0755), func(linuxAssetState) error {
+		return errors.New("injected durable record failure")
+	}); err == nil {
+		t.Fatal("publication ignored the durable record failure")
+	}
+	body, err := os.ReadFile(target)
+	if err != nil || string(body) != "old asset" {
+		t.Fatalf("prior target changed on record failure: %q, %v", body, err)
+	}
+	if _, err := os.Stat(target + ".install-" + strings.Repeat("a", 64)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned staged file remains after record failure: %v", err)
+	}
+}
+
+func TestPublishLinuxAssetRecordedRechecksCallbackMutations(t *testing.T) {
+	snapshot, target, _ := linuxAssetFixture(t, linuxAssetManager, true)
+	content := []byte("candidate")
+	sourcePath := filepath.Join(filepath.Dir(target), "record-mutation-source")
+	if err := os.WriteFile(sourcePath, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if _, err := publishLinuxAssetRecorded(context.Background(), strings.Repeat("a", 64), snapshot, source, linuxAssetNext(content, 0755), func(linuxAssetState) error {
+		if err := os.Rename(target, target+".original"); err != nil {
+			return err
+		}
+		return os.WriteFile(target, []byte("old asset"), 0755)
+	}); err == nil {
+		t.Fatal("publication ignored a target replacement made during durable recording")
+	}
+	body, err := os.ReadFile(target)
+	if err != nil || string(body) != "old asset" {
+		t.Fatalf("foreign replacement changed: %q, %v", body, err)
+	}
+	if _, err := os.Stat(target + ".install-" + strings.Repeat("a", 64)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned staged file remains after changed target: %v", err)
+	}
+}
+
+func TestPublishLinuxAssetRecordedPreservesChangedStageAfterCallback(t *testing.T) {
+	snapshot, target, _ := linuxAssetFixture(t, linuxAssetManager, true)
+	content := []byte("candidate")
+	sourcePath := filepath.Join(filepath.Dir(target), "stage-mutation-source")
+	if err := os.WriteFile(sourcePath, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	pending := target + ".install-" + strings.Repeat("a", 64)
+	if _, err := publishLinuxAssetRecorded(context.Background(), strings.Repeat("a", 64), snapshot, source, linuxAssetNext(content, 0755), func(linuxAssetState) error {
+		return os.WriteFile(pending, []byte("changed staged bytes"), 0755)
+	}); err == nil {
+		t.Fatal("publication ignored a staged content change during durable recording")
+	}
+	body, err := os.ReadFile(target)
+	if err != nil || string(body) != "old asset" {
+		t.Fatalf("prior target changed: %q, %v", body, err)
+	}
+	if body, err := os.ReadFile(pending); err != nil || string(body) != "changed staged bytes" {
+		t.Fatalf("changed stage was not preserved: %q, %v", body, err)
+	}
+}
+
 func TestPublishLinuxAssetRejectsHashMismatchWithoutActivation(t *testing.T) {
 	snapshot, target, _ := linuxAssetFixture(t, linuxAssetManager, true)
 	sourcePath := filepath.Join(filepath.Dir(target), "source")

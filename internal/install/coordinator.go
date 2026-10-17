@@ -427,6 +427,8 @@ func lowerHex(value string, size int) bool {
 	return true
 }
 
+func imagePointer(image Image) *Image { return &image }
+
 func committedResult(tx transaction) Result {
 	result := Result{Outcome: OutcomeInstalled, OperationID: tx.ID}
 	if tx.Mode == modeUninstall {

@@ -515,6 +515,17 @@ func (r *contextLinuxAssetReader) Read(p []byte) (int, error) {
 }
 
 func publishLinuxAsset(ctx context.Context, operationID string, snapshot *linuxAssetSnapshot, source *os.File, next linuxAssetState) (linuxAssetState, error) {
+	return publishLinuxAssetImpl(ctx, operationID, snapshot, source, next, nil)
+}
+
+func publishLinuxAssetRecorded(ctx context.Context, operationID string, snapshot *linuxAssetSnapshot, source *os.File, next linuxAssetState, record func(linuxAssetState) error) (linuxAssetState, error) {
+	if record == nil {
+		return linuxAssetState{}, errors.New("Linux asset publication requires a durable effect recorder")
+	}
+	return publishLinuxAssetImpl(ctx, operationID, snapshot, source, next, record)
+}
+
+func publishLinuxAssetImpl(ctx context.Context, operationID string, snapshot *linuxAssetSnapshot, source *os.File, next linuxAssetState, record func(linuxAssetState) error) (linuxAssetState, error) {
 	if ctx == nil || snapshot == nil || source == nil || !validLinuxAssetOperationID(operationID) || !validLinuxAssetNext(snapshot.role, next) {
 		return linuxAssetState{}, errors.New("invalid Linux asset publication arguments")
 	}
@@ -537,11 +548,18 @@ func publishLinuxAsset(ctx context.Context, operationID string, snapshot *linuxA
 		return linuxAssetState{}, fmt.Errorf("inspect staged Linux asset: %w", err)
 	}
 	activated := false
+	var exactStage *linuxAssetState
 	cleanup := func() {
 		if activated || createdInfo == nil {
 			return
 		}
 		if current, e := snapshot.parent.Lstat(pending); e == nil && os.SameFile(createdInfo, current) {
+			if exactStage != nil {
+				state, stateErr := readLinuxAssetAt(ctx, snapshot.parent, pending, mustLinuxAssetSpec(snapshot.role))
+				if stateErr != nil || state != *exactStage {
+					return
+				}
+			}
 			_ = snapshot.parent.Remove(pending)
 			_ = syncLinuxAssetDir(snapshot.parent)
 		}
@@ -571,19 +589,56 @@ func publishLinuxAsset(ctx context.Context, operationID string, snapshot *linuxA
 	if copyErr == nil {
 		copyErr = checkLinuxAssetSnapshot(ctx, snapshot)
 	}
-	if copyErr == nil {
-		stagedState, stagedErr := readLinuxAssetAt(ctx, snapshot.parent, pending, mustLinuxAssetSpec(snapshot.role))
-		stagedPathInfo, pathErr := snapshot.parent.Lstat(pending)
-		if stagedErr != nil || pathErr != nil || stagedState.SHA256 != next.SHA256 || stagedState.Size != next.Size || stagedState.Mode != next.Mode || !os.SameFile(createdInfo, stagedPathInfo) {
-			copyErr = errors.New("Linux asset pending file changed before publication")
-		}
-	}
-	if copyErr == nil && linuxAssetTestPolicy != nil && linuxAssetTestPolicy.beforeRename != nil {
-		copyErr = linuxAssetTestPolicy.beforeRename(snapshot.role)
-	}
 	if copyErr != nil {
 		cleanup()
 		return linuxAssetState{}, fmt.Errorf("stage Linux asset publication: %w", copyErr)
+	}
+	stagedState, stagedFile, err := inspectLinuxAssetPending(ctx, snapshot, pending, createdInfo)
+	if err != nil {
+		cleanup()
+		return linuxAssetState{}, err
+	}
+	defer stagedFile.Close()
+	if stagedState.SHA256 != next.SHA256 || stagedState.Size != next.Size || stagedState.Mode != next.Mode {
+		cleanup()
+		return linuxAssetState{}, errors.New("Linux asset pending file does not match requested publication")
+	}
+	exactStage = &stagedState
+	if record != nil {
+		if err := record(stagedState); err != nil {
+			cleanup()
+			return linuxAssetState{}, fmt.Errorf("record Linux asset effect: %w", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		cleanup()
+		return linuxAssetState{}, err
+	}
+	if err := checkLinuxAssetSnapshot(ctx, snapshot); err != nil {
+		cleanup()
+		return linuxAssetState{}, err
+	}
+	afterCallback, afterFile, err := inspectLinuxAssetPending(ctx, snapshot, pending, createdInfo)
+	if afterFile != nil {
+		_ = afterFile.Close()
+	}
+	if err != nil || afterCallback != stagedState {
+		cleanup()
+		return linuxAssetState{}, errors.New("Linux asset state changed during durable effect recording")
+	}
+	if linuxAssetTestPolicy != nil && linuxAssetTestPolicy.beforeRename != nil {
+		if err := linuxAssetTestPolicy.beforeRename(snapshot.role); err != nil {
+			cleanup()
+			return linuxAssetState{}, fmt.Errorf("stage Linux asset publication: %w", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		cleanup()
+		return linuxAssetState{}, err
+	}
+	if err := checkLinuxAssetSnapshot(ctx, snapshot); err != nil {
+		cleanup()
+		return linuxAssetState{}, err
 	}
 	published, err := renameLinuxAsset(ctx, snapshot, pending, name, createdInfo)
 	if err != nil {
@@ -616,6 +671,21 @@ func publishLinuxAsset(ctx context.Context, operationID string, snapshot *linuxA
 		return actual, fmt.Errorf("Linux asset publication outcome is uncertain: %w", actualErr)
 	}
 	return actual, nil
+}
+
+func inspectLinuxAssetPending(ctx context.Context, snapshot *linuxAssetSnapshot, pending string, stagedInfo os.FileInfo) (linuxAssetState, *os.File, error) {
+	info, err := snapshot.parent.Lstat(pending)
+	if err != nil {
+		return linuxAssetState{}, nil, err
+	}
+	if stagedInfo == nil || !os.SameFile(stagedInfo, info) {
+		return linuxAssetState{}, nil, errors.New("Linux asset pending inode changed")
+	}
+	file, state, err := inspectLinuxAssetFile(ctx, snapshot.parent, pending, info, mustLinuxAssetSpec(snapshot.role))
+	if err != nil {
+		return linuxAssetState{}, nil, err
+	}
+	return state, file, nil
 }
 
 func validLinuxAssetOperationID(id string) bool {

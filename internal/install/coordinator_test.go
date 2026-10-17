@@ -487,7 +487,6 @@ func TestUninstallHappyPathPreservesOutcomeShape(t *testing.T) {
 	}
 }
 
-func imagePointer(image Image) *Image { return &image }
 
 func containsEvent(events []string, want string) bool {
 	for _, event := range events {

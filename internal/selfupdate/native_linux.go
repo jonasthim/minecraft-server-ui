@@ -484,6 +484,14 @@ func RunNativeUpdater(ctx context.Context, args []string, out io.Writer) error {
 			return e
 		}
 		defer state.Close()
+		release, e := launcher.AcquireManager(paths.State)
+		if e != nil {
+			return errors.New("another native update operation is active")
+		}
+		defer release()
+		if e := refuseLinuxInstallerState(ctx, state); e != nil {
+			return e
+		}
 		if _, e := state.Lstat("installed.json"); !errors.Is(e, os.ErrNotExist) {
 			return errors.New("bootstrap receipt already exists or is unsafe; use reviewed manual maintenance")
 		}
@@ -514,6 +522,9 @@ func RunNativeUpdater(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	defer state.Close()
+	if err := refuseLinuxInstallerState(ctx, state); err != nil {
+		return err
+	}
 	// Caller-side sudo inherits the manager's read-only mount namespace. These
 	// two operations perform no root-state mutation or lock creation. The fixed
 	// root template imports/locks only after systemd starts it independently.
@@ -565,6 +576,9 @@ func RunNativeUpdater(ctx context.Context, args []string, out io.Writer) error {
 		return errors.New("another native update operation is active")
 	}
 	defer release()
+	if err := refuseLinuxInstallerState(ctx, state); err != nil {
+		return err
+	}
 	if err := protectedFile(state, "installed.json"); err != nil {
 		return err
 	}
