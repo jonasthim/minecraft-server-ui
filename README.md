@@ -2,7 +2,7 @@
 
 A native Go application with an embedded React 19/Mantine UI and SQLite state for managing local Minecraft Java servers. It provides separate server instances, managed Java runtimes, console output, backups, content management and observation tools.
 
-This branch is in development. Real Minecraft/client workflows, the compatibility matrix, systemd operation and native Windows execution still require qualification. Cross-compilation and browser checks do not establish release support. See the [implementation ledger](docs/IMPLEMENTATION.md) for current evidence and remaining work.
+This branch is in development. [GitHub Actions](https://github.com/jonasthim/minecraft-server-ui/actions) runs native Go race tests and builds on Ubuntu 24.04 and Windows Server 2022, plus frontend, API and dependency-notice checks. Real Minecraft/client workflows, the compatibility matrix and installed Linux/Windows service operation still require qualification. Passing CI does not establish stable release support. See the [implementation ledger](docs/IMPLEMENTATION.md) for current evidence and remaining work.
 
 ## Try the local UI
 

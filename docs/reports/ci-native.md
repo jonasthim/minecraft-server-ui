@@ -63,3 +63,18 @@ A green run establishes execution of the existing native package/race tests and 
 The Linux log records nine existing opt-in/environment skips: backup browser harness, official catalog/pack/Temurin/artifact/loader/historical-NeoForge smokes, isolated insufficient-space setup, and installed systemd lifecycle. Windows records eleven skips: the seven applicable opt-in browser/official-download checks, Linux directory permission enforcement, Unix filename behavior, Unix ancestor-rename durability fixture, and the existing runtime symlink-root test's Windows privilege guard. No new skip or failing-package exclusion was introduced. Tests excluded by platform build constraints are not counted as executed.
 
 The remaining native content correction is recorded in `docs/reports/final-review-fixes.md`. This run is an overall failure despite the Linux success and narrower Windows failure set; a subsequent combined hosted run is required.
+
+## Successful combined native run
+
+[Run 39024870612](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39024870612) completed **successfully** at application candidate `4ab0de2c69d22afb045c758063df1cf14ccddd0d`, including independently reviewed content cleanup correction `b2e6f09`.
+
+| Native job | Runner image | Go | Result |
+|---|---|---|---|
+| [Ubuntu 24.04 x64](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39024870612/job/117373773147) | `ubuntu24 20261012.334.1` | `1.27.0 linux/amd64` | PASS: 38 Go packages, zero failed test entries, nine existing skips |
+| [Windows Server 2022 x64](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39024870612/job/117373772999) | `win22 20261012.333.1` | `1.27.0 windows/amd64` | PASS: 38 Go packages, zero failed test entries, eleven existing skips |
+
+Both jobs passed native vet, the complete native race suite, embedded frontend build and native manager/updater executable builds. Windows compiler preflight passed. Linux additionally passed generated API drift, TypeScript, lint, locked dependency provisioning without lockfile changes, and all nine notice tests plus the exact offline inventory. The same previously listed test skips remain; no new skip, result masking or failing-package exclusion was added.
+
+Actual Windows execution now covers the corrected SQLite drive URIs, process aliases, updater flush access, filesystem fixtures, stage retention/cancellation and read-only cleanup. The content and update packages passed in 117.530 s and 105.557 s respectively. This closes the concrete failures from the previous runs and the combined native package/build gate.
+
+It does not close installed systemd/Windows service and updater activation/recovery testing, real Minecraft/client/backup/restore workflows, other required Windows versions, or the real version/layout/protocol matrix. No EULA was accepted, game was launched, host service installed, release published or artifact uploaded by this workflow. Stable release support remains unqualified. The implementation ledger retains those separate gates.
