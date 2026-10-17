@@ -60,6 +60,19 @@ public static class NativeSmokeLogonRight {
 function Assert-True([bool]$Condition, [string]$Message) {
  if (-not $Condition) { $script:assertionFailure = $Message; throw $Message }
 }
+function Resolve-ServiceAccountSid([string]$AccountName) {
+ if ([string]::IsNullOrWhiteSpace($AccountName)) { return $null }
+ # SCM may represent a local account as .\user instead of MACHINE\user.
+ # Resolve identity through Windows; never accept a name-only match.
+ if ($AccountName.StartsWith('.\', [StringComparison]::Ordinal)) {
+  $AccountName = $env:COMPUTERNAME + '\' + $AccountName.Substring(2)
+ }
+ try {
+  return ([Security.Principal.NTAccount]::new($AccountName)).Translate([Security.Principal.SecurityIdentifier]).Value
+ } catch {
+  return $null
+ }
+}
 function Assert-PrivateAcl([string]$Path, [string]$AccountSid, [Security.AccessControl.FileSystemRights]$Rights, [bool]$RequireProtected = $true) {
  $acl = Get-Acl -LiteralPath $Path
  if ($RequireProtected) { Assert-True $acl.AreAccessRulesProtected 'ACL inheritance remained enabled.' }
@@ -97,6 +110,10 @@ try {
  $accountCreated = $true
  $sid = (Get-LocalUser -Name $account).SID.Value
  $qualified = $env:COMPUTERNAME + '\' + $account
+ Assert-True ((Resolve-ServiceAccountSid $qualified) -eq $sid) 'Qualified account did not resolve to created SID.'
+ Assert-True ((Resolve-ServiceAccountSid ('.\' + $account)) -eq $sid) 'Local account alias did not resolve to created SID.'
+ $systemAccount = ([Security.Principal.SecurityIdentifier]::new('S-1-5-18')).Translate([Security.Principal.NTAccount]).Value
+ Assert-True ((Resolve-ServiceAccountSid $systemAccount) -ne $sid) 'Privileged system identity matched the unprivileged account.'
  $credential = [Management.Automation.PSCredential]::new($qualified,$secret)
  [NativeSmokeLogonRight]::Set($sid,$true)
  $rightGranted = $true
@@ -107,7 +124,18 @@ try {
  & (Join-Path $PSScriptRoot '..\windows\install.ps1') -Binary $Binary -Credential $credential
  $stage = 'SCM and ACL'
  $service = Get-CimInstance Win32_Service -Filter "Name='MinecraftUI'"
- Assert-True ($service.StartName -ieq $qualified) 'SCM service identity differs.'
+ $scmSid = Resolve-ServiceAccountSid $service.StartName
+ # Nonsecret fixed fields preserve identity evidence without raw credentials,
+ # arbitrary CIM objects or service configuration dumps.
+ $identityEvidence = @{
+  expected_account_sid = $sid
+  scm_account_sid = $scmSid
+  scm_account_resolved = ($null -ne $scmSid)
+  scm_name_equals_input = ($service.StartName -ieq $qualified)
+  scm_uses_local_alias = ([string]$service.StartName).StartsWith('.\', [StringComparison]::Ordinal)
+ }
+ $identityEvidence | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'identity-summary.json')
+ Assert-True ($null -ne $scmSid -and $scmSid -eq $sid) 'SCM service SID differs from created unprivileged account.'
  Assert-True ($service.PathName -ceq '"C:\Program Files\MinecraftUI\minecraft-ui.exe" serve') 'SCM binary path differs.'
  Assert-PrivateAcl $target $sid ([Security.AccessControl.FileSystemRights]::ReadAndExecute)
  Assert-PrivateAcl (Join-Path $target 'minecraft-ui.exe') $sid ([Security.AccessControl.FileSystemRights]::ReadAndExecute) $false
@@ -120,8 +148,11 @@ try {
  (Get-Service MinecraftUI).WaitForStatus('Running',[TimeSpan]::FromSeconds(60))
  $process = Get-CimInstance Win32_Process -Filter "Name='minecraft-ui.exe'" | Where-Object { $_.ExecutablePath -eq (Join-Path $target 'minecraft-ui.exe') }
  Assert-True (@($process).Count -eq 1) 'Expected one installed manager process.'
- $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwner
- Assert-True ($owner.ReturnValue -eq 0 -and $owner.User -eq $account) 'Manager process owner differs.'
+ $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid
+ $identityEvidence.process_owner_query_status = $owner.ReturnValue
+ $identityEvidence.process_account_sid = $owner.Sid
+ $identityEvidence | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'identity-summary.json')
+ Assert-True ($owner.ReturnValue -eq 0 -and $owner.Sid -eq $sid) 'Manager process SID differs from created unprivileged account.'
  $stage = 'API and service lifecycle'
  & python (Join-Path $PSScriptRoot 'manager_api.py') | Tee-Object -FilePath (Join-Path $OutputDirectory 'api-assertions.txt')
  if ($LASTEXITCODE -ne 0) { throw 'Installed API assertions failed.' }

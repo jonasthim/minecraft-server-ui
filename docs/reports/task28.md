@@ -1,6 +1,7 @@
 # Task 28 — installed manager smoke
 
-Status: implementation ready for integration review; hosted execution pending.
+Status: hosted Ubuntu installed-manager checks passed; Windows harness identity
+assertion correction awaiting review and another hosted run.
 Base: `6ffb25b`. Scope: source-built installed manager on disposable GitHub
 Ubuntu 22.04, Ubuntu 24.04 and Windows Server 2022 hosts. No game or Java
 process is launched and no EULA, client, production signing or release action
@@ -107,7 +108,46 @@ on the hosted Windows runner. Local `pwsh` remains unavailable.
 
 ## Hosted evidence
 
-Pending integrator dispatch and independent review. Add run URL, exact SHA,
-runner/systemd versions, baseline versus candidate helper/NNP results, all API
-assertion results and cleanup status here after the actual workflow completes.
-The integrator alone updates package/qualification acceptance in the ledger.
+[Run 39027205172](https://github.com/jonasthim/minecraft-server-ui/actions/runs/39027205172)
+tested source `4b5a5df281c56f021e34ae93e29d92e7a77e3e16`. Runner images were
+`ubuntu22 20261012.322.1`, `ubuntu24 20261012.334.1` and
+`win22 20261012.333.1`. Both Ubuntu targets passed installed-manager assertions
+and cleanup. Windows passed all 35 shipping path-predicate regressions and the
+shipping installer created the actual service, then failed the harness's textual
+SCM account-name comparison before starting the service.
+
+| Host | Baseline manager/probe NNP and helper | Candidate | Installed API/lifecycle/cleanup |
+|---|---|---|---|
+| Ubuntu 22.04, systemd 249.11-0ubuntu3.22 | NNP 1; enable/disable return 1 (refused) | NNP 0; enable/disable 0; invalid inputs 2 | Setup/admin/session/login, stop/start/restart, zero orphan process and cleanup passed |
+| Ubuntu 24.04, systemd 255.4-1ubuntu8.17 | NNP 0; enable/disable 0; invalid inputs 2 | NNP 0; enable/disable 0; invalid inputs 2 | Setup/admin/session/login, stop/start/restart, zero orphan process and cleanup passed |
+| Windows Server 2022 | Not applicable | Path regressions and installer reached SCM | Failed harness account-name assertion before service start; no service-lifecycle qualification |
+
+The Linux artifact results concretely reproduce the older-systemd problem and
+show the scoped candidate correction passing the same real-unit helper checks.
+
+### Windows harness identity comparison correction
+
+The first Windows run compared `Win32_Service.StartName` with the input account
+string. That tests a display representation, while the intended assertion is
+that SCM uses the exact newly created unprivileged account. Microsoft documents
+the [local service-account .\\UserName form](https://learn.microsoft.com/en-us/windows/win32/ad/local-user-accounts).
+The first run's scrubbed diagnostics omitted both StartName and its resolved SID,
+so they cannot establish the precise alias SCM returned; normalization is a
+plausible cause, not a proven observation from that run.
+
+The revised harness resolves SCM's configured account through Windows to a SID,
+normalizing only the documented `.\` local shorthand, and requires equality with
+the SID returned by `Get-LocalUser` for the freshly created account. It verifies
+both local account spellings resolve and a privileged system identity differs.
+The process check uses the documented
+[GetOwnerSid method](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/getownersid-method-in-class-win32-process)
+and requires both successful query and the same exact SID. No unresolved or
+different identity can pass; existing nonadministrator and ACL checks remain.
+
+Fixed-field `identity-summary.json` captures expected/SCM/process SIDs, query
+status and booleans indicating SCM name equality and local-alias use. Credentials,
+raw service objects and arbitrary errors remain excluded. This adds evidence for
+the next run without claiming the first failure was already resolved natively.
+Local whitespace/static source review passed; PowerShell/Windows execution of the
+correction is pending integrator dispatch. The integrator alone updates package
+and qualification acceptance in the ledger.
