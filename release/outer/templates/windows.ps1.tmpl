@@ -1,0 +1,333 @@
+# Prepare verified installation inputs only. Never installs or runs an installer.
+# Independently review this release-specific script and embedded hashes/keys.
+# Downloading the script and keys together from an untrusted source proves no identity.
+# {{if .Development}}DEVELOPMENT ONLY: explicit -AllowDevelopment required.{{else}}OWNER TRUST: development metadata refused.{{end}}
+#Requires -Version 5.1
+[CmdletBinding()]
+param([string]$Version = 'latest', [Parameter(Mandatory=$true)][string]$Output, [switch]$AllowDevelopment)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$scratch = $null
+$scratchIdentity = $null
+$scratchHandle = $null
+$scratchID = $null
+$trustFile = $null
+$binaryWriter = $null
+$file = $null
+$resultFile = $null
+$errorFile = $null
+$ownedFiles = @{}
+$fileSDDL = $null
+$directorySDDL = $null
+$cleanupRefused = $false
+$result = $null
+function Refuse([string]$Message) { throw [System.InvalidOperationException]::new($Message) }
+function Initialize-PrivateIO {
+    # Windows PowerShell and PowerShell 7 have different ACL FileStream APIs.
+    # This small Win32 adapter gives both the same atomic CREATE_NEW security,
+    # handle-bound identity checks and handle-bound deletion. No post-create ACL
+    # repair is used and every error is scrubbed by the outer authored handler.
+    Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using Microsoft.Win32.SafeHandles;
+namespace MinecraftUiOuter {
+    public static class PrivateIO {
+        const uint Read = 0x80000000, Write = 0x40000000;
+        const uint Delete = 0x10000, ReadControl = 0x20000, ReadAttributes = 0x80;
+        const uint OpenReparse = 0x00200000, BackupSemantics = 0x02000000;
+        const uint Directory = 0x10, Reparse = 0x400;
+        [StructLayout(LayoutKind.Sequential)]
+        struct SecurityAttributes { public int Length; public IntPtr Descriptor; [MarshalAs(UnmanagedType.Bool)] public bool Inherit; }
+        [StructLayout(LayoutKind.Sequential)]
+        struct FileTime { public uint Low; public uint High; }
+        [StructLayout(LayoutKind.Sequential)]
+        struct FileInfo {
+            public uint Attributes; public FileTime Creation, Access, Write;
+            public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        struct Disposition { [MarshalAs(UnmanagedType.U1)] public bool DeleteFile; }
+        [DllImport("advapi32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
+        static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string sddl, uint revision, out IntPtr descriptor, out uint size);
+        [DllImport("advapi32.dll", SetLastError=true)]
+        static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+        [DllImport("advapi32.dll", SetLastError=true)]
+        static extern uint GetSecurityInfo(SafeFileHandle handle, uint kind, uint information, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
+        static extern SafeFileHandle CreateFileW(string path, uint access, uint share, ref SecurityAttributes security, uint creation, uint flags, IntPtr template);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern bool GetFileInformationByHandle(SafeFileHandle handle, out FileInfo information);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern bool SetFileInformationByHandle(SafeFileHandle handle, uint kind, ref Disposition information, uint size);
+        [DllImport("kernel32.dll")]
+        static extern IntPtr LocalFree(IntPtr memory);
+        static Exception Failure() { return new IOException("private scratch operation refused"); }
+        static SafeFileHandle Open(string path, uint access, uint share, uint creation, bool directory, string sddl) {
+            IntPtr descriptor = IntPtr.Zero;
+            try {
+                if (sddl != null) { uint size; if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,1,out descriptor,out size)) throw Failure(); }
+                SecurityAttributes security = new SecurityAttributes();
+                security.Length = Marshal.SizeOf(typeof(SecurityAttributes)); security.Descriptor = descriptor;
+                SafeFileHandle handle = CreateFileW(path,access,share,ref security,creation,OpenReparse | (directory ? BackupSemantics : 0),IntPtr.Zero);
+                if (handle.IsInvalid) { handle.Dispose(); throw Failure(); }
+                return handle;
+            } finally { if (descriptor != IntPtr.Zero) LocalFree(descriptor); }
+        }
+        static FileInfo Information(SafeFileHandle handle, bool directory) {
+            FileInfo info;
+            if (!GetFileInformationByHandle(handle,out info) || (info.Attributes & Reparse) != 0 || ((info.Attributes & Directory) != 0) != directory || (!directory && info.Links != 1)) throw Failure();
+            return info;
+        }
+        static string Identity(FileInfo info) { return info.Volume.ToString("x8")+":"+info.IndexHigh.ToString("x8")+info.IndexLow.ToString("x8"); }
+        static string[] Rules(RawAcl acl) {
+            if (acl == null) throw Failure();
+            string[] rules = new string[acl.Count];
+            for (int i=0;i<acl.Count;i++) { byte[] bytes=new byte[acl[i].BinaryLength]; acl[i].GetBinaryForm(bytes,0); rules[i]=Convert.ToBase64String(bytes); }
+            Array.Sort(rules,StringComparer.Ordinal); return rules;
+        }
+        static void Security(SafeFileHandle handle, string sddl) {
+            IntPtr owner,group,dacl,sacl,descriptor;
+            uint result=GetSecurityInfo(handle,1,5,out owner,out group,out dacl,out sacl,out descriptor);
+            if (result != 0) throw Failure();
+            try {
+                uint size=GetSecurityDescriptorLength(descriptor);
+                if (size < 20 || size > 65536) throw Failure();
+                byte[] bytes=new byte[(int)size]; Marshal.Copy(descriptor,bytes,0,bytes.Length);
+                RawSecurityDescriptor actual=new RawSecurityDescriptor(bytes,0), expected=new RawSecurityDescriptor(sddl);
+                if (actual.Owner == null || !actual.Owner.Equals(expected.Owner) || (actual.ControlFlags & ControlFlags.DiscretionaryAclProtected)==0) throw Failure();
+                string[] a=Rules(actual.DiscretionaryAcl), e=Rules(expected.DiscretionaryAcl);
+                if (a.Length != e.Length) throw Failure();
+                for (int i=0;i<a.Length;i++) if (!String.Equals(a[i],e[i],StringComparison.Ordinal)) throw Failure();
+            } finally { if (descriptor != IntPtr.Zero) LocalFree(descriptor); }
+        }
+        public static void AssertBound(SafeFileHandle handle, string identity, string sddl, bool directory) {
+            if (!String.Equals(Identity(Information(handle,directory)),identity,StringComparison.Ordinal)) throw Failure();
+            Security(handle,sddl);
+        }
+        public static string CreatePrivateFile(string path, string sddl) {
+            // Security owner and protected DACL are applied by CREATE_NEW itself.
+            using (SafeFileHandle handle=Open(path,Read|Write,7,1,false,sddl)) {
+                Security(handle,sddl); return Identity(Information(handle,false));
+            }
+        }
+        public static SafeFileHandle BindDirectory(string path, string sddl) {
+            SafeFileHandle handle=Open(path,ReadControl|ReadAttributes,3,3,true,null);
+            try { Information(handle,true); Security(handle,sddl); return handle; } catch { handle.Dispose(); throw; }
+        }
+        public static string DirectoryIdentity(SafeFileHandle handle) { return Identity(Information(handle,true)); }
+        public static FileStream OpenBound(string path, string identity, string sddl, bool writable, bool output) {
+            // Output readers allow PowerShell's existing-file writers, but no
+            // handle allows deletion while retained. Other readers forbid writes.
+            SafeFileHandle handle=Open(path,Read|(writable?Write:0),output?3u:1u,3,false,null);
+            try { AssertBound(handle,identity,sddl,false); return new FileStream(handle,writable?FileAccess.ReadWrite:FileAccess.Read); } catch { handle.Dispose(); throw; }
+        }
+        public static void DeleteOwned(string path, string identity, string sddl, bool directory) {
+            // A renamed/replaced path is never deleted. Security and identity
+            // are checked on the exact DELETE handle used for disposition.
+            using (SafeFileHandle handle=Open(path,Delete|ReadControl|ReadAttributes,7,3,directory,null)) {
+                AssertBound(handle,identity,sddl,directory);
+                Disposition disposition=new Disposition(); disposition.DeleteFile=true;
+                if (!SetFileInformationByHandle(handle,4,ref disposition,1)) throw Failure();
+            }
+        }
+    }
+}
+'@
+}
+function New-PrivateScratchFile([string]$Name) {
+    if ($Name -cnotin @('trust.json','minecraft-ui-bootstrap.exe','result.json','error.txt') -or $ownedFiles.ContainsKey($Name)) { Refuse 'unexpected scratch child' }
+    Assert-Scratch $scratch $scratchIdentity
+    [MinecraftUiOuter.PrivateIO]::AssertBound($scratchHandle,$scratchID,$directorySDDL,$true)
+    $path = [System.IO.Path]::Combine($scratch,$Name)
+    $ownedFiles.Add($Name,[MinecraftUiOuter.PrivateIO]::CreatePrivateFile($path,$fileSDDL))
+    return $path
+}
+function Assert-NoReparse([string]$Path) {
+    $item = [System.IO.DirectoryInfo]::new($Path)
+    while ($null -ne $item) {
+        if (-not $item.Exists -or (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) { Refuse 'unsafe path ancestry' }
+        $item = $item.Parent
+    }
+}
+function Assert-Scratch([string]$Path, [System.Security.AccessControl.DirectorySecurity]$Expected) {
+    Assert-NoReparse $Path
+    $actual = Get-Acl -LiteralPath $Path
+    $sidType = [System.Security.Principal.SecurityIdentifier]
+    if (-not $actual.AreAccessRulesProtected -or $actual.GetOwner($sidType).Value -cne $Expected.GetOwner($sidType).Value) { Refuse 'private scratch security changed' }
+    # Compare exact rules, avoiding irrelevant OS auto-inheritance SDDL flags.
+    $actualRules = @($actual.GetAccessRules($true,$true,$sidType) | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.IdentityReference.Value,[int]$_.FileSystemRights,[int]$_.AccessControlType,[int]$_.InheritanceFlags,[int]$_.PropagationFlags,$_.IsInherited } | Sort-Object)
+    $expectedRules = @($Expected.GetAccessRules($true,$true,$sidType) | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.IdentityReference.Value,[int]$_.FileSystemRights,[int]$_.AccessControlType,[int]$_.InheritanceFlags,[int]$_.PropagationFlags,$_.IsInherited } | Sort-Object)
+    if (($actualRules -join ';') -cne ($expectedRules -join ';')) { Refuse 'private scratch security changed' }
+}
+function Assert-Redirect([string]$Location) {
+    if ($Location.Length -gt 32768 -or $Location -match '[\x00-\x20\x7f]') { Refuse 'untrusted download redirect' }
+    $next = $null
+    if (-not [System.Uri]::TryCreate($Location,[System.UriKind]::Absolute,[ref]$next) -or $next.Scheme -cne 'https' -or $next.Host -cne 'release-assets.githubusercontent.com' -or $next.Port -ne 443 -or $next.UserInfo -ne '' -or $next.Fragment -ne '') { Refuse 'untrusted download redirect' }
+    return $next.AbsoluteUri
+}
+function Receive-Preparer([string]$Url, [System.IO.Stream]$Destination, [long]$ExpectedSize) {
+    $deadline = [System.Diagnostics.Stopwatch]::StartNew()
+    for ($redirect = 0; $redirect -lt 4; $redirect++) {
+        $request = [System.Net.HttpWebRequest]::Create($Url)
+        $request.Proxy = $null
+        $request.Credentials = $null
+        $request.UseDefaultCredentials = $false
+        $request.PreAuthenticate = $false
+        $request.AllowAutoRedirect = $false
+        $request.Timeout = 15000
+        $request.ReadWriteTimeout = 15000
+        $response = $null
+        try {
+            $response = $request.GetResponse()
+            $status = [int]$response.StatusCode
+            if ($status -in @(301,302,303,307,308)) {
+                $Url = Assert-Redirect ([string]$response.Headers['Location'])
+                continue
+            }
+            if ($status -ne 200 -or $response.ContentLength -gt $ExpectedSize) { Refuse 'preparer download refused' }
+            $source = $response.GetResponseStream()
+            try {
+                $buffer = New-Object byte[] 65536
+                [long]$total = 0
+                while (($count = $source.Read($buffer,0,[int][Math]::Min($buffer.Length,($ExpectedSize - $total + 1)))) -gt 0) {
+                    $total += $count
+                    if ($total -gt $ExpectedSize -or $deadline.Elapsed.TotalSeconds -gt 120) { Refuse 'preparer download exceeds bounds' }
+                    $Destination.Write($buffer,0,$count)
+                }
+                if ($total -ne $ExpectedSize) { Refuse 'preparer size mismatch' }
+                $Destination.Flush()
+            } finally { $source.Dispose() }
+            return
+        } finally { if ($null -ne $response) { $response.Dispose() }; $request.Abort() }
+    }
+    Refuse 'preparer redirect limit exceeded'
+}
+try {
+    if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitOperatingSystem -or -not [Environment]::Is64BitProcess) { Refuse 'requires x64 Windows PowerShell' }
+    if ($Version -cne 'latest' -and $Version -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z') { Refuse 'invalid manager version' }
+    # Local drive paths only; UNC/device/provider paths cannot supply private ancestry.
+    if ($Output -cnotmatch '^[A-Za-z]:\\' -or $Output.Contains('/') -or $Output.IndexOf(':',2) -ge 0 -or $Output -match '[\x00-\x1f<>"|?*]' -or [System.IO.Path]::GetFullPath($Output) -cne $Output -or $Output.EndsWith('\')) { Refuse 'new clean absolute local output path required' }
+    foreach ($component in $Output.Substring(3).Split('\')) {
+        if ($component -eq '' -or $component -match '[. ]$' -or $component -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)') { Refuse 'unsafe output path component' }
+    }
+    if (Test-Path -LiteralPath $Output) { Refuse 'output already exists' }
+    # GetAttributes also detects dangling reparse points on Windows.
+    try { $null = [System.IO.File]::GetAttributes($Output); Refuse 'output already exists' } catch [System.IO.FileNotFoundException] {} catch [System.IO.DirectoryNotFoundException] {}
+    Assert-NoReparse ([System.IO.Path]::GetDirectoryName($Output))
+{{if .Development}}    if (-not $AllowDevelopment) { Refuse 'DEVELOPMENT ONLY script requires -AllowDevelopment' }
+{{else}}    if ($AllowDevelopment) { Refuse 'owner entry script refuses development mode' }
+{{end}}    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $admin = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    $system = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+    $elevated = [System.Security.Principal.WindowsPrincipal]::new($identity).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+    $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true,$false)
+    $owner = $identity.User
+    if ($elevated) { $owner = $admin }
+    $acl.SetOwner($owner)
+    $principals = @($admin,$system)
+    if (-not $elevated) { $principals += $identity.User }
+    foreach ($sid in $principals) {
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid,[System.Security.AccessControl.FileSystemRights]::FullControl,([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),[System.Security.AccessControl.PropagationFlags]::None,[System.Security.AccessControl.AccessControlType]::Allow)
+        $acl.AddAccessRule($rule)
+    }
+    $directorySDDL = $acl.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Access)
+    $fileSDDL = 'O:' + $owner.Value + 'D:P(A;;FA;;;BA)(A;;FA;;;SY)'
+    if (-not $elevated) { $fileSDDL += '(A;;FA;;;' + $identity.User.Value + ')' }
+    # Elevated preparation uses the OS Windows Temp parent, excluding an
+    # unelevated same-user writable TEMP override. This script never elevates.
+    $tempRoot = [System.IO.Path]::GetTempPath()
+    if ($elevated) { $tempRoot = [System.IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows),'Temp') }
+    $tempRoot = [System.IO.Path]::GetFullPath($tempRoot).TrimEnd('\')
+    Assert-NoReparse $tempRoot
+    $scratch = [System.IO.Path]::Combine($tempRoot,('minecraft-ui-prepare-' + [Guid]::NewGuid().ToString('N')))
+    if ([System.IO.Directory]::Exists($scratch) -or [System.IO.File]::Exists($scratch)) { Refuse 'scratch already exists' }
+    $directory = [System.IO.DirectoryInfo]::new($scratch)
+    if ($PSVersionTable.PSEdition -eq 'Desktop') { $directory.Create($acl) } else { [System.IO.FileSystemAclExtensions]::Create($directory,$acl) }
+    $scratchIdentity = $acl
+    Assert-Scratch $scratch $scratchIdentity
+    # Bound the built-in compiler's temporary-file policy before invoking it.
+    # Restore absent variables as absent, without exposing original values.
+    $savedTemp = [Environment]::GetEnvironmentVariable('TEMP',[EnvironmentVariableTarget]::Process)
+    $savedTmp = [Environment]::GetEnvironmentVariable('TMP',[EnvironmentVariableTarget]::Process)
+    try {
+        [Environment]::SetEnvironmentVariable('TEMP',$scratch,[EnvironmentVariableTarget]::Process)
+        [Environment]::SetEnvironmentVariable('TMP',$scratch,[EnvironmentVariableTarget]::Process)
+        Initialize-PrivateIO
+    } finally {
+        [Environment]::SetEnvironmentVariable('TEMP',$savedTemp,[EnvironmentVariableTarget]::Process)
+        [Environment]::SetEnvironmentVariable('TMP',$savedTmp,[EnvironmentVariableTarget]::Process)
+    }
+    Assert-Scratch $scratch $scratchIdentity
+    $scratchHandle = [MinecraftUiOuter.PrivateIO]::BindDirectory($scratch,$directorySDDL)
+    $scratchID = [MinecraftUiOuter.PrivateIO]::DirectoryIdentity($scratchHandle)
+    $trustPath = New-PrivateScratchFile 'trust.json'
+    $trustWriter = [MinecraftUiOuter.PrivateIO]::OpenBound($trustPath,$ownedFiles['trust.json'],$fileSDDL,$true,$false)
+    try {
+        $trustBytes = [Convert]::FromBase64String('{{.TrustBase64}}')
+        $trustWriter.Write($trustBytes,0,$trustBytes.Length)
+        $trustWriter.Flush($true)
+    } finally { $trustWriter.Dispose() }
+    $trustFile = [MinecraftUiOuter.PrivateIO]::OpenBound($trustPath,$ownedFiles['trust.json'],$fileSDDL,$false,$false)
+    $binary = New-PrivateScratchFile 'minecraft-ui-bootstrap.exe'
+    $binaryWriter = [MinecraftUiOuter.PrivateIO]::OpenBound($binary,$ownedFiles['minecraft-ui-bootstrap.exe'],$fileSDDL,$true,$false)
+    try {
+        Receive-Preparer 'https://github.com/{{.Repository}}/releases/download/{{.Version}}/{{.Binary.Name}}' $binaryWriter {{.Binary.Size}}
+        $binaryWriter.Flush($true)
+    } finally { $binaryWriter.Dispose(); $binaryWriter = $null }
+    Assert-Scratch $scratch $scratchIdentity
+    $file = [MinecraftUiOuter.PrivateIO]::OpenBound($binary,$ownedFiles['minecraft-ui-bootstrap.exe'],$fileSDDL,$false,$false)
+        if ($file.Length -ne {{.Binary.Size}}) { Refuse 'preparer size mismatch' }
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try { $hash = ([BitConverter]::ToString($sha.ComputeHash($file))).Replace('-','').ToLowerInvariant() } finally { $sha.Dispose() }
+        if ($hash -cne '{{.Binary.SHA256}}') { Refuse 'preparer SHA256 mismatch' }
+        Assert-Scratch $scratch $scratchIdentity
+        # Keep the verified image open without write/delete sharing through its
+        # invocation. Array splatting preserves literal version/output arguments.
+        $nativeArgs = @('prepare','--repository','{{.Repository}}','--trust-file',$trustPath,'--version',$Version,'--output',$Output)
+{{if .Development}}        $nativeArgs += '--allow-development'
+{{end}}        $resultPath = New-PrivateScratchFile 'result.json'
+        $errorPath = New-PrivateScratchFile 'error.txt'
+        $resultFile = [MinecraftUiOuter.PrivateIO]::OpenBound($resultPath,$ownedFiles['result.json'],$fileSDDL,$false,$true)
+        $errorFile = [MinecraftUiOuter.PrivateIO]::OpenBound($errorPath,$ownedFiles['error.txt'],$fileSDDL,$false,$true)
+        & $binary @nativeArgs 1> $resultPath 2> $errorPath
+        if ($LASTEXITCODE -ne 0) { Refuse 'verified preparer refused inputs' }
+        [MinecraftUiOuter.PrivateIO]::AssertBound($resultFile.SafeFileHandle,$ownedFiles['result.json'],$fileSDDL,$false)
+        [MinecraftUiOuter.PrivateIO]::AssertBound($errorFile.SafeFileHandle,$ownedFiles['error.txt'],$fileSDDL,$false)
+        if ($resultFile.Length -lt 1 -or $resultFile.Length -gt 32768) { Refuse 'preparer success response exceeds bounds' }
+        $reader = [System.IO.StreamReader]::new($resultFile,[System.Text.Encoding]::UTF8,$true,1024,$true)
+        try { $result = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        $null = ConvertFrom-Json -InputObject $result
+} catch {
+    # Authored bounded error only: raw HTTP errors can contain signed locations,
+    # headers, credentials or private paths. Do not expose exception objects.
+    [Console]::Error.WriteLine('bootstrap preparation refused; check platform, arguments, trust and verified release availability')
+    exit 1
+} finally {
+    foreach ($retained in @($binaryWriter,$trustFile,$file,$resultFile,$errorFile)) {
+        if ($null -ne $retained) { try { $retained.Dispose() } catch { $cleanupRefused = $true; [Console]::Error.WriteLine('private bootstrap handle cleanup refused') } }
+    }
+    if ($null -ne $scratch -and $null -ne $scratchIdentity) {
+        try {
+            Assert-Scratch $scratch $scratchIdentity
+            if ($null -eq $scratchHandle) { Refuse 'scratch binding unavailable' }
+            [MinecraftUiOuter.PrivateIO]::AssertBound($scratchHandle,$scratchID,$directorySDDL,$true)
+            # Only exact names successfully created by this process are owned.
+            # Handle disposition verifies each recorded ID/owner/DACL; foreign
+            # children are untouched and keep the directory nonempty.
+            foreach ($name in @('trust.json','minecraft-ui-bootstrap.exe','result.json','error.txt')) {
+                if ($ownedFiles.ContainsKey($name)) { [MinecraftUiOuter.PrivateIO]::DeleteOwned([System.IO.Path]::Combine($scratch,$name),$ownedFiles[$name],$fileSDDL,$false) }
+            }
+            $scratchHandle.Dispose(); $scratchHandle = $null
+            [MinecraftUiOuter.PrivateIO]::DeleteOwned($scratch,$scratchID,$directorySDDL,$true)
+        } catch { $cleanupRefused = $true; [Console]::Error.WriteLine('private bootstrap scratch cleanup refused') }
+    }
+    if ($null -ne $scratchHandle) { try { $scratchHandle.Dispose() } catch { $cleanupRefused = $true; [Console]::Error.WriteLine('private bootstrap handle cleanup refused') } }
+}
+if ($cleanupRefused) { exit 1 }
+[Console]::Out.Write($result)

@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Prepare verified installation inputs only. This script never runs an installer.
+# Initial trust: review this release-specific script and its hashes/public keys
+# independently. Fetching script and keys from an untrusted source proves no identity.
+# {{if .Development}}DEVELOPMENT ONLY: explicit --allow-development required.{{else}}OWNER TRUST: development metadata is refused.{{end}}
+set -euo pipefail
+umask 077
+fail() { printf '%s\n' "bootstrap preparation refused: $1" >&2; exit 1; }
+for tool in curl sha256sum wc head mktemp rm chmod uname; do
+  command -v "$tool" >/dev/null 2>&1 || fail 'required existing curl/SHA256/coreutils tool is missing'
+done
+[[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || fail 'requires x64 Linux'
+distro=''
+while IFS='=' read -r key value; do
+  if [[ "$key" == ID ]]; then distro="${value//\"/}"; fi
+done < /etc/os-release
+[[ "$distro" == debian || "$distro" == ubuntu ]] || fail 'requires Debian or Ubuntu'
+version=latest
+output=''
+development=0
+while (($#)); do
+  case "$1" in
+    --version) (($# >= 2)) || fail 'missing version'; version=$2; shift 2 ;;
+    --output) (($# >= 2)) || fail 'missing output'; output=$2; shift 2 ;;
+    --allow-development) development=1; shift ;;
+    *) fail 'unknown preparation argument' ;;
+  esac
+done
+[[ "$version" == latest || "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail 'invalid selected manager version'
+[[ "$output" == /* && "$output" != / && "$output" != */ && ! -e "$output" && ! -L "$output" ]] || fail 'new absolute output directory required'
+parent=${output%/*}; [[ -n "$parent" ]] || parent=/
+[[ -d "$parent" ]] || fail 'output parent must exist'
+check=$parent
+while :; do
+  [[ ! -L "$check" ]] || fail 'output ancestor is a symlink'
+  [[ "$check" != *'/../'* && "$check" != */.. && "$check" != *'/./'* && "$check" != */. ]] || fail 'output path must be clean'
+  [[ "$check" == / ]] && break
+  check=${check%/*}; [[ -n "$check" ]] || check=/
+done
+{{if .Development}}((development == 1)) || fail 'DEVELOPMENT ONLY script requires --allow-development'
+{{else}}((development == 0)) || fail 'owner entry script refuses development mode'
+{{end}}# /tmp is the OS-owned sticky temporary root; never honor environment TMPDIR.
+[[ -d /tmp && ! -L /tmp ]] || fail 'trusted temporary root unavailable'
+scratch=$(mktemp -d /tmp/minecraft-ui-prepare.XXXXXXXXXX) || fail 'private scratch unavailable'
+cleanup() { rm -rf -- "$scratch"; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+printf '%s' {{.TrustLiteral}} > "$scratch/trust.json"
+expected_size={{.Binary.Size}}
+expected_sha='{{.Binary.SHA256}}'
+url='https://github.com/{{.Repository}}/releases/download/{{.Version}}/{{.Binary.Name}}'
+downloaded=0
+for attempt in 0 1 2 3; do
+  # Disable curl configuration, proxies and credentials. Never print raw curl
+  # errors or signed redirects. head bounds disk writes even without Content-Length.
+  if ! curl -q --silent --proto '=https' --proto-redir '=https' --proxy '' --noproxy '*' \
+      --connect-timeout 15 --max-time 120 --max-redirs 0 --max-filesize "$expected_size" \
+      --write-out '%{stderr}%{http_code}\n%{redirect_url}\n' "$url" \
+      2> "$scratch/response" | head -c "$((expected_size + 1))" > "$scratch/preparer"; then
+    fail 'preparer download failed'
+  fi
+  [[ "$(wc -c < "$scratch/response")" -le 32768 ]] || fail 'download response exceeds bounds'
+  { IFS= read -r status; IFS= read -r location || :; } < "$scratch/response"
+  case "$status" in
+    200) downloaded=1; break ;;
+    301|302|303|307|308)
+      # Only GitHub's HTTPS release asset host may receive a signed redirect.
+      # Keep its query private; no credentials or arbitrary host is accepted.
+      [[ "$location" == https://release-assets.githubusercontent.com/* && "$location" != *$'\r'* && "$location" != *$'\n'* && "$location" != *$'\t'* && "$location" != *' '* ]] || fail 'untrusted download redirect'
+      url=$location ;;
+    *) fail 'preparer download refused by remote server' ;;
+  esac
+done
+((downloaded == 1)) || fail 'preparer redirect limit exceeded'
+[[ "$(wc -c < "$scratch/preparer")" -eq "$expected_size" ]] || fail 'preparer size mismatch'
+actual_sha=$(sha256sum -- "$scratch/preparer")
+[[ "${actual_sha%% *}" == "$expected_sha" ]] || fail 'preparer SHA256 mismatch'
+chmod 700 -- "$scratch/preparer"
+args=(prepare --repository '{{.Repository}}' --trust-file "$scratch/trust.json" --version "$version" --output "$output")
+{{if .Development}}args+=(--allow-development)
+{{end}}# This verified native command validates/extracts inputs; it executes no bundle
+# members. Capture its output privately and expose only bounded success JSON.
+if ! "$scratch/preparer" "${args[@]}" > "$scratch/result" 2> "$scratch/error"; then
+  fail 'verified preparer refused inputs'
+fi
+[[ "$(wc -c < "$scratch/result")" -gt 0 && "$(wc -c < "$scratch/result")" -le 32768 ]] || fail 'preparer success response exceeds bounds'
+head -c 32768 -- "$scratch/result"
