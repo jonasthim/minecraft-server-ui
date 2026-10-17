@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -704,6 +705,7 @@ const (
 	windowsUpdaterDescriptor
 	windowsUpdaterPipeCreate
 	windowsUpdaterPipeConnect
+	windowsUpdaterProcessSecurity
 )
 
 type windowsUpdaterFailure struct {
@@ -735,7 +737,13 @@ func (s *windowsUpdater) Execute(_ []string, requests <-chan svc.ChangeRequest, 
 	recoveryCtx, recoveryCancel := context.WithTimeout(ctx, 4*time.Minute)
 	defer recoveryCancel()
 	recovered := make(chan error, 1)
-	go func() { recovered <- s.recover(recoveryCtx) }()
+	go func() {
+		if err := s.prepareProcessQuery(recoveryCtx); err != nil {
+			recovered <- &windowsUpdaterFailure{windowsUpdaterProcessSecurity, err}
+			return
+		}
+		recovered <- s.recover(recoveryCtx)
+	}()
 	progress := time.NewTicker(10 * time.Second)
 	defer progress.Stop()
 	checkpoint := uint32(1)
@@ -744,6 +752,10 @@ recoveryLoop:
 		select {
 		case err := <-recovered:
 			if err != nil {
+				var startup *windowsUpdaterFailure
+				if errors.As(err, &startup) {
+					return true, windowsUpdaterExitCode(err)
+				}
 				return true, windowsUpdaterExitCode(&windowsUpdaterFailure{windowsUpdaterRecovery, err})
 			}
 			break recoveryLoop
@@ -776,6 +788,207 @@ recoveryLoop:
 		}
 	}
 }
+
+// The only production caller binds this grant to its own process and the
+// protected installer receipt, before publishing Running or accepting commands.
+func (s *windowsUpdater) prepareProcessQuery(ctx context.Context) error {
+	sid, err := s.accountSID(ctx)
+	if err != nil {
+		return err
+	}
+	manager, err := managerProcessQuerySID(sid)
+	if err != nil {
+		return err
+	}
+	return grantUpdaterProcessQuery(ctx, windows.CurrentProcess(), manager)
+}
+
+func managerProcessQuerySID(value string) (*windows.SID, error) {
+	sid, err := windows.StringToSid(value)
+	if err != nil || sid == nil || !sid.IsValid() || sid.String() != value || !strings.HasPrefix(value, "S-1-5-21-") || sid.SubAuthorityCount() != 5 || sid.SubAuthority(4) < 1000 {
+		return nil, errors.New("conventional unprivileged manager account SID is required")
+	}
+	return sid, nil
+}
+
+func processQueryACL(sd *windows.SECURITY_DESCRIPTOR, manager *windows.SID, requireGrant bool) (*windows.ACL, []string, error) {
+	unsafeACL := func() (*windows.ACL, []string, error) {
+		return nil, nil, errors.New("updater process ACL requires explicit review")
+	}
+	if sd == nil || !sd.IsValid() || manager == nil || !manager.IsValid() {
+		return unsafeACL()
+	}
+	owner, _, err := sd.Owner()
+	if err != nil || owner == nil || owner.String() != "S-1-5-18" && owner.String() != "S-1-5-32-544" {
+		return unsafeACL()
+	}
+	group, _, err := sd.Group()
+	if err != nil || group == nil || !group.IsValid() {
+		return unsafeACL()
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil || dacl.AceCount == 0 {
+		return unsafeACL()
+	}
+	var entries []string
+	managerCount := 0
+	seenAllow, system, admins := false, false, false
+	for index := uint32(0); index < uint32(dacl.AceCount); index++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, index, &ace); err != nil {
+			return nil, nil, err
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE && ace.Header.AceType != windows.ACCESS_DENIED_ACE_TYPE || ace.Header.AceSize < 16 || ace.Header.AceFlags&^uint8(windows.VALID_INHERIT_FLAGS) != 0 {
+			return unsafeACL()
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		// Bound the SID before asking the native validator to inspect it.
+		count := *(*byte)(unsafe.Add(unsafe.Pointer(sid), 1))
+		if 16+uint32(count)*4 != uint32(ace.Header.AceSize) || !sid.IsValid() {
+			return unsafeACL()
+		}
+		effective := ace.Header.AceFlags&windows.INHERIT_ONLY_ACE == 0
+		if ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
+			// Do not merge into noncanonical ordering or override a denial
+			// which could apply through any of the manager token's groups.
+			if seenAllow || sid.Equals(manager) || effective && uint32(ace.Mask)&(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_QUERY_INFORMATION|windows.GENERIC_ALL|windows.GENERIC_READ) != 0 {
+				return unsafeACL()
+			}
+		} else {
+			seenAllow = true
+			switch sid.String() {
+			case "S-1-5-18":
+				system = system || effective && ace.Mask != 0
+			case "S-1-5-32-544":
+				admins = admins || effective && ace.Mask != 0
+			default:
+				if !sid.Equals(manager) || ace.Mask != windows.PROCESS_QUERY_LIMITED_INFORMATION || ace.Header.AceFlags != 0 {
+					return unsafeACL()
+				}
+				managerCount++
+			}
+		}
+		entries = append(entries, string(unsafe.Slice((*byte)(unsafe.Pointer(ace)), int(ace.Header.AceSize))))
+	}
+	if !system || !admins || managerCount > 1 || requireGrant && managerCount != 1 {
+		return unsafeACL()
+	}
+	return dacl, entries, nil
+}
+
+func mergeUpdaterProcessQuery(sd *windows.SECURITY_DESCRIPTOR, manager *windows.SID) (*windows.ACL, error) {
+	if manager == nil {
+		return nil, errors.New("manager process SID is required")
+	}
+	if _, err := managerProcessQuerySID(manager.String()); err != nil {
+		return nil, err
+	}
+	dacl, _, err := processQueryACL(sd, manager, false)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err := processQueryACL(sd, manager, true); err == nil {
+		return dacl, nil // Exact preexisting grant is already sufficient.
+	}
+	var pin runtime.Pinner
+	pin.Pin(manager)
+	defer pin.Unpin()
+	return windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+		AccessPermissions: windows.PROCESS_QUERY_LIMITED_INFORMATION,
+		AccessMode:        windows.GRANT_ACCESS,
+		Inheritance:       windows.NO_INHERITANCE,
+		Trustee:           windows.TRUSTEE{TrusteeForm: windows.TRUSTEE_IS_SID, TrusteeType: windows.TRUSTEE_IS_USER, TrusteeValue: windows.TrusteeValueFromSID(manager)},
+	}}, dacl)
+}
+
+func grantUpdaterProcessQuery(ctx context.Context, process windows.Handle, manager *windows.SID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	const information = windows.OWNER_SECURITY_INFORMATION | windows.GROUP_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION
+	before, err := windows.GetSecurityInfo(process, windows.SE_KERNEL_OBJECT, information)
+	if err != nil {
+		return err
+	}
+	_, original, err := processQueryACL(before, manager, false)
+	if err != nil {
+		return err
+	}
+	merged, err := mergeUpdaterProcessQuery(before, manager)
+	if err != nil {
+		return err
+	}
+	// Build a descriptor only for validation/snapshot; publish only its DACL.
+	owner, _, _ := before.Owner()
+	group, _, _ := before.Group()
+	control, _, err := before.Control()
+	if err != nil {
+		return err
+	}
+	candidate, err := windows.NewSecurityDescriptor()
+	if err != nil {
+		return err
+	}
+	if err := candidate.SetOwner(owner, false); err != nil {
+		return err
+	}
+	if err := candidate.SetGroup(group, false); err != nil {
+		return err
+	}
+	if err := candidate.SetDACL(merged, true, false); err != nil {
+		return err
+	}
+	_, expected, err := processQueryACL(candidate, manager, true)
+	if err != nil {
+		return err
+	}
+	if !preservesProcessQueryEntries(original, expected) {
+		return errors.New("updater process ACL merge changed existing permissions")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := windows.SetSecurityInfo(process, windows.SE_KERNEL_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, merged, nil); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	after, err := windows.GetSecurityInfo(process, windows.SE_KERNEL_OBJECT, information)
+	if err != nil {
+		return err
+	}
+	_, actual, err := processQueryACL(after, manager, true)
+	if err != nil {
+		return err
+	}
+	afterOwner, _, _ := after.Owner()
+	afterGroup, _, _ := after.Group()
+	afterControl, _, err := after.Control()
+	if err != nil || !owner.Equals(afterOwner) || !group.Equals(afterGroup) || control != afterControl || len(expected) != len(actual) {
+		return errors.New("published updater process security differs from the required grant")
+	}
+	for index := range expected {
+		if expected[index] != actual[index] {
+			return errors.New("published updater process ACL differs from the required grant")
+		}
+	}
+	return ctx.Err()
+}
+
+func preservesProcessQueryEntries(original, merged []string) bool {
+	if len(merged) < len(original) || len(merged) > len(original)+1 {
+		return false
+	}
+	index := 0
+	for _, entry := range merged {
+		if index < len(original) && original[index] == entry {
+			index++
+		}
+	}
+	return index == len(original)
+}
+
 func (s *windowsUpdater) recover(ctx context.Context) error {
 	state, err := openProtectedRoot(ctx, s.paths.State)
 	if err != nil {

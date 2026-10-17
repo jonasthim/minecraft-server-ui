@@ -44,6 +44,21 @@ public static class NativeUpdaterLogonRight {
 function Assert-True([bool]$Condition, [string]$Message) {
  if (-not $Condition) { $script:assertionFailure = $Message; throw $Message }
 }
+function Convert-ProcessAccessEvidence([string]$Body) {
+ if ($Body.Length -lt 1 -or $Body.Length -gt 4096) { throw 'Process-access evidence exceeds bounds.' }
+ $value = ConvertFrom-Json -InputObject $Body
+ $checks = @('query_limited','image_bound','terminate_denied','vm_read_denied','vm_write_denied','vm_operation_denied','duplicate_handle_denied','create_thread_denied','write_dac_denied','write_owner_denied')
+ $expected = @('format') + $checks
+ $actual = @($value.PSObject.Properties.Name)
+ if ($actual.Count -ne $expected.Count -or (Compare-Object ($expected | Sort-Object) ($actual | Sort-Object))) { throw 'Unexpected process-access evidence fields.' }
+ if (($value.format -isnot [int] -and $value.format -isnot [long]) -or $value.format -ne 1) { throw 'Unexpected process-access evidence format.' }
+ $result = [ordered]@{format=1}
+ foreach ($name in $checks) {
+  if ($value.$name -isnot [bool] -or -not $value.$name) { throw 'Process-access assertion failed.' }
+  $result[$name] = $true
+ }
+ return $result
+}
 function Resolve-ServiceAccountSid([string]$AccountName) {
  if ([string]::IsNullOrWhiteSpace($AccountName)) { return $null }
  # SCM's well-known LocalSystem alias resolves through the actual built-in

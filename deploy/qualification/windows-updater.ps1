@@ -184,6 +184,17 @@ try {
  $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid
  Assert-True ($owner.ReturnValue -eq 0 -and $owner.Sid -eq 'S-1-5-18' -and $process.ExecutablePath -ceq (Join-Path $target 'selfupdate.exe')) 'Updater actual PID/image/SID differs.'
  @{manager_sid=$sid;probe_sid=$sid;updater_sid=$owner.Sid;updater_pid=$service.ProcessId;state_owner_sid=$stateOwner} | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'identity-summary.json')
+ $stage = 'updater process access under manager SID'
+ $accessFile = Join-Path $data 'selfupdate\process-access.json'
+ $accessError = Join-Path $data 'selfupdate\process-access.err'
+ $accessProcess = Start-Process -FilePath $helper -ArgumentList 'process-access' -Credential $credential -RedirectStandardOutput $accessFile -RedirectStandardError $accessError -WindowStyle Hidden -PassThru
+ try {
+  if (-not $accessProcess.WaitForExit(30000)) { $accessProcess.Kill(); throw 'Manager-account process access probe timed out.' }
+  Assert-True ($accessProcess.ExitCode -eq 0) 'Manager-account process access probe failed.'
+ } finally { $accessProcess.Dispose() }
+ Assert-True ((Get-Item -LiteralPath $accessFile).Length -le 4096) 'Process-access evidence exceeds bound.'
+ $accessEvidence = Convert-ProcessAccessEvidence (Get-Content -LiteralPath $accessFile -Raw)
+ $accessEvidence | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'process-access-summary.json')
  $stage = 'installed API activation, negative health and interruption'
  & python (Join-Path $PSScriptRoot 'updater_api.py') --success-stage (Join-Path $data 'selfupdate\v0.0.2-stage.json') --negative-stage (Join-Path $data 'selfupdate\v0.0.3-stage.json') --initial-binary $InitialBinary --success-binary $SuccessBinary --negative-binary $NegativeBinary --expected-sid $sid --output $OutputDirectory | Tee-Object -FilePath (Join-Path $OutputDirectory 'api-assertions.txt')
  Assert-True ($LASTEXITCODE -eq 0) 'Installed API updater acceptance failed.'

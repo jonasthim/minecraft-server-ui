@@ -50,6 +50,11 @@ func run(ctx context.Context, args []string) error {
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	switch args[0] {
+	case "process-access":
+		if len(args) != 1 {
+			return errors.New("process access probe accepts no arguments")
+		}
+		return inspectUpdaterProcessAccess(ctx, os.Stdout)
 	case "prepare":
 		var c prepareConfig
 		f.StringVar(&c.Success, "success", "", "")
