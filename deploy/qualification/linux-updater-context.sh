@@ -458,14 +458,86 @@ PY
 }
 
 unit_preflight_absent() {
-    local name=$1 command=${2:-systemctl} installed loaded
-    if ! installed=$("$command" list-unit-files --no-legend --no-pager "$name" 2>/dev/null); then
+    local name=$1 command=${2:-systemctl} sentinel=systemd-journald.service installed loaded line unit state preset extra
+    local installed_rc loaded_rc
+    local installed_target=0 loaded_target=0 installed_sentinel=0 loaded_sentinel=0
+    preflight_installed_count=0
+    preflight_loaded_count=0
+    preflight_installed_sentinel=0
+    preflight_loaded_sentinel=0
+    preflight_state=query_failed
+    if installed=$("$command" list-unit-files --no-legend --no-pager "$name" "$sentinel" 2>/dev/null); then
+        installed_rc=0
+    else
+        installed_rc=$?
+    fi
+    if loaded=$("$command" list-units --all --no-legend --no-pager "$name" "$sentinel" 2>/dev/null); then
+        loaded_rc=0
+    else
+        loaded_rc=$?
+    fi
+    preflight_installed_exit=$installed_rc
+    preflight_loaded_exit=$loaded_rc
+    if (( installed_rc != 0 || loaded_rc != 0 )); then
+        preflight_installed_count=0
+        preflight_loaded_count=0
+        preflight_installed_sentinel=0
+        preflight_loaded_sentinel=0
+        preflight_state=query_failed
         return 2
     fi
-    if ! loaded=$("$command" list-units --all --no-legend --no-pager "$name" 2>/dev/null); then
+    if [[ ${#installed} -gt 16384 || ${#loaded} -gt 16384 ]]; then
+        preflight_installed_count=0
+        preflight_loaded_count=0
+        preflight_installed_sentinel=0
+        preflight_loaded_sentinel=0
+        preflight_state=query_failed
         return 2
     fi
-    [[ -z $installed && -z $loaded ]]
+    if [[ -n $installed ]]; then
+        while IFS= read -r line; do
+            [[ -n $line && ${#line} -le 4096 ]] || { preflight_state=query_failed; return 2; }
+            read -r unit state preset extra <<<"$line"
+            [[ -n $unit && -n $state && -n $preset ]] || { preflight_state=query_failed; return 2; }
+            if [[ $unit == "$name" ]]; then ((installed_target+=1)) || true
+            elif [[ $unit == "$sentinel" ]]; then ((installed_sentinel+=1)) || true
+            else preflight_state=query_failed; return 2
+            fi
+        done <<<"$installed"
+    fi
+    if [[ -n $loaded ]]; then
+        while IFS= read -r line; do
+            [[ -n $line && ${#line} -le 4096 ]] || { preflight_state=query_failed; return 2; }
+            read -r unit state preset extra <<<"$line"
+            [[ -n $unit && -n $state && -n $preset ]] || { preflight_state=query_failed; return 2; }
+            if [[ $unit == "$name" ]]; then ((loaded_target+=1)) || true
+            elif [[ $unit == "$sentinel" ]]; then ((loaded_sentinel+=1)) || true
+            else preflight_state=query_failed; return 2
+            fi
+        done <<<"$loaded"
+    fi
+    preflight_installed_count=$installed_target
+    preflight_loaded_count=$loaded_target
+    preflight_installed_sentinel=$installed_sentinel
+    preflight_loaded_sentinel=$loaded_sentinel
+    if (( installed_sentinel != 1 || loaded_sentinel != 1 )); then
+        preflight_state=query_failed
+        return 2
+    fi
+    if (( installed_target != 0 || loaded_target != 0 )); then
+        preflight_state=unit_present
+        return 1
+    fi
+    preflight_state=absent
+    return 0
+}
+
+write_preflight_result() {
+    local destination=$1
+    printf '{"scope":"linux-updater-capability-preflight","status":"%s","installed_exit":%s,"loaded_exit":%s,"installed_matches":%s,"loaded_matches":%s,"installed_sentinel_matches":%s,"loaded_sentinel_matches":%s}\n' \
+        "$preflight_state" "$preflight_installed_exit" "$preflight_loaded_exit" \
+        "$preflight_installed_count" "$preflight_loaded_count" "$preflight_installed_sentinel" "$preflight_loaded_sentinel" >"$destination"
+    chmod 0644 -- "$destination"
 }
 
 loaded_probe_uses_owned_fragment() {
@@ -542,35 +614,63 @@ create_unit_file() {
 }
 
 pure_preflight_test() {
+    local fixture_result fixture_json
     fixture_installed=
     fixture_loaded=
+    fixture_sentinel=1
     fixture_files_exit=0
     fixture_units_exit=0
     fixture_systemctl() {
+        local output=
         case $1 in
             list-unit-files)
                 [[ $fixture_files_exit == 0 ]] || return 1
-                printf '%s' "$fixture_installed"
+                [[ $fixture_sentinel == 1 ]] && output='systemd-journald.service static -'
+                [[ -z $fixture_installed ]] || output+="${output:+$'\n'}$fixture_installed"
                 ;;
             list-units)
                 [[ $fixture_units_exit == 0 ]] || return 1
-                printf '%s' "$fixture_loaded"
+                [[ $fixture_sentinel == 1 ]] && output='systemd-journald.service loaded active running Journal Service'
+                [[ -z $fixture_loaded ]] || output+="${output:+$'\n'}$fixture_loaded"
                 ;;
             *) return 1 ;;
         esac
+        [[ -n $output ]] || return 1
+        printf '%s' "$output"
     }
     unit_preflight_absent fixed.service fixture_systemctl || return 1
+    [[ $preflight_state == absent && $preflight_installed_exit == 0 && $preflight_loaded_exit == 0 &&
+       $preflight_installed_count == 0 && $preflight_loaded_count == 0 &&
+       $preflight_installed_sentinel == 1 && $preflight_loaded_sentinel == 1 ]] || return 1
     fixture_installed='fixed.service enabled enabled'
     if unit_preflight_absent fixed.service fixture_systemctl; then return 1; fi
+    [[ $preflight_state == unit_present && $preflight_installed_count == 1 && $preflight_loaded_count == 0 &&
+       $preflight_installed_sentinel == 1 && $preflight_loaded_sentinel == 1 ]] || return 1
     fixture_installed=
     fixture_loaded='fixed.service loaded inactive dead'
     if unit_preflight_absent fixed.service fixture_systemctl; then return 1; fi
+    [[ $preflight_state == unit_present && $preflight_installed_count == 0 && $preflight_loaded_count == 1 &&
+       $preflight_installed_sentinel == 1 && $preflight_loaded_sentinel == 1 ]] || return 1
     fixture_loaded=
     fixture_files_exit=1
-    if unit_preflight_absent fixed.service fixture_systemctl; then return 1; fi
+    if unit_preflight_absent fixed.service fixture_systemctl; then return 1; else [[ $? == 2 ]] || return 1; fi
+    [[ $preflight_state == query_failed && $preflight_installed_exit == 1 && $preflight_loaded_exit == 0 &&
+       $preflight_installed_count == 0 && $preflight_loaded_count == 0 ]] || return 1
     fixture_files_exit=0
     fixture_units_exit=1
-    if unit_preflight_absent fixed.service fixture_systemctl; then return 1; fi
+    if unit_preflight_absent fixed.service fixture_systemctl; then return 1; else [[ $? == 2 ]] || return 1; fi
+    [[ $preflight_state == query_failed && $preflight_installed_exit == 0 && $preflight_loaded_exit == 1 &&
+       $preflight_installed_count == 0 && $preflight_loaded_count == 0 ]] || return 1
+    fixture_units_exit=0
+    fixture_sentinel=0
+    if unit_preflight_absent fixed.service fixture_systemctl; then return 1; else [[ $? == 2 ]] || return 1; fi
+    [[ $preflight_state == query_failed && $preflight_installed_exit == 1 && $preflight_loaded_exit == 1 &&
+       $preflight_installed_count == 0 && $preflight_loaded_count == 0 &&
+       $preflight_installed_sentinel == 0 && $preflight_loaded_sentinel == 0 ]] || return 1
+    fixture_result=$fixture_dir/preflight.json
+    write_preflight_result "$fixture_result"
+    fixture_json=$(<"$fixture_result")
+    [[ $fixture_json == '{"scope":"linux-updater-capability-preflight","status":"query_failed","installed_exit":1,"loaded_exit":1,"installed_matches":0,"loaded_matches":0,"installed_sentinel_matches":0,"loaded_sentinel_matches":0}' ]] || return 1
 }
 
 if [[ ${1:-} == --pure-fixture && $# == 1 ]]; then
@@ -605,7 +705,11 @@ control=minecraft-ui-qualification-capability-control.service
 [[ -d $unit_dir && ! -L $unit_dir && ! -e $helper && ! -L $helper ]] || { echo 'Fixed probe path already exists.' >&2; exit 2; }
 for name in "$baseline" "$control"; do
     [[ ! -e $unit_dir/$name && ! -L $unit_dir/$name ]] || { echo 'Fixed probe unit path already exists.' >&2; exit 2; }
-    unit_preflight_absent "$name" || { echo 'Fixed probe unit is installed/loaded or systemd preflight failed.' >&2; exit 2; }
+    if ! unit_preflight_absent "$name"; then
+        write_preflight_result "$output/result.json"
+        echo 'Fixed probe unit preflight refused; see bounded result metadata.' >&2
+        exit 2
+    fi
 done
 getent passwd nobody >/dev/null || { echo 'Existing nobody account required.' >&2; exit 2; }
 

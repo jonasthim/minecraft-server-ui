@@ -6,6 +6,43 @@ Run [39043683105](https://github.com/jonasthim/minecraft-server-ui/actions/runs/
 
 The updater and recovery source units both set `User=root`, `Group=root`, `RestrictSUIDSGID=true`, and `NoNewPrivileges=true`. They do not declare `CapabilityBoundingSet=`, `PrivateUsers=`, or `SystemCallFilter=`. The proposed probe runs only on a fresh hosted Ubuntu 24.04 runner and does not invoke the installed updater.
 
+## Preflight follow-up
+
+Hosted run `39045804905`, job `117434166142`, stopped before creating probe
+files. Its log contains only the combined message `Fixed probe unit is
+installed/loaded or systemd preflight failed.` The available artifact contains
+runner metadata but no `result.json` from the probe script. It therefore does
+not distinguish an installed matching unit, a loaded matching unit, or a
+failed `systemctl` query.
+
+The official [systemctl reference](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html)
+describes `list-unit-files` as listing installed unit files and `list-units`
+as listing loaded units. A source check against systemd v255's
+[`systemctl-list-unit-files.c`](https://raw.githubusercontent.com/systemd/systemd/v255/src/systemctl/systemctl-list-unit-files.c)
+shows the command returns `-ENOENT` when its filtered result count is zero.
+That makes an exact-name query unsuitable for proving expected absence. The
+hosted log does not identify which query returned nonzero, but on a fresh
+runner the absent fixed unit files are expected, so this is a concrete
+preflight defect consistent with the failure.
+
+The preflight now supplies both the fixed target name and the known
+`systemd-journald.service` sentinel to each systemctl listing. It requires the
+sentinel to appear exactly once in each successful query, then counts only the
+exact target name. This keeps installed-unit and loaded-transient refusal
+checks while allowing an absent target to be distinguished from a failed
+query. The exact two-name result strings are rejected above 16 KiB total or
+4 KiB per line, parsed into fixed counts, and never retained raw. On refusal, `result.json` contains only
+the fixed status, both numeric exit statuses, target counts, and sentinel
+counts; the existing workflow already uploads that file. A missing sentinel,
+unexpected row, oversize output, or command error still fails closed.
+
+Pure fixtures verify the three distinct outcomes (`absent`, `unit_present`,
+`query_failed`), including a simulated `-ENOENT` for an empty exact filter and
+successful sentinel-backed empty-target results. They check exit/count
+metadata for failures from either query. The hosted run's exact query statuses
+remain unavailable, but the source-level no-match behavior that made the
+preflight reject expected absence is established.
+
 ## Probe design
 
 [linux-updater-context.sh](../../deploy/qualification/linux-updater-context.sh) installs two uniquely named, temporary oneshot units that copy the updater unit's sandbox directives and run a fixed Python probe in both `ExecStartPre` and `ExecStart`. Each marker contains finite enums only. The probe captures the calling thread's effective UID/GID state, capability membership for `CAP_SETUID` and `CAP_SETGID` across the five Linux capability sets, `NoNewPrivileges`, seccomp mode, securebits, bounded UID-map classification, and safe metadata categories for the updater binary, probe, Python interpreter, and `runuser` executable. It also tries two short-lived child transitions to the pre-existing `nobody` account: `setuid` only, then the `setgroups`/`setgid`/`setuid` sequence used by `runuser`. The child is killed and reaped after a fixed deadline; its pipe EOF is not treated as process completion.
