@@ -12,6 +12,16 @@ var usernamePattern = regexp.MustCompile(`^[a-z0-9._-]+$`)
 
 var emailPattern = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
 
+// NormalizeUsername shares the account identity rules with offline recovery.
+func NormalizeUsername(username string) (string, error) {
+	return normalizeUsername(username)
+}
+
+// ValidatePassword shares the existing local credential policy with recovery.
+func ValidatePassword(password string) error {
+	return validatePassword(password)
+}
+
 // normalizeUsername lowercases and validates a username, matching the
 // SetupRequest/CreateUserRequest schema (2..32 chars, [a-z0-9._-]).
 func normalizeUsername(username string) (string, error) {
