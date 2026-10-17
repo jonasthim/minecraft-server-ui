@@ -7,7 +7,10 @@ import contextlib
 from email.message import Message
 import io
 import json
+from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 import urllib.request
 import urllib.response
 
@@ -107,6 +110,87 @@ class UpdaterClientTests(unittest.TestCase):
         self.assertEqual([item[0] for item in transport.requests], ["/api/v1/auth/me"])
         self.assertEqual(transport.accepted, 0)
         self.assertEqual(session.addheaders, original)
+
+
+class UpdaterDiagnosticTests(unittest.TestCase):
+    def test_unexpected_terminal_is_reported_without_waiting_for_timeout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            (state / "activation.json").write_text(json.dumps({"request": {"stage_id": "a" * 64}, "phase": "aborted"}))
+            with mock.patch.object(updater.time, "monotonic", side_effect=[0, 0, 311]), mock.patch.object(updater.time, "sleep"):
+                with self.assertRaisesRegex(RuntimeError, "^unexpected native updater terminal state$"):
+                    updater.wait_terminal(state, "a" * 64, "healthy")
+
+    def test_retryable_partial_json_can_reach_expected_terminal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            journal = state / "activation.json"
+            journal.write_text("{")
+            expected = {"request": {"stage_id": "a" * 64}, "phase": "healthy"}
+            with mock.patch.object(updater.time, "monotonic", side_effect=[0, 0, 1]), mock.patch.object(
+                    updater.time, "sleep", side_effect=lambda _: journal.write_text(json.dumps(expected))):
+                self.assertEqual(updater.wait_terminal(state, "a" * 64, "healthy"), expected)
+
+    def test_timeout_retains_last_safe_phase_with_no_control_secrets(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            private = "private-must-never-appear"
+            journal = {"request": {"stage_id": "a" * 64, "actor_id": 123, "requested_at": private},
+                       "phase": "replacing", "nonce": private, "error": private, "rollback_attempted": False,
+                       "prior": {"version": "v0.0.1", "schema": 19, "sha256": "b" * 64},
+                       "candidate": {"version": "v0.0.2", "schema": 19, "sha256": "c" * 64}}
+            (state / "activation.json").write_text(json.dumps(journal))
+            with mock.patch.object(updater.time, "monotonic", side_effect=[0, 311]):
+                with self.assertRaisesRegex(RuntimeError, "^native updater terminal state timed out$"):
+                    updater.wait_terminal(state, "a" * 64, "healthy", state)
+            body = (state / "activation-state-summary.json").read_text()
+            evidence = json.loads(body)
+            self.assertEqual(evidence, {"journal": "present", "stage_id": "a" * 64, "phase": "replacing",
+                                       "rollback_attempted": False, "prior": journal["prior"], "candidate": journal["candidate"]})
+            self.assertNotIn(private, body)
+            self.assertNotIn("actor", body)
+            self.assertNotIn("nonce", body)
+
+    def test_aborted_terminal_retains_phase_and_fails_immediately(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            (state / "activation.json").write_text(json.dumps({"request": {"stage_id": "a" * 64}, "phase": "aborted"}))
+            with mock.patch.object(updater.time, "monotonic", side_effect=[0, 0]):
+                with self.assertRaisesRegex(RuntimeError, "^unexpected native updater terminal state$"):
+                    updater.wait_terminal(state, "a" * 64, "healthy", state)
+            self.assertEqual(json.loads((state / "activation-state-summary.json").read_text())["phase"], "aborted")
+
+    def test_journal_diagnostics_bound_input_and_filter_arbitrary_values(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            path = state / "activation.json"
+            cases = [(None, "absent"), ("{", "malformed"), ("x" * 16385, "oversized"),
+                     ("[]", "malformed"), ("[" * 2000 + "]" * 2000, "malformed")]
+            for raw, expected in cases:
+                if raw is not None:
+                    path.write_text(raw)
+                updater.write_journal_evidence(state, state)
+                self.assertEqual(json.loads((state / "activation-state-summary.json").read_text()), {"journal": expected})
+            path.write_text(json.dumps({"phase": ["private"], "request": {"stage_id": "private"},
+                                        "rollback_attempted": "private", "prior": {"version": "private", "schema": True, "sha256": "Z" * 64},
+                                        "candidate": "private", "nonce": "private"}))
+            updater.write_journal_evidence(state, state)
+            body = (state / "activation-state-summary.json").read_text()
+            self.assertNotIn("private", body)
+            self.assertEqual(json.loads(body)["prior"], {"version": "unexpected", "schema": None, "sha256": None})
+            self.assertEqual(json.loads(body)["phase"], "unrecognized")
+
+    def test_initial_status_keeps_primitive_allowlist_and_fixed_reason_only(self):
+        self.assertEqual(updater.safe_initial_status({"current_version": "v0.0.1", "schema": 19,
+            "trust_configured": True, "activation_available": False,
+            "disabled_reason": "The native update and recovery service is not installed or ready.",
+            "stages": [{"private": "private"}]}), {"current_version": "v0.0.1", "schema": 19,
+            "trust_configured": True, "activation_available": False, "disabled_reason": "native_not_ready"})
+        body = json.dumps(updater.safe_initial_status({"current_version": "private", "schema": True,
+            "trust_configured": "private", "activation_available": {"private": "private"}, "disabled_reason": ["private"]}))
+        self.assertNotIn("private", body)
+        self.assertEqual(json.loads(body), {"current_version": "unexpected", "schema": None,
+            "trust_configured": None, "activation_available": None, "disabled_reason": "unrecognized"})
 
 
 if __name__ == "__main__":

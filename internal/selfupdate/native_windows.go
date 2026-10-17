@@ -539,6 +539,39 @@ type windowsUpdater struct {
 	busy  bool
 }
 
+// SCM service-specific failure codes contain only a fixed operation and an
+// optional 16-bit Win32 code. Never include error text, paths, SIDs or requests.
+const (
+	windowsUpdaterRecovery uint8 = iota + 1
+	windowsUpdaterRecoveryDeadline
+	windowsUpdaterAccount
+	windowsUpdaterDescriptor
+	windowsUpdaterPipeCreate
+	windowsUpdaterPipeConnect
+)
+
+type windowsUpdaterFailure struct {
+	stage uint8
+	cause error
+}
+
+func (e *windowsUpdaterFailure) Error() string { return "native Windows updater operation failed" }
+func (e *windowsUpdaterFailure) Unwrap() error { return e.cause }
+
+func windowsUpdaterExitCode(err error) uint32 {
+	var failure *windowsUpdaterFailure
+	stage := uint8(255)
+	if errors.As(err, &failure) {
+		stage = failure.stage
+	}
+	var native windows.Errno
+	var code uint32
+	if errors.As(err, &native) && native <= 0xffff {
+		code = uint32(native)
+	}
+	return 0x4d000000 | uint32(stage)<<16 | code
+}
+
 func (s *windowsUpdater) Execute(_ []string, requests <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
 	status <- svc.Status{State: svc.StartPending}
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -555,11 +588,11 @@ recoveryLoop:
 		select {
 		case err := <-recovered:
 			if err != nil {
-				return true, 1
+				return true, windowsUpdaterExitCode(&windowsUpdaterFailure{windowsUpdaterRecovery, err})
 			}
 			break recoveryLoop
 		case <-recoveryCtx.Done():
-			return true, 1
+			return true, windowsUpdaterExitCode(&windowsUpdaterFailure{windowsUpdaterRecoveryDeadline, recoveryCtx.Err()})
 		case <-progress.C:
 			checkpoint++
 			status <- svc.Status{State: svc.StartPending, CheckPoint: checkpoint, WaitHint: 60000}
@@ -572,7 +605,7 @@ recoveryLoop:
 		select {
 		case err := <-done:
 			if err != nil {
-				return true, 1
+				return true, windowsUpdaterExitCode(err)
 			}
 			return false, 0
 		case change := <-requests:
@@ -646,34 +679,24 @@ func (s *windowsUpdater) accountSID(ctx context.Context) (string, error) {
 func (s *windowsUpdater) servePipe(ctx context.Context) error {
 	sid, err := s.accountSID(ctx)
 	if err != nil {
-		return err
+		return &windowsUpdaterFailure{windowsUpdaterAccount, err}
 	}
 	descriptor, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;" + sid + ")")
 	if err != nil {
-		return err
+		return &windowsUpdaterFailure{windowsUpdaterDescriptor, err}
 	}
 	name, _ := windows.UTF16PtrFromString(updaterPipe)
 	for {
-		security := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: descriptor}
-		handle, err := windows.CreateNamedPipe(name, windows.PIPE_ACCESS_DUPLEX|windows.FILE_FLAG_FIRST_PIPE_INSTANCE, windows.PIPE_TYPE_MESSAGE|windows.PIPE_READMODE_MESSAGE|windows.PIPE_NOWAIT|windows.PIPE_REJECT_REMOTE_CLIENTS, 1, 128, 128, 1000, &security)
+		handle, err := createWindowsUpdaterPipe(name, descriptor)
 		if err != nil {
-			return err
+			return &windowsUpdaterFailure{windowsUpdaterPipeCreate, err}
 		}
-		for {
-			err = windows.ConnectNamedPipe(handle, nil)
-			if err == nil || err == windows.ERROR_PIPE_CONNECTED {
-				break
-			}
-			if err != windows.ERROR_PIPE_LISTENING {
-				windows.CloseHandle(handle)
-				return err
-			}
-			select {
-			case <-ctx.Done():
-				windows.CloseHandle(handle)
+		if err := connectWindowsUpdaterPipe(ctx, handle); err != nil {
+			windows.CloseHandle(handle)
+			if err == ctx.Err() {
 				return nil
-			case <-time.After(50 * time.Millisecond):
 			}
+			return &windowsUpdaterFailure{windowsUpdaterPipeConnect, err}
 		}
 		var clientPID uint32
 		reply := "refused"
@@ -716,6 +739,32 @@ func (s *windowsUpdater) servePipe(ctx context.Context) error {
 		}
 	}
 }
+
+// Keep the production flags and connection-state handling in the same helpers
+// exercised by native tests on uniquely named pipes. This diagnostic extraction
+// deliberately preserves the current nonblocking connection behavior.
+func createWindowsUpdaterPipe(name *uint16, descriptor *windows.SECURITY_DESCRIPTOR) (windows.Handle, error) {
+	security := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: descriptor}
+	return windows.CreateNamedPipe(name, windows.PIPE_ACCESS_DUPLEX|windows.FILE_FLAG_FIRST_PIPE_INSTANCE, windows.PIPE_TYPE_MESSAGE|windows.PIPE_READMODE_MESSAGE|windows.PIPE_NOWAIT|windows.PIPE_REJECT_REMOTE_CLIENTS, 1, 128, 128, 1000, &security)
+}
+
+func connectWindowsUpdaterPipe(ctx context.Context, handle windows.Handle) error {
+	for {
+		err := windows.ConnectNamedPipe(handle, nil)
+		if err == nil || err == windows.ERROR_PIPE_CONNECTED {
+			return nil
+		}
+		if err != windows.ERROR_PIPE_LISTENING {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 func (s *windowsUpdater) accept(ctx context.Context, command string) string {
 	if command == "status" {
 		if _, err := LoadNativeTrust(ctx); err != nil {

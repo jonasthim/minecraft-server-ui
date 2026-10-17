@@ -100,7 +100,7 @@ cleanup() {
     record_permissions after-prefix-restoration || status=1
     rm -rf "$scratch"
     printf '{"exit_code":%s,"scope":"installed-updater-fixture-acquisition","cleanup_checked":true}\n' "$status" >"$output/result.json"
-    for report in result.json acceptance-summary.json interruption-boundary.json api-assertions.txt manager-unit-summary.txt updater-unit-summary.txt journal-summary.json input-summary.txt permission-summary-linux.json; do
+    for report in result.json acceptance-summary.json interruption-boundary.json activation-state-summary.json initial-update-status.json api-assertions.txt manager-unit-summary.txt updater-unit-summary.txt journal-summary.json input-summary.txt permission-summary-linux.json; do
         [[ ! -f $output/$report ]] || chmod 0644 "$output/$report"
     done
     exit "$status"

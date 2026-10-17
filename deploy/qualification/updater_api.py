@@ -103,6 +103,82 @@ def read_journal(state):
         return None
 
 
+def safe_initial_status(value):
+    """Retain only bounded fixture identity, primitive flags and fixed reasons."""
+    if not isinstance(value, dict):
+        value = {}
+    reasons = {
+        "": "none",
+        "Release source and verification keys have not been configured.": "trust_unconfigured",
+        "Development builds require a reviewed native installation before manager activation.": "development_install_required",
+        "The native update and recovery service is not installed or ready.": "native_not_ready",
+        "Manager activation requires the canonical native data directory and 127.0.0.1:8080; custom deployments require manual maintenance.": "noncanonical_install",
+    }
+    reason = value.get("disabled_reason")
+    return {
+        "current_version": safe_fixture_version(value.get("current_version")),
+        "schema": safe_schema(value.get("schema")),
+        "trust_configured": safe_boolean(value.get("trust_configured")),
+        "activation_available": safe_boolean(value.get("activation_available")),
+        "disabled_reason": reasons.get(reason, "unrecognized") if isinstance(reason, str) else "unrecognized",
+    }
+
+
+def safe_fixture_version(value):
+    return value if isinstance(value, str) and value in {"v0.0.1", "v0.0.2", "v0.0.3"} else "unexpected"
+
+
+def safe_schema(value):
+    return value if type(value) is int and 0 < value <= 2147483647 else None
+
+
+def safe_boolean(value):
+    return value if type(value) is bool else None
+
+
+def safe_hash(value):
+    return value if isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value) else None
+
+
+def write_journal_evidence(state, output):
+    """Read at most 16 KiB; never retain nonce, actor, timestamps or error text."""
+    evidence = {"journal": "unreadable"}
+    try:
+        with open(state / "activation.json", "rb") as stream:
+            body = stream.read(16385)
+        if len(body) > 16384:
+            evidence = {"journal": "oversized"}
+        else:
+            journal = json.loads(body)
+            if not isinstance(journal, dict):
+                raise ValueError("not an object")
+            phase = journal.get("phase")
+            phases = {"prepared", "stopped", "replacing", "candidate", "healthy", "rollback", "rolled_back", "aborted"}
+            request = journal.get("request")
+            evidence = {
+                "journal": "present",
+                "phase": phase if isinstance(phase, str) and phase in phases else "unrecognized",
+                "stage_id": safe_hash(request.get("stage_id")) if isinstance(request, dict) else None,
+                "rollback_attempted": safe_boolean(journal.get("rollback_attempted")),
+            }
+            for name in ("prior", "candidate"):
+                installed = journal.get(name)
+                installed = installed if isinstance(installed, dict) else {}
+                evidence[name] = {"version": safe_fixture_version(installed.get("version")),
+                                  "schema": safe_schema(installed.get("schema")),
+                                  "sha256": safe_hash(installed.get("sha256"))}
+    except FileNotFoundError:
+        evidence = {"journal": "absent"}
+    except (ValueError, UnicodeError, RecursionError):
+        evidence = {"journal": "malformed"}
+    except OSError:
+        pass
+    try:
+        (output / "activation-state-summary.json").write_text(json.dumps(evidence, indent=2))
+    except OSError:
+        raise RuntimeError("native updater diagnostic could not be retained") from None
+
+
 def wait_for(predicate, seconds, message):
     until = time.monotonic() + seconds
     while time.monotonic() < until:
@@ -116,14 +192,20 @@ def wait_for(predicate, seconds, message):
     raise RuntimeError(message)
 
 
-def wait_terminal(state, stage, phase):
+def wait_terminal(state, stage, phase, output=None):
     def terminal():
         journal = read_journal(state)
         if journal and journal["request"]["stage_id"] == stage and journal["phase"] in {"healthy", "rolled_back", "aborted"}:
-            require(journal["phase"] == phase, "unexpected native updater terminal state")
             return journal
         return None
-    return wait_for(terminal, 310, "native updater terminal state timed out")
+    try:
+        journal = wait_for(terminal, 310, "native updater terminal state timed out")
+        # Definitive terminal rejection must escape the transient read retry.
+        require(journal["phase"] == phase, "unexpected native updater terminal state")
+        return journal
+    finally:
+        if output is not None:
+            write_journal_evidence(state, output)
 
 
 def main():
@@ -166,6 +248,7 @@ def main():
         dummy_pid = int(native(["systemctl", "show", "--property=MainPID", "--value", "minecraft-ui-qualification-independent.service"], 15))
         require(dummy_pid > 1, "independent dummy service absent")
     initial_status = request(session, "/api/v1/system/update")
+    (output / "initial-update-status.json").write_text(json.dumps(safe_initial_status(initial_status), indent=2))
     require(initial_status["current_version"] == "v0.0.1" and initial_status["schema"] == schema and initial_status["trust_configured"] and initial_status["activation_available"], "initial installed updater unavailable or identity differs")
     summaries = []
 
@@ -202,7 +285,7 @@ def main():
         return actual
 
     apply_update(session, success["id"])
-    journal = wait_terminal(state, success["id"], "healthy")
+    journal = wait_terminal(state, success["id"], "healthy", output)
     require(not journal["rollback_attempted"], "successful activation attempted rollback")
     after_success = preserved("genuine-success", "healthy", success_hash, first["pid"])
 
@@ -215,7 +298,7 @@ def main():
             return snapshot(negative_hash, args.expected_sid)
         return None
     negative_process = wait_for(negative_running, 80, "negative candidate never reached actual native service")
-    wait_terminal(state, negative["id"], "rolled_back")
+    wait_terminal(state, negative["id"], "rolled_back", output)
     after_rollback = preserved("negative-health-rollback", "rolled_back", negative_hash, negative_process["pid"])
     require(after_success["pid"] not in installed_pids(), "prior manager process survived negative activation")
 
@@ -242,7 +325,7 @@ def main():
     # Shipping systemd recovery dependency / SCM updater startup performs the
     # recovery; the harness never edits executable or activation state.
     control("start")
-    wait_terminal(state, negative["id"], "rolled_back")
+    wait_terminal(state, negative["id"], "rolled_back", output)
     preserved("interrupted-candidate-recovery", "rolled_back", negative_hash, interrupted_process["pid"])
     require(after_rollback["pid"] not in installed_pids(), "old manager survived interrupted activation")
     control("stop")
