@@ -112,7 +112,36 @@ func runWith(ctx context.Context, d driver, operation mode, options ApplyOptions
 		return manualResult(tx, "record_prepared"), err
 	}
 
-	current := *cloneTransaction(tx)
+	return executePrepared(ctx, opCtx, d, *cloneTransaction(tx))
+}
+
+// continuePreparedWith is the independent worker's entry point after the
+// invoking process has durably prepared the transaction and released the
+// updater lock. The native wrapper must reacquire that same lock and validate
+// its own executable and the bound intent before calling this function.
+// Recovery remains rollback-only; this continuation accepts only an explicit
+// matching transaction that has not started any native effects.
+func continuePreparedWith(ctx context.Context, d driver, id string) (Result, error) {
+	if ctx == nil || d == nil || !lowerHex(id, 64) {
+		return Result{Outcome: OutcomeManualRepair, FailedStage: "preflight"}, fail("preflight", errors.New("invalid installer worker invocation"))
+	}
+	opCtx, cancel := context.WithTimeout(ctx, operationBudget)
+	defer cancel()
+	if err := opCtx.Err(); err != nil {
+		return Result{Outcome: OutcomeManualRepair, FailedStage: "preflight"}, fail("preflight", err)
+	}
+	loaded, err := d.Load(opCtx)
+	if err != nil {
+		return Result{Outcome: OutcomeManualRepair, FailedStage: "recover"}, fail("recover", err)
+	}
+	tx := cloneTransaction(loaded)
+	if tx == nil || tx.ID != id || validateTransaction(tx, tx.Mode, phasePrepared) != nil {
+		return Result{Outcome: OutcomeManualRepair, FailedStage: "recover"}, fail("recover", errors.New("prepared installer transaction does not match worker"))
+	}
+	return executePrepared(ctx, opCtx, d, *tx)
+}
+
+func executePrepared(ctx, opCtx context.Context, d driver, current transaction) (Result, error) {
 	if err := advance(opCtx, d, &current, phaseQuiescing, ""); err != nil {
 		return rollbackAfterFailure(ctx, d, current, "record_quiescing", err)
 	}
