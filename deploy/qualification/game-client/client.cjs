@@ -119,8 +119,15 @@ function main () {
   let failed = false
   let state
   const emit = value => process.stdout.write(JSON.stringify(value) + '\n')
+  const suppressed = []
+  // Synchronous final record so the harness learns why a closing client exited.
+  process.on('exit', exitCode => {
+    try {
+      require('node:fs').writeSync(1, JSON.stringify({ event: 'exit', exit_code: exitCode, failed, closing, suppressed: suppressed.slice(0, 8) }) + '\n')
+    } catch {}
+  })
   const fail = code => {
-    if (failed || closing) return
+    if (failed || closing) { if (suppressed.length < 8) suppressed.push(code); return }
     failed = true
     emit({ event: 'failure', code })
     closing = true

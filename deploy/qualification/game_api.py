@@ -627,7 +627,8 @@ class GameClient:
         self.errors = []
         self.thread = threading.Thread(target=self._read, daemon=True)
         self.thread.start()
-        threading.Thread(target=self._read_errors, daemon=True).start()
+        self.error_thread = threading.Thread(target=self._read_errors, daemon=True)
+        self.error_thread.start()
 
     def _read_errors(self):
         # Bounded local client stderr (offline loopback client; no credentials),
@@ -706,6 +707,8 @@ class GameClient:
             self.process.stdin.flush()
             code = self.process.wait(timeout=8)
             if code != 0:
+                self.thread.join(timeout=5)
+                self.error_thread.join(timeout=5)
                 failure = self._pending_failure()
                 self.print_errors()
                 raise Failure("client_disconnect_failed", client_failure=failure, exit_code=code)
@@ -730,6 +733,9 @@ class GameClient:
             if isinstance(value, dict) and value.get("event") == "failure":
                 code = value.get("code")
                 return code if isinstance(code, str) and re.fullmatch(r"client_[a-z_]{1,64}", code) else "client_unclassified"
+            if isinstance(value, dict) and value.get("event") == "exit":
+                codes = [c for c in value.get("suppressed") or [] if isinstance(c, str) and re.fullmatch(r"client_[a-z_]{1,64}", c)]
+                return "exit_" + ("failed" if value.get("failed") is True else "unfailed") + ("_suppressed_" + "_".join(codes) if codes else "")
 
 def yaw_matches(actual, expected):
     return isinstance(actual, (float, int)) and math.isfinite(actual) and abs((actual - expected + 180) % 360 - 180) < .01
