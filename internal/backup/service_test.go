@@ -29,6 +29,7 @@ type testNative struct {
 	log      string
 	fail     string
 	expiry   time.Time
+	onFlush  func()
 }
 
 func (n *testNative) Identity(context.Context, string) (domain.ProcessIdentity, error) {
@@ -81,6 +82,9 @@ func (n *testNative) Command(ctx context.Context, id domain.ProcessIdentity, tex
 	switch text {
 	case "save-all flush":
 		response = "Saved the game"
+		if n.onFlush != nil {
+			n.onFlush()
+		}
 	case "save-on":
 		response = "Automatic saving is now enabled"
 	}
@@ -528,5 +532,70 @@ func TestRestoreRejectsUnresolvedConfigAndLifecycleRecoveryBeforeSafety(t *testi
 				}
 			}
 		})
+	}
+}
+
+// Legacy servers (observed with 1.12.2) do not write level.dat until their first
+// save. Online backups must judge the world layout after the acknowledged
+// flush, not before it.
+func TestLiveBackupJudgesWorldLayoutAfterAcknowledgedFlush(t *testing.T) {
+	s, native, _ := fixture(t, true)
+	dirs, _ := s.paths.For("alpha")
+	level := filepath.Join(dirs.Server, "world/level.dat")
+	if err := os.Remove(level); err != nil {
+		t.Fatal(err)
+	}
+	native.onFlush = func() { os.WriteFile(level, []byte("flushed"), 0600) }
+	record := makeBackup(t, s, domain.BackupWorld)
+	if record.State != domain.BackupReady {
+		t.Fatalf("record %+v", record)
+	}
+	download, err := s.Download(t.Context(), "alpha", record.ID, testActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer download.Close()
+	manifest, err := validateArchive(t.Context(), download.File, record.SizeBytes, defaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range manifest.Files {
+		found = found || f.Path == "world/level.dat"
+	}
+	if !found || !manifest.WorldPresent {
+		t.Fatalf("flushed level.dat missing from manifest: present=%v", manifest.WorldPresent)
+	}
+}
+
+func TestLiveBackupStillRefusesWorldAmbiguousAfterFlush(t *testing.T) {
+	s, native, _ := fixture(t, true)
+	dirs, _ := s.paths.For("alpha")
+	if err := os.Remove(filepath.Join(dirs.Server, "world/level.dat")); err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.Enqueue(t.Context(), "alpha", domain.BackupWorld, domain.BackupManual, testActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.queue.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, s.queue, job.ID); done.State != domain.JobFailed {
+		t.Fatalf("ambiguous world backed up: %+v", done)
+	}
+	native.mu.Lock()
+	defer native.mu.Unlock()
+	if len(native.steps) > 0 && native.steps[len(native.steps)-1] != "save-on" {
+		t.Fatalf("saving not re-enabled after refusal: %v", native.steps)
+	}
+	records, err := s.List(t.Context(), "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range records {
+		if r.State == domain.BackupReady {
+			t.Fatal("published a backup of an ambiguous world")
+		}
 	}
 }

@@ -192,6 +192,39 @@ func (s *Service) runCreate(ctx context.Context, e *jobs.Execution) (result erro
 	_, err := s.CreateForJob(ctx, e, input.Kind, input.Trigger)
 	return err
 }
+// worldRoots validates a discovered layout for capture and returns the safe
+// top-level world roots (the main world plus Paper sibling dimensions).
+func worldRoots(discovery world.Discovery, kind domain.BackupKind) ([]string, error) {
+	if discovery.State != "present" && !(kind == domain.BackupFull && discovery.State == "absent") {
+		return nil, domain.E(domain.CodeConflict, "saved world layout is absent, ambiguous or unsupported")
+	}
+	roots := []string{}
+	if discovery.State == "present" {
+		roots = append(roots, discovery.LevelName)
+		if discovery.Layout == "paper_legacy" {
+			for _, d := range discovery.Dimensions {
+				if d.State != "present" {
+					continue
+				}
+				root := strings.Split(d.Path, "/")[0]
+				found := false
+				for _, v := range roots {
+					found = found || v == root
+				}
+				if !found {
+					roots = append(roots, root)
+				}
+			}
+		}
+	}
+	for _, root := range roots {
+		if safePath(root) != nil || strings.Contains(root, "/") {
+			return nil, errCorrupt
+		}
+	}
+	return roots, nil
+}
+
 func (s *Service) failAt(phase string) error {
 	if s.fault != nil {
 		return s.fault(phase)
@@ -349,31 +382,16 @@ func (s *Service) capture(ctx context.Context, id, job string, actor domain.User
 	if err != nil {
 		return err
 	}
-	if discovery.State != "present" && !(kind == domain.BackupFull && discovery.State == "absent") {
-		return domain.E(domain.CodeConflict, "saved world layout is absent, ambiguous or unsupported")
-	}
-	roots := []string{}
-	if discovery.State == "present" {
-		roots = append(roots, discovery.LevelName)
-		if discovery.Layout == "paper_legacy" {
-			for _, d := range discovery.Dimensions {
-				if d.State == "present" {
-					root := strings.Split(d.Path, "/")[0]
-					found := false
-					for _, v := range roots {
-						found = found || v == root
-					}
-					if !found {
-						roots = append(roots, root)
-					}
-				}
-			}
+	var roots []string
+	if online {
+		// Legacy servers write level.dat only on their first save, so a live
+		// world is judged again after the acknowledged flush inside the lease.
+		// Only a layout this version can never have is refused up front.
+		if discovery.State == "unsupported" {
+			return domain.E(domain.CodeConflict, "saved world layout is absent, ambiguous or unsupported")
 		}
-	}
-	for _, root := range roots {
-		if safePath(root) != nil || strings.Contains(root, "/") {
-			return errCorrupt
-		}
+	} else if roots, err = worldRoots(discovery, kind); err != nil {
+		return err
 	}
 	if err = phase(ctx, "preparing_backup", 10); err != nil {
 		return err
@@ -485,6 +503,14 @@ func (s *Service) capture(ctx context.Context, id, job string, actor domain.User
 	err = capture(ctx, func(ctx context.Context) error {
 		if err := s.failAt("capture"); err != nil {
 			return err
+		}
+		if online {
+			if discovery, err = s.worlds.Discover(ctx, id); err != nil {
+				return err
+			}
+			if roots, err = worldRoots(discovery, kind); err != nil {
+				return err
+			}
 		}
 		source, err := openSource(dirs.Server)
 		if err != nil {
