@@ -55,7 +55,7 @@ func (s *Service) RecoverSaving(ctx context.Context, identity domain.ProcessIden
 		if cursorErr != nil {
 			return domain.E(domain.CodeUnavailable, "save-on attempted but fresh acknowledgement cursor unavailable")
 		}
-		out, e := cursor.wait(operation, ackSaveOn(detail.Instance.MinecraftVersion))
+		out, e := cursor.wait(operation, detail.Instance.Flavor, ackSaveOn(detail.Instance.MinecraftVersion))
 		if e != nil {
 			return e
 		}
@@ -109,7 +109,7 @@ func (s *Session) ReleaseSavingForBackup(ctx context.Context, leaseID string) (d
 	if cursorErr != nil {
 		return result, domain.E(domain.CodeUnavailable, "save-on attempted but cleanup cursor is unavailable")
 	}
-	out, err := cursor.wait(operation, ackSaveOn(scope.detail.Instance.MinecraftVersion))
+	out, err := cursor.wait(operation, scope.detail.Instance.Flavor, ackSaveOn(scope.detail.Instance.MinecraftVersion))
 	if err != nil {
 		return result, err
 	}

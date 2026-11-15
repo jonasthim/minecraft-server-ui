@@ -1,6 +1,10 @@
 package console
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jonasthim/minecraft-server-ui/internal/domain"
+)
 
 func TestNativeMessageAcceptsMinecraftLoggerTagsOnly(t *testing.T) {
 	for line, want := range map[string]string{
@@ -43,5 +47,27 @@ func TestSystemChatFeedbackIsVersionGated(t *testing.T) {
 	}
 	if got, ok = nativeMessage("[12:40:17] [Server thread/INFO]: <Alex> System chat: Automatic saving is now enabled"); ok && ackSaveOn("26.3")(got) {
 		t.Fatal("player chat spoofed a save-on acknowledgement")
+	}
+}
+
+// Paper's console layout has no thread name. It is accepted only for Paper
+// instances; plugin output carries a [Plugin] prefix and stays rejected.
+func TestPaperConsoleLayoutIsFlavorGated(t *testing.T) {
+	line := "[13:26:00 INFO]: Automatic saving is now enabled"
+	if got, ok := nativeMessageFor(domain.FlavorPaper, line); !ok || got != "Automatic saving is now enabled" {
+		t.Fatalf("paper: %q %v", got, ok)
+	}
+	for _, flavor := range []domain.Flavor{domain.FlavorVanilla, domain.FlavorFabric, domain.FlavorForge, domain.FlavorNeoForge} {
+		if _, ok := nativeMessageFor(flavor, line); ok {
+			t.Fatalf("%s accepted Paper layout", flavor)
+		}
+	}
+	for _, spoof := range []string{"[13:26:00 INFO]: [SomePlugin] Automatic saving is now enabled", "[13:26:00 INFO]: <Alex> Automatic saving is now enabled", "[13:26:00 WARN]: Automatic saving is now enabled"} {
+		if got, ok := nativeMessageFor(domain.FlavorPaper, spoof); ok && ackSaveOn("1.21.10")(got) {
+			t.Fatalf("spoof accepted: %q", spoof)
+		}
+	}
+	if got, ok := nativeMessageFor(domain.FlavorPaper, "[13:26:00] [Server thread/INFO]: Saved the game"); !ok || got != "Saved the game" {
+		t.Fatalf("paper vanilla layout: %q %v", got, ok)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jonasthim/minecraft-server-ui/internal/console"
+	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 )
 
 const parserVersion = "native-en-1.12.2-1.21.9-1.21.11-26.3-v1"
@@ -29,6 +30,19 @@ var simpleDeaths = map[string]bool{
 	"went off with a bang": true,
 }
 var attributedDeath = regexp.MustCompile(`^(?:was slain by|was shot by|was fireballed by|was killed by|was blown up by) [^\[\]<>]{1,256}$`)
+
+var paperLine = regexp.MustCompile(`^\[([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9]) INFO\]: (.*)$`)
+
+// parseFor applies the strict vanilla grammar to Paper's thread-less console
+// layout only for Paper instances; chat and [Plugin] lines still fail it.
+func parseFor(flavor domain.Flavor, line string) (Event, bool) {
+	if flavor == domain.FlavorPaper {
+		if m := paperLine.FindStringSubmatch(line); m != nil {
+			line = "[" + m[1] + ":" + m[2] + ":" + m[3] + "] [Server thread/INFO]: " + m[4]
+		}
+	}
+	return parse(line)
+}
 
 func parse(line string) (Event, bool) {
 	if len(line) > 1024 || !utf8.ValidString(line) || strings.Contains(strings.ToLower(line), "[redacted]") || strings.IndexFunc(line, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0 {

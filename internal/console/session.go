@@ -165,7 +165,7 @@ func (scope *sessionScope) legacy(ctx context.Context, command string, ack ackno
 		return result, domain.E(domain.CodeUnavailable, "native console command could not be delivered")
 	}
 	result.Received = true
-	output, err := cursor.wait(ctx, ack)
+	output, err := cursor.wait(ctx, scope.detail.Instance.Flavor, ack)
 	if err != nil {
 		return result, err
 	}
@@ -341,7 +341,7 @@ func (s *Session) ReleaseSaving(ctx context.Context, leaseID string) (domain.Com
 	if cursorErr != nil {
 		return result, domain.E(domain.CodeUnavailable, "save-on was attempted but its fresh acknowledgement cursor is unavailable")
 	}
-	out, err := cursor.wait(operation, ackSaveOn(scope.detail.Instance.MinecraftVersion))
+	out, err := cursor.wait(operation, scope.detail.Instance.Flavor, ackSaveOn(scope.detail.Instance.MinecraftVersion))
 	if err != nil {
 		return result, err
 	}

@@ -1,6 +1,10 @@
 package game
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jonasthim/minecraft-server-ui/internal/domain"
+)
 
 func TestNativeGrammarAndChatCannotSpoof(t *testing.T) {
 	for _, tc := range []struct{ body, kind, name string }{
@@ -69,6 +73,21 @@ func TestForgeLoggerTagIsAcceptedOnlyForMinecraftLoggers(t *testing.T) {
 	} {
 		if e, ok := parse(line); ok {
 			t.Fatalf("untrusted logger accepted %q: %#v", line, e)
+		}
+	}
+}
+
+func TestPaperLayoutIsParsedOnlyForPaper(t *testing.T) {
+	line := "[12:34:56 INFO]: Alex drowned"
+	if e, ok := parseFor(domain.FlavorPaper, line); !ok || e.Kind != "death" || e.Player.Name != "Alex" {
+		t.Fatalf("paper death: %#v %v", e, ok)
+	}
+	if _, ok := parseFor(domain.FlavorVanilla, line); ok {
+		t.Fatal("vanilla accepted Paper layout")
+	}
+	for _, spoof := range []string{"[12:34:56 INFO]: <Alex> Steve drowned", "[12:34:56 INFO]: [SomePlugin] Alex drowned", "[12:34:56 WARN]: Alex drowned"} {
+		if e, ok := parseFor(domain.FlavorPaper, spoof); ok {
+			t.Fatalf("paper spoof accepted %q: %#v", spoof, e)
 		}
 	}
 }

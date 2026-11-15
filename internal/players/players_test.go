@@ -399,3 +399,14 @@ func TestPlayerEventRejectsSystemChatJoins(t *testing.T) {
 		t.Fatalf("system chat join accepted: %v", m)
 	}
 }
+
+func TestPaperPlayerEventPatternIsThreadless(t *testing.T) {
+	if m := paperPlayerEvent.FindStringSubmatch("[13:25:52 INFO]: AcceptanceBot joined the game"); len(m) != 3 || m[1] != "AcceptanceBot" {
+		t.Fatalf("paper join not parsed: %v", m)
+	}
+	for _, spoof := range []string{"[13:25:52 INFO]: <Steve> Alex joined the game", "[13:25:52 INFO]: [Plugin] Alex joined the game"} {
+		if m := paperPlayerEvent.FindStringSubmatch(spoof); m != nil {
+			t.Fatalf("spoof accepted: %v", m)
+		}
+	}
+}

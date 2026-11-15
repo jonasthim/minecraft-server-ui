@@ -153,7 +153,7 @@ func (c *rawCursor) poll(ctx context.Context) ([]string, error) {
 
 type acknowledgement func(string) bool
 
-func (c *rawCursor) wait(ctx context.Context, oracle acknowledgement) (string, error) {
+func (c *rawCursor) wait(ctx context.Context, flavor domain.Flavor, oracle acknowledgement) (string, error) {
 	timer := time.NewTicker(20 * time.Millisecond)
 	defer timer.Stop()
 	for {
@@ -162,7 +162,7 @@ func (c *rawCursor) wait(ctx context.Context, oracle acknowledgement) (string, e
 			return "", err
 		}
 		for _, line := range lines {
-			message, ok := nativeMessage(line)
+			message, ok := nativeMessageFor(flavor, line)
 			if ok && oracle(message) {
 				return message, nil
 			}
@@ -179,6 +179,22 @@ func (c *rawCursor) wait(ctx context.Context, oracle acknowledgement) (string, e
 // Chat/player lines, historical Done and arbitrary plugin-prefixed text fail.
 // Forge/NeoForge layouts add the logger; only Minecraft's own loggers count.
 var nativePrefix = regexp.MustCompile(`^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] \[Server thread/INFO\](?: \[minecraft/[A-Za-z]{1,40}\])?: (.*)$`)
+
+// Paper's console layout omits the thread; accepted only for Paper instances.
+// Paper plugin output is prefixed with [Plugin] and fails the exact oracles.
+var paperPrefix = regexp.MustCompile(`^\[[0-9]{2}:[0-9]{2}:[0-9]{2} INFO\]: (.*)$`)
+
+func nativeMessageFor(flavor domain.Flavor, line string) (string, bool) {
+	if message, ok := nativeMessage(line); ok {
+		return message, true
+	}
+	if flavor == domain.FlavorPaper {
+		if m := paperPrefix.FindStringSubmatch(line); len(m) == 2 {
+			return m[1], true
+		}
+	}
+	return "", false
+}
 
 func nativeMessage(line string) (string, bool) {
 	m := nativePrefix.FindStringSubmatch(line)

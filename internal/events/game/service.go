@@ -144,7 +144,7 @@ func (s *Service) Poll(ctx context.Context, id string) error {
 			e = gapEvent(id, line.ID, line.CreatedAt, "A redacted console line was excluded from event interpretation.")
 			ok = true
 		} else {
-			e, ok = parse(line.Message)
+			e, ok = parseFor(detail.Instance.Flavor, line.Message)
 		}
 		if !ok {
 			continue

@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -26,7 +27,7 @@ func TestFreshLegacyAcknowledgement(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
-	if _, err = cursor.wait(ctx, ackList("1.21.9")); err == nil {
+	if _, err = cursor.wait(ctx, domain.FlavorVanilla, ackList("1.21.9")); err == nil {
 		t.Fatal("historical list acknowledged new command")
 	}
 	cursor, err = newRawCursor(t.Context(), h.paths, "test")
@@ -38,7 +39,7 @@ func TestFreshLegacyAcknowledgement(t *testing.T) {
 	f.Close()
 	ctx2, cancel2 := context.WithTimeout(t.Context(), time.Second)
 	defer cancel2()
-	out, err := cursor.wait(ctx2, ackList("1.21.9"))
+	out, err := cursor.wait(ctx2, domain.FlavorVanilla, ackList("1.21.9"))
 	if err != nil || strings.Contains(out, "<Player>") {
 		t.Fatalf("fresh native response %q %v", out, err)
 	}
@@ -53,7 +54,7 @@ func TestLegacySaveFlushAndRotationGap(t *testing.T) {
 	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
 	_, _ = f.WriteString("[12:00:00] [Server thread/INFO]: Flushing completed\n[12:00:00] [Server thread/INFO]: Saved the world\n")
 	f.Close()
-	out, err := cursor.wait(t.Context(), ackFlush("1.12.2"))
+	out, err := cursor.wait(t.Context(), domain.FlavorVanilla, ackFlush("1.12.2"))
 	if err != nil || !strings.Contains(out, "Saved the world") {
 		t.Fatalf("legacy flush %q %v", out, err)
 	}
@@ -63,7 +64,7 @@ func TestLegacySaveFlushAndRotationGap(t *testing.T) {
 	}
 	_ = os.Remove(path)
 	_ = os.WriteFile(path, []byte("[12:00:00] [Server thread/INFO]: Saved the game\n"), 0600)
-	if _, err = cursor.wait(t.Context(), ackFlush("1.21.9")); err == nil {
+	if _, err = cursor.wait(t.Context(), domain.FlavorVanilla, ackFlush("1.21.9")); err == nil {
 		t.Fatal("lost cursor accepted acknowledgement")
 	}
 }

@@ -153,6 +153,7 @@ func (s *Service) record(ctx context.Context, snapshot console.PlayerSnapshot) e
 
 // Log timestamps are ingestion observation times. We do not manufacture dates
 // from HH:MM:SS console prefixes or join UUIDs to names from another event.
+var paperPlayerEvent = regexp.MustCompile(`^\[[0-9]{2}:[0-9]{2}:[0-9]{2} INFO\]: ([A-Za-z0-9_]{1,16}) (joined|left) the game$`)
 var playerEvent = regexp.MustCompile(`^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] \[Server thread/INFO\](?: \[minecraft/[A-Za-z]{1,40}\])?: ([A-Za-z0-9_]{1,16}) (joined|left) the game$`)
 
 func (s *Service) consumeLogs(ctx context.Context, id string) error {
@@ -164,11 +165,13 @@ func (s *Service) consumeLogs(ctx context.Context, id string) error {
 	}
 	status, statusErr := s.console.Status(ctx, id)
 	sourceGap := statusErr != nil || !status.LogsAvailable
+	var flavor domain.Flavor
 	if s.instances != nil {
 		detail, e := s.instances.Get(ctx, id)
 		if e != nil {
 			return e
 		}
+		flavor = detail.Instance.Flavor
 		if detail.Instance.MinecraftVersion == "26.3" || strings.HasPrefix(detail.Instance.MinecraftVersion, "26.3.") {
 			sourceGap = true
 		}
@@ -184,6 +187,10 @@ func (s *Service) consumeLogs(ctx context.Context, id string) error {
 	defer tx.Rollback()
 	for _, line := range page.Lines {
 		m := playerEvent.FindStringSubmatch(line.Message)
+		if m == nil && flavor == domain.FlavorPaper {
+			// Paper's console layout omits the thread; Paper instances only.
+			m = paperPlayerEvent.FindStringSubmatch(line.Message)
+		}
 		if len(m) == 0 && !line.Gap {
 			continue
 		}
