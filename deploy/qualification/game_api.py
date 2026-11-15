@@ -687,7 +687,9 @@ class GameClient:
         try:
             self.process.stdin.write("close\n")
             self.process.stdin.flush()
-            require(self.process.wait(timeout=8) == 0, "client_disconnect_failed")
+            code = self.process.wait(timeout=8)
+            if code != 0:
+                raise Failure("client_disconnect_failed", client_failure=self._pending_failure(), exit_code=code)
         except (BrokenPipeError, subprocess.TimeoutExpired):
             self.process.kill()
             self.process.wait(timeout=8)
@@ -696,6 +698,18 @@ class GameClient:
             self.process.stdin.close()
             self.process.stdout.close()
 
+    def _pending_failure(self):
+        # Report only the client's fixed failure code, if it emitted one.
+        while True:
+            try:
+                value = self.lines.get(timeout=1)
+            except queue.Empty:
+                return "none_reported"
+            if value is None:
+                return "none_reported"
+            if isinstance(value, dict) and value.get("event") == "failure":
+                code = value.get("code")
+                return code if isinstance(code, str) and re.fullmatch(r"client_[a-z_]{1,64}", code) else "client_unclassified"
 
 def yaw_matches(actual, expected):
     return isinstance(actual, (float, int)) and math.isfinite(actual) and abs((actual - expected + 180) % 360 - 180) < .01

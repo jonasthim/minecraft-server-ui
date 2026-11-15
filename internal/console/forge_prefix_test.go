@@ -22,3 +22,14 @@ func TestNativeMessageAcceptsMinecraftLoggerTagsOnly(t *testing.T) {
 		}
 	}
 }
+
+// 26.3 routes command feedback to the console as system chat.
+func TestNativeMessageStrips26_3SystemChatPrefix(t *testing.T) {
+	got, ok := nativeMessage("[12:40:17] [Server thread/INFO]: System chat: Automatic saving is now enabled")
+	if !ok || got != "Automatic saving is now enabled" || !ackSaveOn("26.3")(got) {
+		t.Fatalf("got %q %v", got, ok)
+	}
+	if got, ok = nativeMessage("[12:40:17] [Server thread/INFO]: <Alex> System chat: Automatic saving is now enabled"); ok && ackSaveOn("26.3")(got) {
+		t.Fatal("player chat spoofed a save-on acknowledgement")
+	}
+}

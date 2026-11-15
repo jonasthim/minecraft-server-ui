@@ -178,7 +178,8 @@ func (c *rawCursor) wait(ctx context.Context, oracle acknowledgement) (string, e
 // Only command feedback attributed to the server thread is an acknowledgement.
 // Chat/player lines, historical Done and arbitrary plugin-prefixed text fail.
 // Forge/NeoForge layouts add the logger; only Minecraft's own loggers count.
-var nativePrefix = regexp.MustCompile(`^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] \[Server thread/INFO\](?: \[minecraft/[A-Za-z]{1,40}\])?: (.*)$`)
+// 26.3 prefixes console command feedback with "System chat: ".
+var nativePrefix = regexp.MustCompile(`^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] \[Server thread/INFO\](?: \[minecraft/[A-Za-z]{1,40}\])?: (?:System chat: )?(.*)$`)
 
 func nativeMessage(line string) (string, bool) {
 	m := nativePrefix.FindStringSubmatch(line)

@@ -129,6 +129,7 @@ function main () {
     setTimeout(() => process.exit(1), 100).unref()
     process.exitCode = 1
   }
+  process.on('uncaughtException', () => { closing = false; fail('client_uncaught_exception') })
   const mc = require('minecraft-protocol')
   // Fixed loopback target; never accept a caller-controlled address or port.
   const client = mc.createClient({ host: '127.0.0.1', port: 25565, username: 'AcceptanceBot',
