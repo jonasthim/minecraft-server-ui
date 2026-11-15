@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Support x64 Debian/Ubuntu with systemd and Windows 10/11 or Windows Server 2019+.
+- Support x64 Ubuntu 22.04/24.04 with systemd (Debian not qualified; ruling 2026-11-15) and Windows 10/11 or Windows Server 2019+.
 - Support Minecraft 1.12.2+; Fabric 1.14+; NeoForge 1.20.2+ only in tested combinations.
 - Use managed, hash-verified Adoptium Temurin runtimes per instance.
 - Roles are viewer, operator, admin; enforce API authorization and redacted audit logging.

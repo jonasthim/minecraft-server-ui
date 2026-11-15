@@ -1,6 +1,6 @@
 # Linux installer completion
 
-Status: the six-scenario Ubuntu installer milestone is accepted following integrator evidence review. The approved design and Task30 preservation/recovery rules remain binding. Broader Task30 and release qualification remain open; Windows and the wider Minecraft matrix are outside this Linux milestone.
+Status: the six-scenario Ubuntu installer milestone is accepted following integrator evidence review. The approved design and Task30 preservation/recovery rules remain binding. Ruling 2026-11-15: the Linux target is Ubuntu 22.04/24.04 only; Debian is not qualified and reboot/power-loss coverage is a recorded, accepted gap. With that scope the Linux portion of Task30 is complete. Windows installer qualification, the Minecraft matrix and stable publication remain open.
 
 ## Deliverable
 

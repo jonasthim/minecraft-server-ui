@@ -12,7 +12,7 @@ Read `docs/superpowers/specs/2026-10-16-minecraft-server-ui-design.md`, `docs/su
 
 ## Product requirements
 
-- Native Go + React 19/Mantine + SQLite embedded application. Linux x64 Debian/Ubuntu systemd and Windows 10/11 or Server 2019+ are release targets. Native Windows execution environment is not yet established; cross-compilation is not qualification.
+- Native Go + React 19/Mantine + SQLite embedded application. Linux x64 Ubuntu 22.04/24.04 systemd (Debian is not a qualified target; ruling 2026-11-15) and Windows 10/11 or Server 2019+ are release targets. Native Windows execution environment is not yet established; cross-compilation is not qualification.
 - Minecraft Java only: Vanilla, Paper, Fabric, Forge, NeoForge; Minecraft 1.12.2+, Fabric 1.14+, NeoForge 1.20.2+ in tested combinations. Managed Adoptium Temurin downloads must use official metadata and verified hashes.
 - Multiple local instances have isolated directories, ports, runtime, worlds/dimensions, logs, and backups.
 - Global roles: viewer/operator/admin. Enforce API and stream role checks. Audit sensitive mutations and redact secrets, tokens, credentials, and sensitive config.

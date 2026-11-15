@@ -6,7 +6,7 @@ Status: approved product design, 2026-10-16. Source of truth for implementation.
 
 A public, self-hosted native Go and React 19/Mantine application for installing, configuring, supervising, updating, backing up, and observing multiple Minecraft Java Edition servers on one host. It embeds the web UI in the Go executable and uses SQLite. The product is Minecraft-themed and uses the MIT license and notice in the repository `LICENSE`.
 
-Supported hosts are x64 Debian/Ubuntu under systemd and Windows 10/11 or Windows Server 2019 and later. Native Windows execution is a release requirement; the development environment for exercising it is not yet established. Linux game processes must survive a manager restart. On Windows, the manager gracefully stops servers, waits for exit, and starts those configured for autostart when the manager starts.
+Supported hosts are x64 Ubuntu 22.04/24.04 under systemd (Debian is not qualified; ruling 2026-11-15) and Windows 10/11 or Windows Server 2019 and later. Native Windows execution is a release requirement; the development environment for exercising it is not yet established. Linux game processes must survive a manager restart. On Windows, the manager gracefully stops servers, waits for exit, and starts those configured for autostart when the manager starts.
 
 Each instance owns its server files, runtime, configuration, ports, worlds, dimensions, logs, and backups. Server types are Vanilla, Paper, Fabric, Forge, and NeoForge, only for tested compatible combinations. Support starts at Minecraft 1.12.2; Fabric starts at 1.14; NeoForge starts at 1.20.2. Do not claim a version or loader combination supported until its installation, launch, update, and recovery paths have been tested.
 

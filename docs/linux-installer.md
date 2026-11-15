@@ -2,7 +2,7 @@
 
 This installer is in development. All six native installer scenarios pass on Ubuntu 22.04 and 24.04: lifecycle, retained failure/retry and ordinary updater coexistence on each host. See the [reviewed evidence and tested scope](reports/task30-linux-qualification.md#accepted-ubuntu-installer-milestone). Debian and broader release qualification remain open; no stable release is published by these instructions.
 
-The implemented layout targets local x64 Debian/Ubuntu with systemd. The manager listens on `127.0.0.1:8080` and stores data under `/var/lib/minecraft-ui`. Installation requires root, existing systemd, sudo/runuser and standard account tools. The installer authenticates downloaded inputs before changing services or deployment files. It does not open a firewall port.
+The implemented layout targets local x64 Ubuntu 22.04/24.04 with systemd. Debian is not qualified, and installer behaviour after power loss or an abrupt reboot is untested. The manager listens on `127.0.0.1:8080` and stores data under `/var/lib/minecraft-ui`. Installation requires root, existing systemd, sudo/runuser and standard account tools. The installer authenticates downloaded inputs before changing services or deployment files. It does not open a firewall port.
 
 Deployment filesystems must support Linux anonymous temporary files (`O_TMPFILE`) and the required `renameat2` operations. The installer copies and verifies files anonymously, records their identities, then publishes them. It refuses unsupported filesystems instead of leaving an unrecorded partial copy after interruption.
 
