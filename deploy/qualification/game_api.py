@@ -102,6 +102,7 @@ PERMISSION_PATHS = (
 )
 
 
+CREDENTIAL_HINT = re.compile(r"(?i)(passw|secret|token|bearer|api[-_ ]?key|authorization|cookie)")
 AUTHORED_MESSAGE = re.compile(r"[A-Za-z][A-Za-z ,;.()'-]{0,199}")
 
 
@@ -400,7 +401,10 @@ class API:
                     raise Failure("job_terminal_failure", **evidence)
                 return job
             time.sleep(1)
-        raise Failure("job_timeout")
+        phase = job.get("phase", "unknown") if isinstance(job, dict) else "unknown"
+        phase = phase if isinstance(phase, str) and re.fullmatch(r"[a-z_]{1,64}", phase) else "unclassified"
+        raise Failure("job_timeout", job_phase=phase, job_diagnostics=self.job_diagnostics(identifier),
+                      console_diagnostics=self.console_diagnostics())
 
     def job_diagnostics(self, identifier):
         # Job.error is intentionally generic. Classify only exact authored
@@ -512,6 +516,35 @@ class API:
                 if match and int(match.group(1)) <= 65535:
                     codes.add("stop_native_os_error_" + match.group(1))
         return sorted(codes) or ["unclassified"]
+
+    def console_tail(self, keep=80, pages=40):
+        # Failure-only CI diagnostics for a disposable runner. Lines come from
+        # the shipping console API, which already applies product redaction;
+        # this adds a printable-ASCII filter, a per-line bound and a drop rule
+        # for anything that looks like a credential assignment.
+        lines, cursor = [], 0
+        try:
+            for _ in range(pages):
+                page = self.request(PREFIX + "/console/logs?after=" + str(int(cursor)) + "&limit=500")
+                batch = page.get("lines") or []
+                for line in batch:
+                    text = line.get("message") if isinstance(line, dict) else None
+                    if isinstance(text, str):
+                        lines.append(text)
+                lines = lines[-keep:]
+                following = page.get("next_cursor")
+                if not batch or not isinstance(following, int) or following <= cursor:
+                    break
+                cursor = following
+        except Exception:
+            return ["console_tail_unavailable"]
+        safe = []
+        for text in lines:
+            text = "".join(c for c in text if 32 <= ord(c) < 127)[:240]
+            if CREDENTIAL_HINT.search(text):
+                text = "[line withheld: credential-like content]"
+            safe.append(text)
+        return safe
 
     def world_diagnostics(self):
         # Public discovery enums plus warning fingerprints only; never paths,
@@ -1105,6 +1138,9 @@ def execute(output, report, tuple_config):
     finally:
         if client:
             client.close()
+        if not report.get("passed") and api.csrf:
+            for text in api.console_tail():
+                print("CONSOLE " + text, file=sys.stderr, flush=True)
 
 
 def main():

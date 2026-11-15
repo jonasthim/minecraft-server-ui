@@ -404,6 +404,20 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
                                                          "world_diagnostics": {"available": True, "state": "unclassified", "layout": "unclassified",
                                                                                "dimension_states": [], "warnings": []}})
 
+    def test_console_tail_is_bounded_printable_and_withholds_credentials(self):
+        api = game.API()
+        pages = [{"lines": [{"message": "Starting minecraft server"}, {"message": "rcon.password=hunter2"},
+                            {"message": "bad\x1b[31m color" + "x" * 400}], "next_cursor": 3},
+                 {"lines": [], "next_cursor": 3}]
+        with mock.patch.object(api, "request", side_effect=pages):
+            tail = api.console_tail()
+        self.assertEqual(tail[0], "Starting minecraft server")
+        self.assertEqual(tail[1], "[line withheld: credential-like content]")
+        self.assertTrue(all(len(t) <= 240 and all(32 <= ord(c) < 127 for c in t) for t in tail))
+        self.assertNotIn("hunter2", json.dumps(tail))
+        with mock.patch.object(api, "request", side_effect=RuntimeError("x")):
+            self.assertEqual(api.console_tail(), ["console_tail_unavailable"])
+
     def test_world_diagnostics_report_enums_and_fingerprints_only(self):
         api = game.API()
         warning = "World directory has no regular level.dat save marker."
