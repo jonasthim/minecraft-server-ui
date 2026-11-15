@@ -15,7 +15,7 @@ const VERSION_CAPABILITIES = Object.freeze({
   '1.20.5': Object.freeze({ playerLoaded: false, chunkBatch: true, tickEnd: false }),
   '1.21.1': Object.freeze({ playerLoaded: false, chunkBatch: true, tickEnd: false }),
   '1.21.9': Object.freeze({ playerLoaded: true, chunkBatch: true, tickEnd: true }),
-  '1.21.11': Object.freeze({ playerLoaded: true, chunkBatch: true, tickEnd: true }),
+  '1.21.10': Object.freeze({ playerLoaded: true, chunkBatch: true, tickEnd: true }),
   '26.1': Object.freeze({ playerLoaded: true, chunkBatch: true, tickEnd: true })
 })
 

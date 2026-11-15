@@ -74,16 +74,16 @@ class Helpers(unittest.TestCase):
             self.assertEqual(draft['instance']['flavor'], game.TUPLES[version].flavor)
 
     def test_frozen_qualification_tuples_bind_version_java_and_evidence_scope(self):
-        self.assertEqual(set(game.TUPLES), {"1.12.2", "1.16.5", "1.18.2", "1.20.5", "1.21.9", "26.1", "26.3", "paper-1.21.11",
+        self.assertEqual(set(game.TUPLES), {"1.12.2", "1.16.5", "1.18.2", "1.20.5", "1.21.9", "26.1", "26.3", "paper-1.21.10",
                                             "fabric-1.21.9", "forge-1.20.1", "forge-1.12.2", "neoforge-1.21.1"})
         # Official Mojang javaVersion.majorVersion for each frozen tuple.
         self.assertEqual({v: t.java_major for v, t in game.TUPLES.items()},
-                         {"1.12.2": 8, "1.16.5": 8, "1.18.2": 17, "1.20.5": 21, "1.21.9": 21, "26.1": 25, "26.3": 25, "paper-1.21.11": 21,
+                         {"1.12.2": 8, "1.16.5": 8, "1.18.2": 17, "1.20.5": 21, "1.21.9": 21, "26.1": 25, "26.3": 25, "paper-1.21.10": 21,
                           "fabric-1.21.9": 21, "forge-1.20.1": 17, "forge-1.12.2": 8, "neoforge-1.21.1": 21})
         self.assertEqual(game.TUPLES["1.21.9"].selection(), {"flavor": "vanilla", "minecraft_version": "1.21.9"})
         self.assertEqual(game.TUPLES["forge-1.12.2"].selection(),
                          {"flavor": "forge", "minecraft_version": "1.12.2", "loader_version": "14.23.5.2859"})
-        self.assertEqual(game.TUPLES["paper-1.21.11"].scope, "paper-1.21.11-real-headless-game")
+        self.assertEqual(game.TUPLES["paper-1.21.10"].scope, "paper-1.21.10-real-headless-game")
         # 26.3 has no released protocol client; it is explicitly server-only.
         self.assertFalse(game.TUPLES["26.3"].client)
         self.assertTrue(all(t.client for k, t in game.TUPLES.items() if k != "26.3"))
@@ -737,7 +737,7 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
     def test_linux_and_windows_wrappers_allow_only_frozen_game_tuples(self):
         linux = (game.HERE / "linux-game.sh").read_text()
         windows = (game.HERE / "windows-game.ps1").read_text()
-        allowed = "1.12.2|1.16.5|1.18.2|1.20.5|1.21.9|26.1|paper-1.21.11|fabric-1.21.9|forge-1.20.1|forge-1.12.2|neoforge-1.21.1|26.3"
+        allowed = "1.12.2|1.16.5|1.18.2|1.20.5|1.21.9|26.1|paper-1.21.10|fabric-1.21.9|forge-1.20.1|forge-1.12.2|neoforge-1.21.1|26.3"
         self.assertIn("case \"$3\" in " + allowed + ")", linux)
         self.assertIn("[ValidateSet(" + ",".join("'" + v + "'" for v in allowed.split("|")) + ")]", windows)
         self.assertEqual(set(allowed.split("|")), set(game.TUPLES))

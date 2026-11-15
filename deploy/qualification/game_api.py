@@ -65,6 +65,8 @@ class QualificationTuple:
 
 # Vanilla tuple IDs are the version; loader tuples pin an exact upstream
 # loader/build chosen from official metadata (stable/recommended where offered).
+# Paper uses 1.21.10 (protocol 773, as vanilla 1.21.9): 1.21.9 has no stable
+# Paper build and the headless client's 1.21.11 data is not yet qualified.
 TUPLES = MappingProxyType({
     "1.12.2": QualificationTuple("1.12.2", 8, "vanilla-1.12.2-real-headless-game",
                                   MappingProxyType({"player_loaded": False, "chunk_batch": False, "tick_end": False}), None),
@@ -80,8 +82,8 @@ TUPLES = MappingProxyType({
                                   MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2, client=False),
     "26.1": QualificationTuple("26.1", 25, "vanilla-26.1-real-headless-game",
                                   MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2),
-    "paper-1.21.11": QualificationTuple("1.21.11", 21, "paper-1.21.11-real-headless-game",
-                                  MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2, "paper", "132"),
+    "paper-1.21.10": QualificationTuple("1.21.10", 21, "paper-1.21.10-real-headless-game",
+                                  MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2, "paper", "130"),
     "fabric-1.21.9": QualificationTuple("1.21.9", 21, "fabric-1.21.9-real-headless-game",
                                   MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2, "fabric", "0.20.1"),
     "forge-1.20.1": QualificationTuple("1.20.1", 17, "forge-1.20.1-real-headless-game",
@@ -1178,7 +1180,12 @@ def execute(output, report, tuple_config):
         phase("complete")
     finally:
         if client:
-            client.close()
+            try:
+                client.close()
+            except Failure:
+                # Never let cleanup replace the original failure.
+                if report.get("passed"):
+                    raise
         if not report.get("passed") and api.csrf:
             for text in api.console_tail():
                 print("CONSOLE " + text, file=sys.stderr, flush=True)

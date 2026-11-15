@@ -2,7 +2,7 @@
 param(
  [Parameter(Mandatory=$true)][string]$Binary,
  [Parameter(Mandatory=$true)][string]$OutputDirectory,
- [Parameter(Mandatory=$true)][ValidateSet('1.12.2','1.16.5','1.18.2','1.20.5','1.21.9','26.1','paper-1.21.11','fabric-1.21.9','forge-1.20.1','forge-1.12.2','neoforge-1.21.1','26.3')][string]$MinecraftVersion
+ [Parameter(Mandatory=$true)][ValidateSet('1.12.2','1.16.5','1.18.2','1.20.5','1.21.9','26.1','paper-1.21.10','fabric-1.21.9','forge-1.20.1','forge-1.12.2','neoforge-1.21.1','26.3')][string]$MinecraftVersion
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
