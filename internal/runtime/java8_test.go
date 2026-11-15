@@ -6,6 +6,7 @@ import (
 	"github.com/jonasthim/minecraft-server-ui/internal/domain"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -18,12 +19,13 @@ func TestJava8TemurinJVMVendor(t *testing.T) {
 		valid                 bool
 	}{
 		{"official", "Temurin", "1.8.0_504-b01", 8, true},
+		{"laterOfficialUpdate", "Temurin", "1.8.0_512-b07", 8, true},
 		{"wrongVendor", "Oracle", "1.8.0_504-b01", 8, false},
-		{"differentBuild", "Temurin", "1.8.0_504-b02", 8, false},
+		{"malformedLegacyBuild", "Temurin", "1.8.0_504", 8, false},
 		{"differentMajor", "Temurin", "11.0.1+1", 11, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			version := "1.8.0_504"
+			version := strings.SplitN(tc.version, "-", 2)[0]
 			if tc.major != 8 {
 				version = "11.0.1"
 			}
@@ -31,7 +33,7 @@ func TestJava8TemurinJVMVendor(t *testing.T) {
 			if (err == nil) != tc.valid {
 				t.Fatalf("parse validity=%t want %t: %v", err == nil, tc.valid, err)
 			}
-			if tc.valid && (got.Major != 8 || got.Version != "1.8.0_504-b01") {
+			if tc.valid && (got.Major != 8 || got.Version != tc.version) {
 				t.Fatalf("unexpected JVM: %+v", got)
 			}
 			m := New(t.TempDir(), nil)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,11 +47,17 @@ func temurinVendor(vendor string, major int, version string) bool {
 	return vendor == "Eclipse Adoptium" || (vendor == "Eclipse Foundation" && major == 16 && version == "16.0.2+7")
 }
 
-// The verified 8u504-b01 JVM reports Temurin, although its release implementor
-// is Eclipse Adoptium. Keep this JVM-only alias pinned to that observed build.
+// Official Temurin 8 JVMs (observed from 8u504-b01) report the vendor
+// "Temurin", although their release implementor is Eclipse Adoptium. The alias
+// is JVM-only and limited to well-formed Java 8 build versions: callers still
+// require the official origin, verified archive hash, an Eclipse Adoptium
+// release file and an exact match with the selected metadata version. It was
+// previously pinned to one build, which rejected every later official update.
 func temurinJVMVendor(vendor string, major int, version string) bool {
-	return temurinVendor(vendor, major, version) || (vendor == "Temurin" && major == 8 && version == "1.8.0_504-b01")
+	return temurinVendor(vendor, major, version) || (vendor == "Temurin" && major == 8 && legacyJava8Build.MatchString(version))
 }
+
+var legacyJava8Build = regexp.MustCompile(`^1\.8\.0_[0-9]{1,4}-b[0-9]{1,3}$`)
 
 func parseJVM(output string) (jvmInfo, error) {
 	properties := map[string]string{}
