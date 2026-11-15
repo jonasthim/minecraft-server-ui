@@ -50,8 +50,18 @@ class QualificationTuple:
     scope: str
     protocol_capabilities: object
     simulation_distance: object
+    flavor: str = "vanilla"
+    loader_version: str = ""
+
+    def selection(self):
+        value = {"flavor": self.flavor, "minecraft_version": self.minecraft_version}
+        if self.loader_version:
+            value["loader_version"] = self.loader_version
+        return value
 
 
+# Vanilla tuple IDs are the version; loader tuples pin an exact upstream
+# loader/build chosen from official metadata (stable/recommended where offered).
 TUPLES = MappingProxyType({
     "1.12.2": QualificationTuple("1.12.2", 8, "vanilla-1.12.2-real-headless-game",
                                   MappingProxyType({"player_loaded": False, "chunk_batch": False, "tick_end": False}), None),
@@ -65,6 +75,16 @@ TUPLES = MappingProxyType({
                                   MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2),
     "26.1": QualificationTuple("26.1", 25, "vanilla-26.1-real-headless-game",
                                   MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2),
+    "paper-1.21.11": QualificationTuple("1.21.11", 21, "paper-1.21.11-real-headless-game",
+                                  MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2, "paper", "132"),
+    "fabric-1.21.9": QualificationTuple("1.21.9", 21, "fabric-1.21.9-real-headless-game",
+                                  MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2, "fabric", "0.20.1"),
+    "forge-1.20.1": QualificationTuple("1.20.1", 17, "forge-1.20.1-real-headless-game",
+                                  MappingProxyType({"player_loaded": False, "chunk_batch": False, "tick_end": False}), 2, "forge", "47.4.28"),
+    "forge-1.12.2": QualificationTuple("1.12.2", 8, "forge-1.12.2-real-headless-game",
+                                  MappingProxyType({"player_loaded": False, "chunk_batch": False, "tick_end": False}), None, "forge", "14.23.5.2859"),
+    "neoforge-1.21.1": QualificationTuple("1.21.1", 21, "neoforge-1.21.1-real-headless-game",
+                                  MappingProxyType({"player_loaded": False, "chunk_batch": True, "tick_end": False}), 2, "neoforge", "21.1.266"),
 })
 PROCESS_START_ID = re.compile(
     r"^(?:[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}:[0-9]{1,20}|"
@@ -967,14 +987,14 @@ def execute(output, report, tuple_config):
         # Version projection omits it from legacy server.properties.
         if tuple_config.simulation_distance is not None:
             game_config["simulation_distance"] = tuple_config.simulation_distance
-        draft = {"instance": {"id": INSTANCE, "name": "Disposable game acceptance", "flavor": "vanilla",
+        draft = {"instance": {"id": INSTANCE, "name": "Disposable game acceptance", "flavor": tuple_config.flavor,
                  "minecraft_version": tuple_config.minecraft_version, "java_major": tuple_config.java_major,
                  "memory_mib": 1536, "game_port": 25565}, "accept_eula": True, "config": game_config}
         detail = api.request("/api/v1/instances", draft, 201)["detail"]
         require(detail["eula"]["accepted"] is True, "eula_not_accepted")
         phase("official_resolve_install")
-        preview = api.request(PREFIX + "/lifecycle/preview", {"flavor": "vanilla", "minecraft_version": tuple_config.minecraft_version})
-        require(preview["selection"] == {"flavor": "vanilla", "minecraft_version": tuple_config.minecraft_version}, "preview_selection")
+        preview = api.request(PREFIX + "/lifecycle/preview", tuple_config.selection())
+        require(preview["selection"] == tuple_config.selection(), "preview_selection")
         require(preview["requirements"]["java_major"] == tuple_config.java_major, "preview_java")
         preview_id = safe_id(preview["id"])
         artifacts = []
@@ -1076,6 +1096,7 @@ def main():
     output = safe_directory(args.output)
     report = {"scope": tuple_config.scope, "passed": False,
               "phase": "preflight", "minecraft_version": tuple_config.minecraft_version,
+              "flavor": tuple_config.flavor, "loader_version": tuple_config.loader_version or None,
               "java_major": tuple_config.java_major, "os": "windows" if os.name == "nt" else "linux",
               "protocol_capabilities": dict(tuple_config.protocol_capabilities),
               "fixtures": ["disposable-empty-canonical-state", "eula-explicitly-accepted", "offline-auth-loopback-firewall", "creative-peaceful-world-seed-33", "player-view-yaw-marker"],

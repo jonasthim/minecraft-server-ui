@@ -8,21 +8,26 @@ on:
         type: boolean
         default: false
       minecraft_version:
-        description: Exact Vanilla qualification tuple
+        description: Exact qualification tuple (version, or flavor-version)
         required: true
         type: choice
         options:
-          - '1.21.9'
           - '1.12.2'
           - '1.16.5'
           - '1.18.2'
           - '1.20.5'
+          - '1.21.9'
           - '26.1'
+          - 'paper-1.21.11'
+          - 'fabric-1.21.9'
+          - 'forge-1.20.1'
+          - 'forge-1.12.2'
+          - 'neoforge-1.21.1'
 permissions:
   contents: read
 jobs:
   installed-game:
-    name: Vanilla ${{ inputs.minecraft_version }} on ${{ matrix.os }}
+    name: Game ${{ inputs.minecraft_version }} on ${{ matrix.os }}
     if: inputs.accept_minecraft_eula
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45

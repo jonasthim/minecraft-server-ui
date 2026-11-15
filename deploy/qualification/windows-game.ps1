@@ -2,7 +2,7 @@
 param(
  [Parameter(Mandatory=$true)][string]$Binary,
  [Parameter(Mandatory=$true)][string]$OutputDirectory,
- [Parameter(Mandatory=$true)][ValidateSet('1.12.2','1.16.5','1.18.2','1.20.5','1.21.9','26.1')][string]$MinecraftVersion
+ [Parameter(Mandatory=$true)][ValidateSet('1.12.2','1.16.5','1.18.2','1.20.5','1.21.9','26.1','paper-1.21.11','fabric-1.21.9','forge-1.20.1','forge-1.12.2','neoforge-1.21.1')][string]$MinecraftVersion
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -140,6 +140,6 @@ try {
  } catch { $failed = $true; Write-Output 'FAIL account_right_cleanup' }
  try { if ($firewallCreated) { Remove-NetFirewallRule -Name MinecraftGameAcceptance } } catch { $failed = $true; Write-Output 'FAIL firewall_cleanup' }
  try { Remove-Item -LiteralPath $scratch -Recurse -Force } catch { $failed = $true; Write-Output 'FAIL private_scratch_cleanup' }
- @{scope=('vanilla-' + $MinecraftVersion + '-real-headless-game');minecraft_version=$MinecraftVersion;failed=$failed;last_stage=$stage;manager_sha256=$binaryHash;failure_diagnostic=$failureDiagnostic} | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'result.json')
+ @{scope=($(if ($MinecraftVersion -match '^[0-9]') { 'vanilla-' + $MinecraftVersion } else { $MinecraftVersion }) + '-real-headless-game');minecraft_version=$MinecraftVersion;failed=$failed;last_stage=$stage;manager_sha256=$binaryHash;failure_diagnostic=$failureDiagnostic} | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'result.json')
 }
 if ($failed) { exit 1 }

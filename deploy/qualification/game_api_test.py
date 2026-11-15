@@ -70,13 +70,20 @@ class Helpers(unittest.TestCase):
             # InstanceConfig requires a valid stored desired value even when
             # Properties omits it for the selected server's capabilities.
             self.assertEqual(draft['config'].get('simulation_distance'), 2)
-            self.assertEqual(draft['instance']['minecraft_version'], version)
+            self.assertEqual(draft['instance']['minecraft_version'], game.TUPLES[version].minecraft_version)
+            self.assertEqual(draft['instance']['flavor'], game.TUPLES[version].flavor)
 
     def test_frozen_qualification_tuples_bind_version_java_and_evidence_scope(self):
-        self.assertEqual(set(game.TUPLES), {"1.12.2", "1.16.5", "1.18.2", "1.20.5", "1.21.9", "26.1"})
+        self.assertEqual(set(game.TUPLES), {"1.12.2", "1.16.5", "1.18.2", "1.20.5", "1.21.9", "26.1", "paper-1.21.11",
+                                            "fabric-1.21.9", "forge-1.20.1", "forge-1.12.2", "neoforge-1.21.1"})
         # Official Mojang javaVersion.majorVersion for each frozen tuple.
         self.assertEqual({v: t.java_major for v, t in game.TUPLES.items()},
-                         {"1.12.2": 8, "1.16.5": 8, "1.18.2": 17, "1.20.5": 21, "1.21.9": 21, "26.1": 25})
+                         {"1.12.2": 8, "1.16.5": 8, "1.18.2": 17, "1.20.5": 21, "1.21.9": 21, "26.1": 25, "paper-1.21.11": 21,
+                          "fabric-1.21.9": 21, "forge-1.20.1": 17, "forge-1.12.2": 8, "neoforge-1.21.1": 21})
+        self.assertEqual(game.TUPLES["1.21.9"].selection(), {"flavor": "vanilla", "minecraft_version": "1.21.9"})
+        self.assertEqual(game.TUPLES["forge-1.12.2"].selection(),
+                         {"flavor": "forge", "minecraft_version": "1.12.2", "loader_version": "14.23.5.2859"})
+        self.assertEqual(game.TUPLES["paper-1.21.11"].scope, "paper-1.21.11-real-headless-game")
         self.assertEqual(game.TUPLES["1.20.5"].protocol_capabilities["chunk_batch"], True)
         self.assertEqual(game.TUPLES["1.20.5"].protocol_capabilities["tick_end"], False)
         self.assertEqual(game.TUPLES["1.12.2"].scope, "vanilla-1.12.2-real-headless-game")
@@ -687,10 +694,12 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
     def test_linux_and_windows_wrappers_allow_only_frozen_game_tuples(self):
         linux = (game.HERE / "linux-game.sh").read_text()
         windows = (game.HERE / "windows-game.ps1").read_text()
-        self.assertIn("case \"$3\" in 1.12.2|1.16.5|1.18.2|1.20.5|1.21.9|26.1)", linux)
-        self.assertIn("[ValidateSet('1.12.2','1.16.5','1.18.2','1.20.5','1.21.9','26.1')]", windows)
-        self.assertIn('"scope": "vanilla-" + sys.argv[5] + "-real-headless-game"', linux)
-        self.assertIn("scope=('vanilla-' + $MinecraftVersion + '-real-headless-game')", windows)
+        allowed = "1.12.2|1.16.5|1.18.2|1.20.5|1.21.9|26.1|paper-1.21.11|fabric-1.21.9|forge-1.20.1|forge-1.12.2|neoforge-1.21.1"
+        self.assertIn("case \"$3\" in " + allowed + ")", linux)
+        self.assertIn("[ValidateSet(" + ",".join("'" + v + "'" for v in allowed.split("|")) + ")]", windows)
+        self.assertEqual(set(allowed.split("|")), set(game.TUPLES))
+        self.assertIn('"scope": (sys.argv[5] if not sys.argv[5][0].isdigit() else "vanilla-" + sys.argv[5]) + "-real-headless-game"', linux)
+        self.assertIn("'vanilla-' + $MinecraftVersion } else { $MinecraftVersion }) + '-real-headless-game'", windows)
         self.assertNotIn("1.12.1", linux + windows)
 
 
