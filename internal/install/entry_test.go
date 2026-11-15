@@ -4,9 +4,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// testAbsolute returns a clean absolute path valid on the host platform, so
+// portable argument fixtures are not rejected merely for using Unix syntax.
+func testAbsolute(name string) string {
+	return filepath.Join(os.TempDir(), name)
+}
 
 func TestRunInstallerCommandLeavesOtherCommandsUntouched(t *testing.T) {
 	var output bytes.Buffer
@@ -25,18 +33,18 @@ func TestRunInstallerCommandRejectsMalformedArgumentsBeforePlatformBackend(t *te
 }
 
 func TestParseInstallerCommandStrictArguments(t *testing.T) {
-	valid := []string{"install", "apply", "--prepared", "/tmp/prepared", "--trust-file", "/tmp/trust", "--version", "v1.2.3", "--repair", "--allow-development"}
+	valid := []string{"install", "apply", "--prepared", testAbsolute("prepared"), "--trust-file", testAbsolute("trust"), "--version", "v1.2.3", "--repair", "--allow-development"}
 	command, err := parseInstallerCommand(valid)
 	if err != nil || command.kind != installerApply || command.options.Version != "v1.2.3" || !command.options.Repair || !command.options.AllowDevelopment {
 		t.Fatalf("command=%+v err=%v", command, err)
 	}
 	cases := [][]string{
 		{"install"},
-		{"install", "apply", "--prepared", "/tmp/a", "--trust-file", "/tmp/b", "--version", "v1.2.3", "extra"},
-		{"install", "apply", "--prepared", "/tmp/a", "--prepared", "/tmp/b", "--trust-file", "/tmp/t", "--version", "v1.2.3"},
-		{"install", "apply", "--prepared", "relative", "--trust-file", "/tmp/t", "--version", "v1.2.3"},
-		{"install", "apply", "--prepared", "/tmp/a", "--trust-file", "/tmp/t", "--version", "v1.2.3-rc1"},
-		{"install", "apply", "--prepared", "/tmp/a", "--trust-file", "/tmp/t", "--version", "v1.2.3", "--repair", "--repair"},
+		{"install", "apply", "--prepared", testAbsolute("a"), "--trust-file", testAbsolute("b"), "--version", "v1.2.3", "extra"},
+		{"install", "apply", "--prepared", testAbsolute("a"), "--prepared", testAbsolute("b"), "--trust-file", testAbsolute("t"), "--version", "v1.2.3"},
+		{"install", "apply", "--prepared", "relative", "--trust-file", testAbsolute("t"), "--version", "v1.2.3"},
+		{"install", "apply", "--prepared", testAbsolute("a"), "--trust-file", testAbsolute("t"), "--version", "v1.2.3-rc1"},
+		{"install", "apply", "--prepared", testAbsolute("a"), "--trust-file", testAbsolute("t"), "--version", "v1.2.3", "--repair", "--repair"},
 		{"install", "check", "extra"},
 		{"install", "uninstall", "--repair"},
 		{"install", "worker", "../../etc/passwd"},

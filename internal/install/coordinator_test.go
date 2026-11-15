@@ -163,7 +163,7 @@ func preparedFixture(m mode) *transaction {
 }
 
 func validApplyOptions() ApplyOptions {
-	return ApplyOptions{Prepared: "/tmp/prepared", TrustFile: "/tmp/trust.json", Version: "v1.2.3"}
+	return ApplyOptions{Prepared: testAbsolute("prepared"), TrustFile: testAbsolute("trust.json"), Version: "v1.2.3"}
 }
 
 func TestApplyRecordsEachPhaseBeforeItsEffect(t *testing.T) {
@@ -486,7 +486,6 @@ func TestUninstallHappyPathPreservesOutcomeShape(t *testing.T) {
 		t.Fatalf("uninstall: result=%+v err=%v", got, err)
 	}
 }
-
 
 func containsEvent(events []string, want string) bool {
 	for _, event := range events {
