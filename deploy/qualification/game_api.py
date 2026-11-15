@@ -52,6 +52,9 @@ class QualificationTuple:
     simulation_distance: object
     flavor: str = "vanilla"
     loader_version: str = ""
+    # False only when no supported protocol client exists for the version;
+    # gameplay markers are then replaced by restored-file hash evidence.
+    client: bool = True
 
     def selection(self):
         value = {"flavor": self.flavor, "minecraft_version": self.minecraft_version}
@@ -73,6 +76,8 @@ TUPLES = MappingProxyType({
                                   MappingProxyType({"player_loaded": False, "chunk_batch": True, "tick_end": False}), 2),
     "1.21.9": QualificationTuple("1.21.9", 21, "vanilla-1.21.9-real-headless-game",
                                   MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2),
+    "26.3": QualificationTuple("26.3", 25, "vanilla-26.3-server-only-game",
+                                  MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2, client=False),
     "26.1": QualificationTuple("26.1", 25, "vanilla-26.1-real-headless-game",
                                   MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2),
     "paper-1.21.11": QualificationTuple("1.21.11", 21, "paper-1.21.11-real-headless-game",
@@ -778,14 +783,19 @@ def archive_evidence(path, expected_yaw, online, tuple_config):
         # Player data moved between layouts (playerdata/ through 1.21; 26.1
         # namespaced folders), so require exactly one save for the fixed
         # offline player anywhere under the world root.
-        players = sorted(n for n in names if n.startswith("server/world/") and n.endswith("/" + offline_uuid() + ".dat"))
-        require(len(players) == 1 and "server/world/level.dat" in names, "archive_player_world_missing")
-        name = players[0]
-        require(archive.getinfo(name).file_size <= 1 << 20, "archive_player_bound")
-        require(yaw_matches(player_yaw(archive.read(name)), expected_yaw), "archive_player_marker_mismatch")
+        require("server/world/level.dat" in names, "archive_player_world_missing")
+        if tuple_config.client:
+            players = sorted(n for n in names if n.startswith("server/world/") and n.endswith("/" + offline_uuid() + ".dat"))
+            require(len(players) == 1, "archive_player_world_missing")
+            name = players[0]
+            require(archive.getinfo(name).file_size <= 1 << 20, "archive_player_bound")
+            require(yaw_matches(player_yaw(archive.read(name)), expected_yaw), "archive_player_marker_mismatch")
         require(not any(n.endswith("/manager.db") or n == "server/manager.db" for n in names), "archive_contains_manager_db")
+        level = [e["sha256"] for e in manifest["files"] if e["path"] == "world/level.dat"]
+        require(len(level) == 1, "archive_level_entry")
         return {"sha256": digest(path), "capture_mode": manifest["capture_mode"], "files_verified": len(listed),
-                "player_marker_yaw": expected_yaw, "world_and_playerdata_verified": True}
+                "player_marker_yaw": expected_yaw if tuple_config.client else None,
+                "world_and_playerdata_verified": tuple_config.client, "level_dat_sha256": level[0]}
 
 
 def download_archive(api, record, destination):
@@ -956,8 +966,16 @@ def execute(output, report, tuple_config):
         report["phase"] = name
         output.joinpath("game-summary.json").write_text(json.dumps(report, indent=2))
         print("PHASE " + name, flush=True)
+    def disconnect():
+        nonlocal client
+        if client:
+            client.close()
+            client = None
     def connect(mode, expected=None):
         nonlocal client
+        if not tuple_config.client:
+            report.setdefault("client_connections_skipped", []).append(mode)
+            return None
         if client:
             client.close()
             client = None
@@ -1022,7 +1040,8 @@ def execute(output, report, tuple_config):
         cursor = api.request(PREFIX + "/console/logs?after=0&limit=500")["next_cursor"]
         backup_job = api.job(api.request(PREFIX + "/backups", {"kind": "full"}, 202), 240)
         require(native_identity() == before, "online_backup_replaced_game")
-        client.alive()
+        if client:
+            client.alive()
         off, on = console_save_evidence(api, cursor, tuple_config.minecraft_version)
         report["online_lease"] = lease_evidence(backup_job["id"], off, on)
         records = [r for r in api.request(PREFIX + "/backups")["backups"] if r["id"] not in old]
@@ -1036,8 +1055,7 @@ def execute(output, report, tuple_config):
             phase("gameplay_marker_b")
             connect("mark-b")
             connect("observe", YAW_B)
-            client.close()
-            client = None
+            disconnect()
             phase("deliberate_stop_restore")
             api.lifecycle("stop", emergency=True, confirmation=INSTANCE)
             require(api.request(PREFIX + "/lifecycle")["process_running"] is False, "stop_process_running")
@@ -1049,12 +1067,16 @@ def execute(output, report, tuple_config):
             download_archive(api, safety[0], safety_path)
             report["restore_safety_backup"] = archive_evidence(safety_path, YAW_B, False, tuple_config)
             require(report["restore_safety_backup"]["sha256"] != report["online_backup"]["sha256"], "safety_archive_not_distinct")
+            # Independent of gameplay markers: the stopped server's restored
+            # level.dat must equal the online archive's manifest entry.
+            restored = DATA / "instances" / INSTANCE / "server" / "world" / "level.dat"
+            require(digest(restored) == report["online_backup"]["level_dat_sha256"], "restored_level_mismatch")
+            report["restored_level_dat_matches_online_backup"] = True
         phase("restored_reconnect")
         api.lifecycle("start")
         wait_game(api)
         connect("observe", YAW_A)
-        client.close()
-        client = None
+        disconnect()
         phase("manager_restart")
         api.lifecycle("autostart", enabled=True)
         before = native_identity()
@@ -1068,9 +1090,8 @@ def execute(output, report, tuple_config):
         else:
             require(after == before, "linux_restart_stopped_game")
         connect("observe", YAW_A)
-        client.close()
-        client = None
-        report["manager_restart"] = {"linux_identity_preserved": os.name != "nt", "windows_autostart_new_identity": os.name == "nt", "restored_marker_preserved": True}
+        disconnect()
+        report["manager_restart"] = {"linux_identity_preserved": os.name != "nt", "windows_autostart_new_identity": os.name == "nt", "restored_marker_preserved": tuple_config.client}
         phase("deliberate_stop_no_restart")
         api.lifecycle("stop", emergency=True, confirmation=INSTANCE)
         # Scheduler's first crash retry would occur inside this observation.
@@ -1101,6 +1122,11 @@ def main():
               "protocol_capabilities": dict(tuple_config.protocol_capabilities),
               "fixtures": ["disposable-empty-canonical-state", "eula-explicitly-accepted", "offline-auth-loopback-firewall", "creative-peaceful-world-seed-33", "player-view-yaw-marker"],
               "not_qualified": ["Microsoft-authenticated-client", "graphical-client", "other-version-flavor-host-tuples", "full-map-addons", "crash-retry-injection"]}
+    if not tuple_config.client:
+        # No released protocol client (minecraft-data) supports this version.
+        report["fixtures"] = [f for f in report["fixtures"] if f != "player-view-yaw-marker"] + ["restored-level-dat-hash"]
+        report["not_qualified"].append("protocol-client-gameplay")
+        report["protocol_capabilities"] = {}
     try:
         execute(output, report, tuple_config)
     except Exception as error:

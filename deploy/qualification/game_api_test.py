@@ -74,16 +74,19 @@ class Helpers(unittest.TestCase):
             self.assertEqual(draft['instance']['flavor'], game.TUPLES[version].flavor)
 
     def test_frozen_qualification_tuples_bind_version_java_and_evidence_scope(self):
-        self.assertEqual(set(game.TUPLES), {"1.12.2", "1.16.5", "1.18.2", "1.20.5", "1.21.9", "26.1", "paper-1.21.11",
+        self.assertEqual(set(game.TUPLES), {"1.12.2", "1.16.5", "1.18.2", "1.20.5", "1.21.9", "26.1", "26.3", "paper-1.21.11",
                                             "fabric-1.21.9", "forge-1.20.1", "forge-1.12.2", "neoforge-1.21.1"})
         # Official Mojang javaVersion.majorVersion for each frozen tuple.
         self.assertEqual({v: t.java_major for v, t in game.TUPLES.items()},
-                         {"1.12.2": 8, "1.16.5": 8, "1.18.2": 17, "1.20.5": 21, "1.21.9": 21, "26.1": 25, "paper-1.21.11": 21,
+                         {"1.12.2": 8, "1.16.5": 8, "1.18.2": 17, "1.20.5": 21, "1.21.9": 21, "26.1": 25, "26.3": 25, "paper-1.21.11": 21,
                           "fabric-1.21.9": 21, "forge-1.20.1": 17, "forge-1.12.2": 8, "neoforge-1.21.1": 21})
         self.assertEqual(game.TUPLES["1.21.9"].selection(), {"flavor": "vanilla", "minecraft_version": "1.21.9"})
         self.assertEqual(game.TUPLES["forge-1.12.2"].selection(),
                          {"flavor": "forge", "minecraft_version": "1.12.2", "loader_version": "14.23.5.2859"})
         self.assertEqual(game.TUPLES["paper-1.21.11"].scope, "paper-1.21.11-real-headless-game")
+        # 26.3 has no released protocol client; it is explicitly server-only.
+        self.assertFalse(game.TUPLES["26.3"].client)
+        self.assertTrue(all(t.client for k, t in game.TUPLES.items() if k != "26.3"))
         self.assertEqual(game.TUPLES["1.20.5"].protocol_capabilities["chunk_batch"], True)
         self.assertEqual(game.TUPLES["1.20.5"].protocol_capabilities["tick_end"], False)
         self.assertEqual(game.TUPLES["1.12.2"].scope, "vanilla-1.12.2-real-headless-game")
@@ -674,6 +677,32 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
                 with self.assertRaises(game.Failure):
                     game.archive_evidence(path, 31.25, True, game.tuple_for("1.21.9"))
 
+    def test_server_only_archive_needs_level_but_not_player_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "archive.zip"
+            level = b"server-only-world"
+            def write(files, version="26.3"):
+                manifest = {"instance_id": game.INSTANCE, "minecraft_version": version, "kind": "full", "world_present": True,
+                            "capture_mode": "acknowledged_native_save_lease", "files": [
+                            {"path": n, "size": len(v), "sha256": hashlib.sha256(v).hexdigest()} for n, v in files.items()]}
+                with zipfile.ZipFile(path, "w") as archive:
+                    archive.writestr("backup-manifest.json", json.dumps(manifest))
+                    for n, value in files.items():
+                        archive.writestr("server/" + n, value)
+            write({"world/level.dat": level})
+            evidence = game.archive_evidence(path, None, True, game.tuple_for("26.3"))
+            self.assertEqual(evidence["level_dat_sha256"], hashlib.sha256(level).hexdigest())
+            self.assertIsNone(evidence["player_marker_yaw"])
+            self.assertFalse(evidence["world_and_playerdata_verified"])
+            write({"world/other.dat": level})
+            with self.assertRaises(game.Failure):
+                game.archive_evidence(path, None, True, game.tuple_for("26.3"))
+            # Client tuples still require the player marker.
+            write({"world/level.dat": level}, "1.21.9")
+            with self.assertRaises(game.Failure) as missing:
+                game.archive_evidence(path, 31.25, True, game.tuple_for("1.21.9"))
+            self.assertEqual(missing.exception.code, "archive_player_world_missing")
+
     def test_no_ambient_host_execution_from_client_or_harness_cli(self):
         import subprocess
         harness = subprocess.run([os.sys.executable, str(game.HERE / "game_api.py"), "--minecraft-version", "1.21.9", "--output", "/unused"], capture_output=True,
@@ -694,7 +723,7 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
     def test_linux_and_windows_wrappers_allow_only_frozen_game_tuples(self):
         linux = (game.HERE / "linux-game.sh").read_text()
         windows = (game.HERE / "windows-game.ps1").read_text()
-        allowed = "1.12.2|1.16.5|1.18.2|1.20.5|1.21.9|26.1|paper-1.21.11|fabric-1.21.9|forge-1.20.1|forge-1.12.2|neoforge-1.21.1"
+        allowed = "1.12.2|1.16.5|1.18.2|1.20.5|1.21.9|26.1|paper-1.21.11|fabric-1.21.9|forge-1.20.1|forge-1.12.2|neoforge-1.21.1|26.3"
         self.assertIn("case \"$3\" in " + allowed + ")", linux)
         self.assertIn("[ValidateSet(" + ",".join("'" + v + "'" for v in allowed.split("|")) + ")]", windows)
         self.assertEqual(set(allowed.split("|")), set(game.TUPLES))
