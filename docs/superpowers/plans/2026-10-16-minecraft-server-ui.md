@@ -6,7 +6,7 @@
 
 **Architecture:** One Go service and embedded React 19/Mantine client use SQLite for manager state and supervise isolated local Java server instances. Linux uses systemd and Windows uses the supported native manager/process lifecycle. Shared API/domain/interfaces are frozen by the foundation task; packages integrate through those contracts and a central integrator reviews the combined product.
 
-**Tech Stack:** Go 1.27.0; React 19, TypeScript, Vite, Mantine; Node 24.15; SQLite; native Java servers; managed Adoptium Temurin runtimes; systemd on x64 Debian/Ubuntu and native Windows 10/11 or Server 2019+.
+**Tech Stack:** Go 1.27.0; React 19, TypeScript, Vite, Mantine; Node 24.15; SQLite; native Java servers; managed Adoptium Temurin runtimes; systemd on x64 Ubuntu 22.04/24.04 and native Windows 10/11 or Server 2019+.
 
 **Spec:** `docs/superpowers/specs/2026-10-16-minecraft-server-ui-design.md`
 
