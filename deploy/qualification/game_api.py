@@ -620,12 +620,29 @@ class GameClient:
         self.tuple_config = tuple_config
         self.process = subprocess.Popen(["node", str(HERE / "game-client/client.cjs"), "--mode", mode,
                                          "--version", tuple_config.minecraft_version],
-                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                       encoding="utf-8")
+                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                       encoding="utf-8", errors="replace")
         self.lines = queue.Queue(maxsize=8)
         self.closed = False
+        self.errors = []
         self.thread = threading.Thread(target=self._read, daemon=True)
         self.thread.start()
+        threading.Thread(target=self._read_errors, daemon=True).start()
+
+    def _read_errors(self):
+        # Bounded local client stderr (offline loopback client; no credentials),
+        # printed only when a disconnect fails.
+        total = 0
+        for line in self.process.stderr:
+            total += len(line)
+            if total > 16384:
+                return
+            self.errors.append("".join(c for c in line.rstrip() if 32 <= ord(c) < 127)[:240])
+
+    def print_errors(self):
+        for text in self.errors[-40:]:
+            print("CLIENT " + ("[line withheld: credential-like content]" if CREDENTIAL_HINT.search(text) else text),
+                  file=sys.stderr, flush=True)
 
     def _read(self):
         while True:
@@ -689,7 +706,9 @@ class GameClient:
             self.process.stdin.flush()
             code = self.process.wait(timeout=8)
             if code != 0:
-                raise Failure("client_disconnect_failed", client_failure=self._pending_failure(), exit_code=code)
+                failure = self._pending_failure()
+                self.print_errors()
+                raise Failure("client_disconnect_failed", client_failure=failure, exit_code=code)
         except (BrokenPipeError, subprocess.TimeoutExpired):
             self.process.kill()
             self.process.wait(timeout=8)
@@ -697,6 +716,7 @@ class GameClient:
         finally:
             self.process.stdin.close()
             self.process.stdout.close()
+            self.process.stderr.close()
 
     def _pending_failure(self):
         # Report only the client's fixed failure code, if it emitted one.
