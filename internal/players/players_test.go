@@ -392,11 +392,10 @@ func TestPlayerEventAcceptsMinecraftLoggerTagsOnly(t *testing.T) {
 	}
 }
 
-func TestPlayerEventAccepts26_3SystemChatPrefix(t *testing.T) {
-	if m := playerEvent.FindStringSubmatch("[12:00:00] [Server thread/INFO]: System chat: Alex joined the game"); len(m) != 3 || m[1] != "Alex" {
-		t.Fatalf("26.3 join not parsed: %v", m)
-	}
-	if m := playerEvent.FindStringSubmatch("[12:00:00] [Server thread/INFO]: <Steve> System chat: Alex joined the game"); m != nil {
-		t.Fatalf("chat spoof accepted: %v", m)
+// 26.3 join/leave lines are system chat, which in-game operators can also emit
+// (for example /tellraw), so history keeps treating 26.3 as a source gap.
+func TestPlayerEventRejectsSystemChatJoins(t *testing.T) {
+	if m := playerEvent.FindStringSubmatch("[12:00:00] [Server thread/INFO]: System chat: Alex joined the game"); m != nil {
+		t.Fatalf("system chat join accepted: %v", m)
 	}
 }

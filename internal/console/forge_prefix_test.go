@@ -23,11 +23,23 @@ func TestNativeMessageAcceptsMinecraftLoggerTagsOnly(t *testing.T) {
 	}
 }
 
-// 26.3 routes command feedback to the console as system chat.
-func TestNativeMessageStrips26_3SystemChatPrefix(t *testing.T) {
+// 26.3 routes command feedback to the console as system chat. The prefix is
+// accepted only for versions that emit it.
+func TestSystemChatFeedbackIsVersionGated(t *testing.T) {
 	got, ok := nativeMessage("[12:40:17] [Server thread/INFO]: System chat: Automatic saving is now enabled")
-	if !ok || got != "Automatic saving is now enabled" || !ackSaveOn("26.3")(got) {
+	if !ok || got != "System chat: Automatic saving is now enabled" {
 		t.Fatalf("got %q %v", got, ok)
+	}
+	if !ackSaveOn("26.3")(got) {
+		t.Fatal("26.3 save-on feedback rejected")
+	}
+	for _, version := range []string{"26.1", "1.21.9", "1.12.2"} {
+		if ackSaveOn(version)(got) {
+			t.Fatalf("%s accepted system chat feedback", version)
+		}
+	}
+	if !ackSaveOn("26.3")("Automatic saving is now enabled") {
+		t.Fatal("26.3 unprefixed feedback rejected")
 	}
 	if got, ok = nativeMessage("[12:40:17] [Server thread/INFO]: <Alex> System chat: Automatic saving is now enabled"); ok && ackSaveOn("26.3")(got) {
 		t.Fatal("player chat spoofed a save-on acknowledgement")

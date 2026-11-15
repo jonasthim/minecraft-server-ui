@@ -72,6 +72,13 @@ func parseSettingsVersion(value string) (settingsVersion, bool) {
 	}
 	return v, true
 }
+
+// VersionAtLeast reports whether a reviewed Minecraft version is at least the
+// given family.minor.patch. Unreviewed or malformed versions report false.
+func VersionAtLeast(version string, family, minor, patch int) bool {
+	v, ok := parseSettingsVersion(version)
+	return ok && v.atLeast(family, minor, patch)
+}
 func (v settingsVersion) atLeast(family, minor, patch int) bool {
 	if v.family != family {
 		return v.family > family

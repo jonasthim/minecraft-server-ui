@@ -192,6 +192,7 @@ func (s *Service) runCreate(ctx context.Context, e *jobs.Execution) (result erro
 	_, err := s.CreateForJob(ctx, e, input.Kind, input.Trigger)
 	return err
 }
+
 // worldRoots validates a discovered layout for capture and returns the safe
 // top-level world roots (the main world plus Paper sibling dimensions).
 func worldRoots(discovery world.Discovery, kind domain.BackupKind) ([]string, error) {

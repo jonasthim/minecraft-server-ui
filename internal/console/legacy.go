@@ -178,8 +178,7 @@ func (c *rawCursor) wait(ctx context.Context, oracle acknowledgement) (string, e
 // Only command feedback attributed to the server thread is an acknowledgement.
 // Chat/player lines, historical Done and arbitrary plugin-prefixed text fail.
 // Forge/NeoForge layouts add the logger; only Minecraft's own loggers count.
-// 26.3 prefixes console command feedback with "System chat: ".
-var nativePrefix = regexp.MustCompile(`^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] \[Server thread/INFO\](?: \[minecraft/[A-Za-z]{1,40}\])?: (?:System chat: )?(.*)$`)
+var nativePrefix = regexp.MustCompile(`^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] \[Server thread/INFO\](?: \[minecraft/[A-Za-z]{1,40}\])?: (.*)$`)
 
 func nativeMessage(line string) (string, bool) {
 	m := nativePrefix.FindStringSubmatch(line)
@@ -192,18 +191,33 @@ func nativeMessage(line string) (string, bool) {
 var modernList = regexp.MustCompile(`^There are [0-9]+ of a max of [0-9]+ players online: (?:[A-Za-z0-9_]{1,16}(?:, [A-Za-z0-9_]{1,16})*)?$`)
 var oldList = regexp.MustCompile(`^There are [0-9]+/[0-9]+ players online:$`)
 
-func ackList(version string) acknowledgement {
+// feedback accepts 26.3's "System chat: " console feedback form only for
+// versions that emit it. Operators can also produce system chat (/tellraw), so
+// this widens nothing for earlier versions and each oracle stays exact.
+func feedback(version string, oracle acknowledgement) acknowledgement {
+	if !instance.VersionAtLeast(version, 26, 3, 0) {
+		return oracle
+	}
 	return func(message string) bool {
+		if trimmed, ok := strings.CutPrefix(message, "System chat: "); ok {
+			message = trimmed
+		}
+		return oracle(message)
+	}
+}
+
+func ackList(version string) acknowledgement {
+	return feedback(version, func(message string) bool {
 		if strings.HasPrefix(version, "1.12.") {
 			return oldList.MatchString(message)
 		}
 		return modernList.MatchString(message)
-	}
+	})
 }
 func ackFlush(version string) acknowledgement {
 	flushed := false
 	saved := false
-	return func(message string) bool {
+	return feedback(version, func(message string) bool {
 		if strings.HasPrefix(version, "1.12.") {
 			if message == "Flushing completed" {
 				flushed = true
@@ -214,15 +228,15 @@ func ackFlush(version string) acknowledgement {
 			return flushed && saved
 		}
 		return message == "Saved the game"
-	}
+	})
 }
 func ackSaveOn(version string) acknowledgement {
-	return func(message string) bool {
+	return feedback(version, func(message string) bool {
 		if strings.HasPrefix(version, "1.12.") {
 			return message == "Turned on world auto-saving"
 		}
 		return message == "Automatic saving is now enabled" || message == "Saving is already turned on"
-	}
+	})
 }
 
 var seedReply = regexp.MustCompile(`^Seed: (?:\[)?-?[0-9]+(?:\])?$`)
@@ -234,7 +248,7 @@ func ackCommand(selection domain.VersionSelection, command PublicCommand) acknow
 	case "say":
 		return func(message string) bool { return message == "[Server] "+strings.TrimPrefix(command.Text, "say ") }
 	case "seed":
-		return seedReply.MatchString
+		return feedback(selection.MinecraftVersion, seedReply.MatchString)
 	}
 	return func(string) bool { return false }
 }

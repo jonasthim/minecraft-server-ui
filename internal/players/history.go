@@ -153,7 +153,7 @@ func (s *Service) record(ctx context.Context, snapshot console.PlayerSnapshot) e
 
 // Log timestamps are ingestion observation times. We do not manufacture dates
 // from HH:MM:SS console prefixes or join UUIDs to names from another event.
-var playerEvent = regexp.MustCompile(`^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] \[Server thread/INFO\](?: \[minecraft/[A-Za-z]{1,40}\])?: (?:System chat: )?([A-Za-z0-9_]{1,16}) (joined|left) the game$`)
+var playerEvent = regexp.MustCompile(`^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] \[Server thread/INFO\](?: \[minecraft/[A-Za-z]{1,40}\])?: ([A-Za-z0-9_]{1,16}) (joined|left) the game$`)
 
 func (s *Service) consumeLogs(ctx context.Context, id string) error {
 	s.mu.Lock()
