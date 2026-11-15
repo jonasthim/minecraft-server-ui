@@ -882,7 +882,15 @@ def lease_evidence(job_id, off, on):
             "flush_ack_evidence": "successful-shipping-backup-and-acknowledged-native-save-lease-manifest"}
 
 
-def console_save_evidence(api, cursor):
+def save_acknowledgements(minecraft_version):
+    # Mirrors internal/console/legacy.go: 1.12 predates the Brigadier wording.
+    if minecraft_version.startswith("1.12."):
+        return ("Turned off world auto-saving",), ("Turned on world auto-saving",)
+    return ("Automatic saving is now disabled",), ("Automatic saving is now enabled", "Saving is already turned on")
+
+
+def console_save_evidence(api, cursor, minecraft_version):
+    off_messages, on_messages = save_acknowledgements(minecraft_version)
     deadline = time.monotonic() + 20
     off, on = False, False
     while time.monotonic() < deadline:
@@ -890,8 +898,8 @@ def console_save_evidence(api, cursor):
         require(not page.get("gap"), "backup_console_gap")
         for line in page["lines"]:
             message = line.get("message", "")
-            off = off or "Automatic saving is now disabled" in message
-            on = on or "Automatic saving is now enabled" in message or "Saving is already turned on" in message
+            off = off or any(text in message for text in off_messages)
+            on = on or any(text in message for text in on_messages)
         cursor = page["next_cursor"]
         if off and on:
             return off, on
@@ -983,7 +991,7 @@ def execute(output, report, tuple_config):
         backup_job = api.job(api.request(PREFIX + "/backups", {"kind": "full"}, 202), 240)
         require(native_identity() == before, "online_backup_replaced_game")
         client.alive()
-        off, on = console_save_evidence(api, cursor)
+        off, on = console_save_evidence(api, cursor, tuple_config.minecraft_version)
         report["online_lease"] = lease_evidence(backup_job["id"], off, on)
         records = [r for r in api.request(PREFIX + "/backups")["backups"] if r["id"] not in old]
         require(len(records) == 1 and records[0]["state"] == "ready" and records[0]["protected"] is True and records[0]["trigger"] == "manual", "online_backup_record")
