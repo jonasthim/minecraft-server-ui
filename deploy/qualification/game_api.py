@@ -55,7 +55,15 @@ class QualificationTuple:
 TUPLES = MappingProxyType({
     "1.12.2": QualificationTuple("1.12.2", 8, "vanilla-1.12.2-real-headless-game",
                                   MappingProxyType({"player_loaded": False, "chunk_batch": False, "tick_end": False}), None),
+    "1.16.5": QualificationTuple("1.16.5", 8, "vanilla-1.16.5-real-headless-game",
+                                  MappingProxyType({"player_loaded": False, "chunk_batch": False, "tick_end": False}), None),
+    "1.18.2": QualificationTuple("1.18.2", 17, "vanilla-1.18.2-real-headless-game",
+                                  MappingProxyType({"player_loaded": False, "chunk_batch": False, "tick_end": False}), 2),
+    "1.20.5": QualificationTuple("1.20.5", 21, "vanilla-1.20.5-real-headless-game",
+                                  MappingProxyType({"player_loaded": False, "chunk_batch": True, "tick_end": False}), 2),
     "1.21.9": QualificationTuple("1.21.9", 21, "vanilla-1.21.9-real-headless-game",
+                                  MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2),
+    "26.1": QualificationTuple("26.1", 25, "vanilla-26.1-real-headless-game",
                                   MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2),
 })
 PROCESS_START_ID = re.compile(
@@ -747,8 +755,12 @@ def archive_evidence(path, expected_yaw, online, tuple_config):
             require(value.hexdigest() == entry["sha256"], "archive_manifest_hash")
             listed.add(name)
         require(names == listed | {"backup-manifest.json"}, "archive_unmanifested_entry")
-        name = "server/world/playerdata/" + offline_uuid() + ".dat"
-        require(name in names and "server/world/level.dat" in names, "archive_player_world_missing")
+        # Player data moved between layouts (playerdata/ through 1.21; 26.1
+        # namespaced folders), so require exactly one save for the fixed
+        # offline player anywhere under the world root.
+        players = sorted(n for n in names if n.startswith("server/world/") and n.endswith("/" + offline_uuid() + ".dat"))
+        require(len(players) == 1 and "server/world/level.dat" in names, "archive_player_world_missing")
+        name = players[0]
         require(archive.getinfo(name).file_size <= 1 << 20, "archive_player_bound")
         require(yaw_matches(player_yaw(archive.read(name)), expected_yaw), "archive_player_marker_mismatch")
         require(not any(n.endswith("/manager.db") or n == "server/manager.db" for n in names), "archive_contains_manager_db")

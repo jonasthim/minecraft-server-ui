@@ -2,7 +2,7 @@
 param(
  [Parameter(Mandatory=$true)][string]$Binary,
  [Parameter(Mandatory=$true)][string]$OutputDirectory,
- [Parameter(Mandatory=$true)][ValidateSet('1.12.2','1.21.9')][string]$MinecraftVersion
+ [Parameter(Mandatory=$true)][ValidateSet('1.12.2','1.16.5','1.18.2','1.20.5','1.21.9','26.1')][string]$MinecraftVersion
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'

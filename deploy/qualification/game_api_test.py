@@ -73,16 +73,19 @@ class Helpers(unittest.TestCase):
             self.assertEqual(draft['instance']['minecraft_version'], version)
 
     def test_frozen_qualification_tuples_bind_version_java_and_evidence_scope(self):
-        self.assertEqual(set(game.TUPLES), {"1.12.2", "1.21.9"})
-        self.assertEqual(game.TUPLES["1.12.2"].java_major, 8)
-        self.assertEqual(game.TUPLES["1.21.9"].java_major, 21)
+        self.assertEqual(set(game.TUPLES), {"1.12.2", "1.16.5", "1.18.2", "1.20.5", "1.21.9", "26.1"})
+        # Official Mojang javaVersion.majorVersion for each frozen tuple.
+        self.assertEqual({v: t.java_major for v, t in game.TUPLES.items()},
+                         {"1.12.2": 8, "1.16.5": 8, "1.18.2": 17, "1.20.5": 21, "1.21.9": 21, "26.1": 25})
+        self.assertEqual(game.TUPLES["1.20.5"].protocol_capabilities["chunk_batch"], True)
+        self.assertEqual(game.TUPLES["1.20.5"].protocol_capabilities["tick_end"], False)
         self.assertEqual(game.TUPLES["1.12.2"].scope, "vanilla-1.12.2-real-headless-game")
         with self.assertRaises(TypeError):
             game.TUPLES["1.12.2"] = game.TUPLES["1.21.9"]
         with self.assertRaises(AttributeError):
             game.TUPLES["1.12.2"].java_major = 21
         with self.assertRaises(game.Failure):
-            game.tuple_for("1.16.5")
+            game.tuple_for("1.17.1")
         with self.assertRaises(game.Failure):
             game.tuple_for([])
 
@@ -684,8 +687,8 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
     def test_linux_and_windows_wrappers_allow_only_frozen_game_tuples(self):
         linux = (game.HERE / "linux-game.sh").read_text()
         windows = (game.HERE / "windows-game.ps1").read_text()
-        self.assertIn("case \"$3\" in 1.12.2|1.21.9)", linux)
-        self.assertIn("[ValidateSet('1.12.2','1.21.9')]", windows)
+        self.assertIn("case \"$3\" in 1.12.2|1.16.5|1.18.2|1.20.5|1.21.9|26.1)", linux)
+        self.assertIn("[ValidateSet('1.12.2','1.16.5','1.18.2','1.20.5','1.21.9','26.1')]", windows)
         self.assertIn('"scope": "vanilla-" + sys.argv[5] + "-real-headless-game"', linux)
         self.assertIn("scope=('vanilla-' + $MinecraftVersion + '-real-headless-game')", windows)
         self.assertNotIn("1.12.1", linux + windows)

@@ -4,7 +4,7 @@ set -euo pipefail
 umask 077
 [[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted && $EUID == 0 ]] || { echo 'FAIL hosted_root_required' >&2; exit 2; }
 [[ $# == 3 ]] || { echo 'FAIL tuple_not_allowlisted' >&2; exit 2; }
-case "$3" in 1.12.2|1.21.9) ;; *) echo 'FAIL tuple_not_allowlisted' >&2; exit 2 ;; esac
+case "$3" in 1.12.2|1.16.5|1.18.2|1.20.5|1.21.9|26.1) ;; *) echo 'FAIL tuple_not_allowlisted' >&2; exit 2 ;; esac
 minecraft_version=$3
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 repo=$(realpath "$here/../..")
