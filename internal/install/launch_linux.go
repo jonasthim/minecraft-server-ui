@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -817,20 +818,54 @@ func launchLinuxOwnsUpdaterLock(ctx context.Context, config launchLinuxConfig, t
 	if !ok {
 		return errors.New("native updater lock identity is unavailable")
 	}
-	locks, err := launchLinuxRead(config, "locks", 1<<20)
-	if err != nil {
+	device := fmt.Sprintf("%02x:%02x:%d", unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev)), stat.Ino)
+	if err := readLaunchLinuxLockOwner(ctx, config, device, pid); err != nil {
 		return err
 	}
 	if err := verifyLaunchLinuxUpdaterLockIdentity(config, lockRoot, rootInfo, lockFile, info); err != nil {
 		return err
 	}
-	device := fmt.Sprintf("%02x:%02x:%d", unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev)), stat.Ino)
-	owner, count, err := parseLaunchLinuxLockOwner(locks, device)
-	if err != nil || count != 1 || owner != pid {
-		return errors.Join(errors.New("installer worker does not hold the actual manager updater lock"), err)
-	}
 	_ = tx
 	return nil
+}
+
+// readLaunchLinuxLockOwner proves pid holds the exclusive flock on device.
+// /proc/locks is a seq_file read across several syscalls, so concurrent lock
+// churn elsewhere can skip or repeat entries between reads (observed under
+// parallel load). An exclusive flock has one holder and waiters use "->"
+// lines, so a torn read can only hide or duplicate the holder, never name a
+// different one: absent/duplicated results are re-read a bounded number of
+// times, while a definite different holder fails immediately.
+func readLaunchLinuxLockOwner(ctx context.Context, config launchLinuxConfig, device string, pid int) error {
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := launchLinuxContext(ctx); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		locks, err := launchLinuxRead(config, "locks", 1<<20)
+		if err != nil {
+			return err
+		}
+		owner, count, err := parseLaunchLinuxLockOwner(locks, device)
+		if err == nil && count == 1 {
+			if owner != pid {
+				return errors.New("installer worker does not hold the actual manager updater lock")
+			}
+			return nil
+		}
+		lastErr = err
+		if attempt < 4 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 10 * time.Millisecond):
+			}
+		}
+	}
+	return errors.Join(errors.New("installer worker does not hold the actual manager updater lock"), lastErr)
 }
 
 func verifyLaunchLinuxUpdaterLockIdentity(config launchLinuxConfig, root *os.Root, expectedRoot os.FileInfo, lockFile *os.File, expectedLock os.FileInfo) error {
