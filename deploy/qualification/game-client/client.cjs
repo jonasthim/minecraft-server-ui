@@ -118,17 +118,20 @@ function main () {
   let closing = false
   let failed = false
   let state
-  const emit = value => process.stdout.write(JSON.stringify(value) + '\n')
+  // Synchronous writes: process.exit() can drop pending asynchronous pipe output.
+  const emit = value => { try { require('node:fs').writeSync(1, JSON.stringify(value) + '\n') } catch {} }
+  let lastFailure = null
   const suppressed = []
   // Synchronous final record so the harness learns why a closing client exited.
   process.on('exit', exitCode => {
     try {
-      require('node:fs').writeSync(1, JSON.stringify({ event: 'exit', exit_code: exitCode, failed, closing, suppressed: suppressed.slice(0, 8) }) + '\n')
+      require('node:fs').writeSync(1, JSON.stringify({ event: 'exit', exit_code: exitCode, failed, closing, last_failure: lastFailure, suppressed: suppressed.slice(0, 8) }) + '\n')
     } catch {}
   })
   const fail = code => {
     if (failed || closing) { if (suppressed.length < 8) suppressed.push(code); return }
     failed = true
+    lastFailure = code
     emit({ event: 'failure', code })
     closing = true
     state?.stop()

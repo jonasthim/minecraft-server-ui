@@ -734,7 +734,8 @@ class GameClient:
                 code = value.get("code")
                 return code if isinstance(code, str) and re.fullmatch(r"client_[a-z_]{1,64}", code) else "client_unclassified"
             if isinstance(value, dict) and value.get("event") == "exit":
-                codes = [c for c in value.get("suppressed") or [] if isinstance(c, str) and re.fullmatch(r"client_[a-z_]{1,64}", c)]
+                codes = [c for c in [value.get("last_failure")] + list(value.get("suppressed") or [])
+                         if isinstance(c, str) and re.fullmatch(r"client_[a-z_]{1,64}", c)]
                 return "exit_" + ("failed" if value.get("failed") is True else "unfailed") + ("_suppressed_" + "_".join(codes) if codes else "")
 
 def yaw_matches(actual, expected):
