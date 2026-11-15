@@ -382,3 +382,12 @@ func TestNullOperatorFieldsRejectReadsAndDoNotStageMutation(t *testing.T) {
 		})
 	}
 }
+
+func TestPlayerEventAcceptsMinecraftLoggerTagsOnly(t *testing.T) {
+	if m := playerEvent.FindStringSubmatch("[12:00:00] [Server thread/INFO] [minecraft/MinecraftServer]: Alex joined the game"); len(m) != 3 || m[1] != "Alex" {
+		t.Fatalf("forge join not parsed: %v", m)
+	}
+	if m := playerEvent.FindStringSubmatch("[12:00:00] [Server thread/INFO] [examplemod/Log]: Alex joined the game"); m != nil {
+		t.Fatalf("mod logger accepted: %v", m)
+	}
+}

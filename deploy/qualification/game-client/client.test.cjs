@@ -2,7 +2,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { argumentsFor, attach } = require('./client.cjs')
+const { argumentsFor, attach, stalledCode, VERSION_CAPABILITIES } = require('./client.cjs')
 
 function fixture (mode = 'observe', version = '1.21.9') {
   const client = new EventEmitter()
@@ -111,4 +111,15 @@ test('reviewed uuid override retains CommonJS v4 callsites and has locked integr
   assert.equal(protocolData.version, '3.117.0')
   assert.equal(protocolData.integrity, 'sha512-glKv0EEmVwKvJwdNAKAal2P7gi/nijU9rEMp8gJmqYYRVswS6hA0q9566lcGHH07Ocmpqw5bMRbARC25pR13gA==')
   assert.ok(fs.readFileSync(require.resolve('yggdrasil/src/Client.js'), 'utf8').includes('uuid.v4()'))
+})
+test('stall diagnosis names the first unmet readiness condition', () => {
+  const caps = VERSION_CAPABILITIES['1.21.9']
+  const counts = { chunks: 0, teleports: 0, keepalives: 0, chunk_batches: 0 }
+  assert.equal(stalledCode(false, null, counts, caps, false, 'observe'), 'client_stalled_not_in_play')
+  assert.equal(stalledCode(true, null, counts, caps, false, 'observe'), 'client_stalled_no_teleport')
+  assert.equal(stalledCode(true, 0, { ...counts, teleports: 1 }, caps, false, 'observe'), 'client_stalled_no_chunks')
+  assert.equal(stalledCode(true, 0, { ...counts, teleports: 1, chunks: 1 }, caps, false, 'observe'), 'client_stalled_no_keepalive')
+  assert.equal(stalledCode(true, 0, { ...counts, teleports: 1, chunks: 1, keepalives: 1 }, caps, false, 'observe'), 'client_stalled_no_chunk_batch')
+  assert.equal(stalledCode(true, 0, { teleports: 1, chunks: 1, keepalives: 1, chunk_batches: 1 }, caps, false, 'mark-a'), 'client_stalled_not_marked')
+  assert.match(stalledCode(true, 0, counts, caps, false, 'observe'), /^client_[a-z_]{1,64}$/)
 })

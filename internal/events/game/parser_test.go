@@ -50,3 +50,25 @@ func Test26_3SystemChatGrammar(t *testing.T) {
 		}
 	}
 }
+
+// Forge and NeoForge log4j layouts add the Minecraft logger name after the
+// thread. Only Minecraft's own loggers are trusted; mod loggers are not.
+func TestForgeLoggerTagIsAcceptedOnlyForMinecraftLoggers(t *testing.T) {
+	for _, line := range []string{
+		"[12:34:56] [Server thread/INFO] [minecraft/MinecraftServer]: Alex drowned",
+		"[12:34:56] [Server thread/INFO] [minecraft/DedicatedServer]: Alex drowned",
+	} {
+		if e, ok := parse(line); !ok || e.Kind != "death" || e.Player.Name != "Alex" {
+			t.Fatalf("%q: %#v %v", line, e, ok)
+		}
+	}
+	for _, line := range []string{
+		"[12:34:56] [Server thread/INFO] [examplemod/Events]: Alex drowned",
+		"[12:34:56] [Server thread/INFO] [minecraft/]: Alex drowned",
+		"[12:34:56] [Server thread/INFO] [minecraft/MinecraftServer] [x/y]: Alex drowned",
+	} {
+		if e, ok := parse(line); ok {
+			t.Fatalf("untrusted logger accepted %q: %#v", line, e)
+		}
+	}
+}

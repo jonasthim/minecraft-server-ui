@@ -19,6 +19,18 @@ const VERSION_CAPABILITIES = Object.freeze({
   '26.1': Object.freeze({ playerLoaded: true, chunkBatch: true, tickEnd: true })
 })
 
+const STALL_MS = 55000
+
+function stalledCode (inPlay, initialYaw, counts, capabilities, marked, mode) {
+  if (!inPlay) return 'client_stalled_not_in_play'
+  if (!counts.teleports || initialYaw === null) return 'client_stalled_no_teleport'
+  if (!counts.chunks) return 'client_stalled_no_chunks'
+  if (!counts.keepalives) return 'client_stalled_no_keepalive'
+  if (capabilities.chunkBatch && !counts.chunk_batches) return 'client_stalled_no_chunk_batch'
+  if (!marked && mode !== 'observe') return 'client_stalled_not_marked'
+  return 'client_stalled_unclassified'
+}
+
 function argumentsFor (args) {
   if (args.length !== 4 || args[0] !== '--mode' || !['observe', 'mark-a', 'mark-b'].includes(args[1]) ||
       args[2] !== '--version' || !Object.hasOwn(VERSION_CAPABILITIES, args[3])) {
@@ -89,7 +101,11 @@ function attach (client, mode, version, emit, fail) {
   // only gameplay mutation, and reconnect/server playerdata proves acceptance.
   const tick = capabilities.tickEnd ? setInterval(() => { if (inPlay) write('tick_end', {}) }, 50) : null
   tick?.unref()
-  return { counts, capabilities, stop: () => { if (tick) clearInterval(tick) } }
+  // Before the harness's own deadline, name the first unmet readiness
+  // condition instead of timing out silently.
+  const stall = setTimeout(() => { if (!reported) fail(stalledCode(inPlay, initialYaw, counts, capabilities, marked, mode)) }, STALL_MS)
+  stall.unref()
+  return { counts, capabilities, stop: () => { if (tick) clearInterval(tick); clearTimeout(stall) } }
 }
 
 function main () {
@@ -139,5 +155,5 @@ function main () {
   input.on('close', () => { if (!closing) fail('client_control_eof') })
 }
 
-module.exports = { argumentsFor, attach, VERSION_CAPABILITIES, YAW, PROTOCOL_DATA }
+module.exports = { stalledCode, argumentsFor, attach, VERSION_CAPABILITIES, YAW, PROTOCOL_DATA }
 if (require.main === module) main()

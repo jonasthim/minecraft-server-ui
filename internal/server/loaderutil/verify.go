@@ -70,6 +70,15 @@ func FabricLaunch(ctx context.Context, root *os.Root, plan domain.InstallPlan, f
 	if e != nil {
 		return nil, e
 	}
+	provided := make([]string, 0, len(plan.Artifacts)-1)
+	for _, a := range plan.Artifacts[1:] {
+		provided = append(provided, a.ID)
+	}
+	// Fabric Loader refuses duplicate libraries (observed: bundled asm 9.6 with
+	// loader asm 9.10.1); like Fabric's own launcher, the loader's copy wins.
+	if gameCP, e = withoutLoaderProvidedLibraries(gameCP, provided); e != nil {
+		return nil, e
+	}
 	for _, name := range gameCP {
 		cp = append(cp, filepath.Join(final, filepath.FromSlash(name)))
 	}
@@ -249,4 +258,36 @@ func VerifyLaunch(ctx context.Context, dataDir, id string, spec domain.LaunchSpe
 		return errors.New("loader launch arguments differ from verified provider artifacts")
 	}
 	return nil
+}
+
+// withoutLoaderProvidedLibraries drops bundled Minecraft libraries whose Maven
+// group and artifact the loader already supplies. Bundled entries use the
+// minecraft/libraries/<group path>/<artifact>/<version>/<file> layout written by
+// PrepareMinecraft; other entries (versions, legacy server.jar) are kept.
+func withoutLoaderProvidedLibraries(game, provided []string) ([]string, error) {
+	have := map[string]bool{}
+	for _, id := range provided {
+		parts := strings.Split(strings.SplitN(id, "@", 2)[0], ":")
+		if len(parts) < 3 {
+			return nil, errors.New("invalid loader library coordinate")
+		}
+		have[parts[0]+":"+parts[1]] = true
+	}
+	out := make([]string, 0, len(game))
+	for _, name := range game {
+		rest, bundled := strings.CutPrefix(name, "minecraft/libraries/")
+		if !bundled {
+			out = append(out, name)
+			continue
+		}
+		parts := strings.Split(rest, "/")
+		if len(parts) < 4 {
+			return nil, errors.New("bundled library path is not a Maven layout")
+		}
+		key := strings.Join(parts[:len(parts)-3], ".") + ":" + parts[len(parts)-3]
+		if !have[key] {
+			out = append(out, name)
+		}
+	}
+	return out, nil
 }

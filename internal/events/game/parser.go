@@ -13,7 +13,7 @@ import (
 
 const parserVersion = "native-en-1.12.2-1.21.9-1.21.11-26.3-v1"
 
-var nativeLine = regexp.MustCompile(`^\[(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\] \[Server thread/INFO\]: (?:System chat: )?([A-Za-z0-9_]{1,16}) (.+)$`)
+var nativeLine = regexp.MustCompile(`^\[(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\] \[Server thread/INFO\](?: \[minecraft/[A-Za-z]{1,40}\])?: (?:System chat: )?([A-Za-z0-9_]{1,16}) (.+)$`)
 var advancement = regexp.MustCompile(`^has (?:made the advancement|completed the challenge|reached the goal) \[([^\[\]]{1,256})\]$`)
 
 // These are bounded, exact translated templates from the official bundled
