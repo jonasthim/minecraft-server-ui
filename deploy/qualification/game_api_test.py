@@ -433,7 +433,9 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
             ([{"message": "Lifecycle operation failed; inspect its phase and current process state before retrying."}], ["lifecycle_failure_unspecified"]),
             ([{"message": "native systemd installation is missing or unsafe: /secret/token"}], ["unclassified"]),
             ([{"message": "https://private.invalid/password-secret"}], ["unclassified"]),
-            ([{"message": "install preview expired or instance changed; resolve again secret"}], ["unclassified"]),
+            # Plain authored-shape text is fingerprinted, never echoed.
+            ([{"message": "install preview expired or instance changed; resolve again secret"}], ["message_sha256_9cace335319d9c07"]),
+            ([{"message": "native flush save method is unavailable"}], ["message_sha256_9a45a24481630dc8"]),
             ([{"message": 42}], ["unclassified"]),
             ([{"message": "Lifecycle managed java verification failed; inspect job phase and current process state before retrying."}], ["managed_java_verification_failed"]),
             ([{"message": "Lifecycle process identity failed; inspect job phase and current process state before retrying."}], ["process_identity_failed"]),

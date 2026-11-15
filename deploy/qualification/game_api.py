@@ -69,6 +69,9 @@ PERMISSION_PATHS = (
 )
 
 
+AUTHORED_MESSAGE = re.compile(r"[A-Za-z][A-Za-z ,;.()'-]{0,199}")
+
+
 class Failure(Exception):
     def __init__(self, code, **evidence):
         super().__init__(code)
@@ -460,6 +463,11 @@ class API:
             text = line.get("message") if isinstance(line, dict) else None
             if isinstance(text, str) and len(text) <= 8192 and text in messages:
                 codes.add(messages[text])
+            elif isinstance(text, str) and AUTHORED_MESSAGE.fullmatch(text) and not text.startswith("Native stop "):
+                # Unknown authored-shape messages (letters and sentence punctuation
+                # only: no digits, paths, URLs, assignments or causes) are reported
+                # as a short fingerprint for matching against source constants.
+                codes.add("message_sha256_" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:16])
             if isinstance(text, str) and len(text) <= 128:
                 match = re.fullmatch(r"Native stop process API: ([a-z_]{1,48})\.", text)
                 if match and match.group(1) in process_stages:
