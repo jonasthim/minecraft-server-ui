@@ -135,7 +135,7 @@ class Helpers(unittest.TestCase):
             ("1.12.2", {"player_loaded": False, "chunk_batch": False, "tick_end": False},
              {"chunks": 2, "teleports": 1, "keepalives": 1}),
             ("1.21.9", {"player_loaded": True, "chunk_batch": True, "tick_end": True},
-             {"chunks": 2, "teleports": 1, "keepalives": 1, "chunk_batches": 1}),
+             {"chunks": 2, "teleports": 1, "keepalives": 1, "chunk_batches": 1, "chunk_batches_optional": False}),
         ):
             client = game.GameClient.__new__(game.GameClient)
             client.tuple_config = game.tuple_for(version)
@@ -147,6 +147,24 @@ class Helpers(unittest.TestCase):
             self.assertEqual(result["protocol_capabilities"], capabilities)
             self.assertEqual(result["chunks"], 2)
             self.assertEqual("chunk_batches" in result, version == "1.21.9")
+        # Paper may stream chunks without batches; zero batches is then allowed,
+        # but only for the tuple that declares it.
+        paper = game.GameClient.__new__(game.GameClient)
+        paper.tuple_config = game.tuple_for("paper-1.21.10")
+        paper.lines = queue.Queue()
+        modern = {"player_loaded": True, "chunk_batch": True, "tick_end": True}
+        paper.lines.put({"event": "ready", "version": "1.21.10", "protocol_client": "minecraft-protocol@1.68.0", "protocol_data": "minecraft-data@3.117.0",
+                         "protocol_capabilities": modern, "initial_yaw": 31.25, "sent_yaw": None,
+                         "chunks": 2, "teleports": 1, "keepalives": 1, "chunk_batches": 0, "chunk_batches_optional": True})
+        self.assertEqual(paper.ready()["chunk_batches"], 0)
+        strict = game.GameClient.__new__(game.GameClient)
+        strict.tuple_config = game.tuple_for("1.21.9")
+        strict.lines = queue.Queue()
+        strict.lines.put({"event": "ready", "version": "1.21.9", "protocol_client": "minecraft-protocol@1.68.0", "protocol_data": "minecraft-data@3.117.0",
+                          "protocol_capabilities": modern, "initial_yaw": 31.25, "sent_yaw": None,
+                          "chunks": 2, "teleports": 1, "keepalives": 1, "chunk_batches": 0, "chunk_batches_optional": True})
+        with self.assertRaises(game.Failure):
+            strict.ready()
         legacy = game.GameClient.__new__(game.GameClient)
         legacy.tuple_config = game.tuple_for("1.12.2")
         legacy.lines = queue.Queue()

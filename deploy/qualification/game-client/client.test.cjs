@@ -13,8 +13,8 @@ function fixture (mode = 'observe', version = '1.21.9') {
 }
 
 test('fixed CLI accepts only exact mode/version tuple arguments and no endpoint', () => {
-  assert.deepEqual(argumentsFor(['--mode', 'mark-a', '--version', '1.12.2']), { mode: 'mark-a', version: '1.12.2' })
-  assert.deepEqual(argumentsFor(['--mode', 'observe', '--version', '1.21.9']), { mode: 'observe', version: '1.21.9' })
+  assert.deepEqual(argumentsFor(['--mode', 'mark-a', '--version', '1.12.2']), { mode: 'mark-a', version: '1.12.2', batchesOptional: false })
+  assert.deepEqual(argumentsFor(['--mode', 'observe', '--version', '1.21.9']), { mode: 'observe', version: '1.21.9', batchesOptional: false })
   for (const args of [[], ['--mode', 'command', '--version', '1.12.2'], ['--mode', 'observe', '--version', '1.19.4'],
     ['--host', 'example.org', '--version', '1.12.2'], ['--mode', 'observe', '--version', '1.21.9', '--host', '127.0.0.1'],
     ['--mode', 'observe', '--version', '1.21.9', '--version', '1.12.2']]) {
@@ -128,4 +128,25 @@ test('stall diagnosis names the first unmet readiness condition', () => {
   assert.match(code, /^client_[a-z_]{1,64}$/)
   assert.equal(stalledCode(true, 0, { ...counts, teleports: 1, chunks: 1, keepalives: 1 }, caps, false, 'observe', { ...trace, batchStarts: 1 }),
     'client_stalled_no_chunk_batch_after_start')
+})
+
+test('optional chunk batches flag is exact and only relaxes the batch requirement', () => {
+  assert.deepEqual(argumentsFor(['--mode', 'observe', '--version', '1.21.10', '--chunk-batches', 'optional']),
+    { mode: 'observe', version: '1.21.10', batchesOptional: true })
+  for (const args of [['--mode', 'observe', '--version', '1.21.10', '--chunk-batches', 'required'],
+    ['--mode', 'observe', '--version', '1.21.10', '--chunk-batches'],
+    ['--mode', 'observe', '--version', '1.21.10', 'optional', '--chunk-batches']]) {
+    assert.throws(() => argumentsFor(args), /client_arguments/)
+  }
+})
+test('ping is answered with a matching pong', () => {
+  const { EventEmitter } = require('node:events')
+  const client = new EventEmitter()
+  const writes = []
+  client.write = (name, value) => writes.push([name, value])
+  const state = attach(client, 'observe', '1.21.1', () => {}, () => {})
+  client.emit('ping', { id: 42 })
+  client.emit('ping', { id: 'x' })
+  state.stop()
+  assert.deepEqual(writes.filter(([n]) => n === 'pong'), [['pong', { id: 42 }]])
 })

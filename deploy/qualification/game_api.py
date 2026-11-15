@@ -55,6 +55,9 @@ class QualificationTuple:
     # False only when no supported protocol client exists for the version;
     # gameplay markers are then replaced by restored-file hash evidence.
     client: bool = True
+    # Paper streams chunks without vanilla chunk-batch packets (observed on
+    # 1.21.10/1.21.11); batches are then acknowledged if sent but not required.
+    chunk_batches_optional: bool = False
 
     def selection(self):
         value = {"flavor": self.flavor, "minecraft_version": self.minecraft_version}
@@ -83,7 +86,7 @@ TUPLES = MappingProxyType({
     "26.1": QualificationTuple("26.1", 25, "vanilla-26.1-real-headless-game",
                                   MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2),
     "paper-1.21.10": QualificationTuple("1.21.10", 21, "paper-1.21.10-real-headless-game",
-                                  MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2, "paper", "130"),
+                                  MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2, "paper", "130", chunk_batches_optional=True),
     "fabric-1.21.9": QualificationTuple("1.21.9", 21, "fabric-1.21.9-real-headless-game",
                                   MappingProxyType({"player_loaded": True, "chunk_batch": True, "tick_end": True}), 2, "fabric", "0.20.1"),
     "forge-1.20.1": QualificationTuple("1.20.1", 17, "forge-1.20.1-real-headless-game",
@@ -621,7 +624,8 @@ class GameClient:
     def __init__(self, mode, tuple_config):
         self.tuple_config = tuple_config
         self.process = subprocess.Popen(["node", str(HERE / "game-client/client.cjs"), "--mode", mode,
-                                         "--version", tuple_config.minecraft_version],
+                                         "--version", tuple_config.minecraft_version] +
+                                        (["--chunk-batches", "optional"] if tuple_config.chunk_batches_optional else []),
                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                        encoding="utf-8", errors="replace")
         self.lines = queue.Queue(maxsize=8)
@@ -686,7 +690,7 @@ class GameClient:
                 all(type(v) is bool for v in reported_capabilities.values()) and reported_capabilities == expected_capabilities,
                 "client_protocol_capability_mismatch")
         required_counts = ["chunks", "teleports", "keepalives"]
-        if expected_capabilities["chunk_batch"]:
+        if expected_capabilities["chunk_batch"] and not self.tuple_config.chunk_batches_optional:
             required_counts.append("chunk_batches")
         require(all(type(value.get(k)) is int and 0 < value[k] < 100000 for k in required_counts), "client_packets_missing")
         if not expected_capabilities["chunk_batch"]:
@@ -694,7 +698,9 @@ class GameClient:
         require(type(value.get("initial_yaw")) in (int, float) and math.isfinite(value["initial_yaw"]), "client_yaw_invalid")
         keys = ["version", "protocol_client", "protocol_data", "protocol_capabilities", "initial_yaw", "sent_yaw", "chunks", "teleports", "keepalives"]
         if expected_capabilities["chunk_batch"]:
-            keys.append("chunk_batches")
+            require(type(value.get("chunk_batches")) is int and 0 <= value["chunk_batches"] < 100000 and
+                    value.get("chunk_batches_optional") is self.tuple_config.chunk_batches_optional, "client_packets_missing")
+            keys += ["chunk_batches", "chunk_batches_optional"]
         return {key: value[key] for key in keys}
 
     def alive(self):

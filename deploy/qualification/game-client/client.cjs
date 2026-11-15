@@ -27,7 +27,7 @@ function stalledCode (inPlay, initialYaw, counts, capabilities, marked, mode, tr
   if (!counts.teleports || initialYaw === null) return 'client_stalled_no_teleport'
   if (!counts.chunks) return 'client_stalled_no_chunks'
   if (!counts.keepalives) return 'client_stalled_no_keepalive'
-  if (capabilities.chunkBatch && !counts.chunk_batches) {
+  if (capabilities.chunkBatch && !counts.chunk_batches && !trace?.batchesOptional) {
     return 'client_stalled_no_chunk_batch' + (trace ? (trace.batchStarts ? '_after_start' : '_without_start') : '')
   }
   if (!marked && mode !== 'observe') return 'client_stalled_not_marked'
@@ -35,15 +35,19 @@ function stalledCode (inPlay, initialYaw, counts, capabilities, marked, mode, tr
 }
 
 function argumentsFor (args) {
-  if (args.length !== 4 || args[0] !== '--mode' || !['observe', 'mark-a', 'mark-b'].includes(args[1]) ||
+  // Optional trailing '--chunk-batches optional' is for servers (Paper) that
+  // stream chunks without vanilla batch packets; batches are still acknowledged.
+  const optional = args.length === 6 && args[4] === '--chunk-batches' && args[5] === 'optional'
+  if ((args.length !== 4 && !optional) || args[0] !== '--mode' || !['observe', 'mark-a', 'mark-b'].includes(args[1]) ||
       args[2] !== '--version' || !Object.hasOwn(VERSION_CAPABILITIES, args[3])) {
     throw new Error('client_arguments')
   }
-  return Object.freeze({ mode: args[1], version: args[3] })
+  return Object.freeze({ mode: args[1], version: args[3], batchesOptional: optional })
 }
 
-function attach (client, mode, version, emit, fail) {
+function attach (client, mode, version, emit, fail, batchesOptional = false) {
   const capabilities = VERSION_CAPABILITIES[version]
+  const batchRequired = capabilities.chunkBatch && !batchesOptional
   if (!Object.hasOwn(VERSION_CAPABILITIES, version) || !['observe', 'mark-a', 'mark-b'].includes(mode)) throw new Error('client_arguments')
   const counts = { chunks: 0, teleports: 0, keepalives: 0, chunk_batches: 0 }
   let initialYaw = null
@@ -55,24 +59,27 @@ function attach (client, mode, version, emit, fail) {
   }
   const report = () => {
     if (reported || !inPlay || initialYaw === null || !counts.chunks || !counts.teleports || !counts.keepalives ||
-        (capabilities.chunkBatch && !counts.chunk_batches)) return
+        (batchRequired && !counts.chunk_batches)) return
     if (!marked && mode !== 'observe') return
     reported = true
     const { chunk_batches, ...baseCounts } = counts
     emit({ event: 'ready', version, protocol_client: 'minecraft-protocol@1.68.0', protocol_data: PROTOCOL_DATA,
       protocol_capabilities: { player_loaded: capabilities.playerLoaded, chunk_batch: capabilities.chunkBatch, tick_end: capabilities.tickEnd },
       initial_yaw: initialYaw, sent_yaw: mode === 'observe' ? null : YAW[mode], ...baseCounts,
-      ...(capabilities.chunkBatch ? { chunk_batches } : {}) })
+      ...(capabilities.chunkBatch ? { chunk_batches, chunk_batches_optional: batchesOptional } : {}) })
   }
   client.on('playerJoin', () => { inPlay = true; report() })
   // Protocol state and packet names only (fixed protocol identifiers), so a
   // stall can say where the session stopped.
-  const trace = { state: 'handshaking', last: 'none', batchStarts: 0 }
+  const trace = { state: 'handshaking', last: 'none', batchStarts: 0, batchesOptional }
   client.on('state', state => { if (typeof state === 'string') trace.state = state })
   client.on('packet', (_data, meta) => {
     if (meta && typeof meta.name === 'string' && /^[a-z_]{1,40}$/.test(meta.name)) trace.last = meta.name
   })
   client.on('chunk_batch_start', () => { trace.batchStarts++ })
+  // The vanilla client answers ping with pong in configuration and play;
+  // minecraft-protocol does not, and NeoForge configuration waits for it.
+  client.on('ping', packet => { if (Number.isInteger(packet?.id)) write('pong', { id: packet.id }) })
   client.on('position', packet => {
     if (!Number.isFinite(packet.yaw) || !Number.isInteger(packet.teleportId)) return fail('client_position_invalid')
     // Initial login must be absolute. Guessing relative initial state would
@@ -156,7 +163,7 @@ function main () {
   const client = mc.createClient({ host: '127.0.0.1', port: 25565, username: 'AcceptanceBot',
     auth: 'offline', version: config.version, keepAlive: true, hideErrors: true,
     checkTimeoutInterval: 35000, clientSettings: { viewDistance: 2, enableServerListing: false } })
-  state = attach(client, config.mode, config.version, emit, fail)
+  state = attach(client, config.mode, config.version, emit, fail, config.batchesOptional)
   const timeout = setTimeout(() => fail('client_lifetime_timeout'), 180000)
   client.on('end', () => {
     state.stop()
