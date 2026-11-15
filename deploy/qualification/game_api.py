@@ -360,6 +360,8 @@ class API:
                     evidence = {"job_state": state, "job_phase": phase,
                                 "job_diagnostics": self.job_diagnostics(identifier),
                                 "console_diagnostics": self.console_diagnostics()}
+                    if phase == "verifying_backup":
+                        evidence["world_diagnostics"] = self.world_diagnostics()
                     if phase == "stopping_process":
                         evidence["launcher_diagnostics"] = launcher_diagnostics()
                     raise Failure("job_terminal_failure", **evidence)
@@ -477,6 +479,21 @@ class API:
                 if match and int(match.group(1)) <= 65535:
                     codes.add("stop_native_os_error_" + match.group(1))
         return sorted(codes) or ["unclassified"]
+
+    def world_diagnostics(self):
+        # Public discovery enums plus warning fingerprints only; never paths,
+        # level names or raw warning text.
+        try:
+            value = self.request(PREFIX + "/world").get("world") or {}
+        except Exception:
+            return {"available": False}
+        def enum(item):
+            return item if isinstance(item, str) and re.fullmatch(r"[a-z0-9_]{1,32}", item) else "unclassified"
+        warnings = value.get("warnings") if isinstance(value.get("warnings"), list) else []
+        return {"available": True, "state": enum(value.get("state")), "layout": enum(value.get("layout")),
+                "dimension_states": sorted(enum(d.get("state")) for d in (value.get("dimensions") or [])[:16] if isinstance(d, dict)),
+                "warnings": sorted("message_sha256_" + hashlib.sha256(w.encode("utf-8")).hexdigest()[:16]
+                                   for w in warnings[:8] if isinstance(w, str) and AUTHORED_MESSAGE.fullmatch(w))}
 
     def console_diagnostics(self):
         # Read-only status, with a short independent deadline. Never retain the

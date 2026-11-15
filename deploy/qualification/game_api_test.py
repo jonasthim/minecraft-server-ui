@@ -387,7 +387,23 @@ Get-BoundedCimNumericCodes $ok | ConvertTo-Json -Compress
             with self.assertRaises(game.Failure) as failure:
                 api.job({"job": {"id": "abc"}})
             self.assertEqual(failure.exception.evidence, {"job_state": "failed", "job_phase": "verifying_backup", "job_diagnostics": ["unclassified"],
-                                                         "console_diagnostics": {"diagnostic_available": False, "reason_code": "status_malformed"}})
+                                                         "console_diagnostics": {"diagnostic_available": False, "reason_code": "status_malformed"},
+                                                         "world_diagnostics": {"available": True, "state": "unclassified", "layout": "unclassified",
+                                                                               "dimension_states": [], "warnings": []}})
+
+    def test_world_diagnostics_report_enums_and_fingerprints_only(self):
+        api = game.API()
+        warning = "World directory has no regular level.dat save marker."
+        world = {"world": {"state": "ambiguous", "layout": "legacy", "level_name": "private-world",
+                           "dimensions": [{"state": "present", "path": "/secret"}, {"state": "absent"}],
+                           "warnings": [warning, "token=/secret/path"]}}
+        with mock.patch.object(api, "request", return_value=world):
+            evidence = api.world_diagnostics()
+        self.assertEqual(evidence, {"available": True, "state": "ambiguous", "layout": "legacy",
+                                    "dimension_states": ["absent", "present"],
+                                    "warnings": ["message_sha256_" + hashlib.sha256(warning.encode()).hexdigest()[:16]]})
+        self.assertNotIn("secret", json.dumps(evidence))
+        self.assertNotIn("private-world", json.dumps(evidence))
 
     def test_stopping_job_adds_bounded_launcher_record_and_keeps_failure(self):
         api = game.API()
