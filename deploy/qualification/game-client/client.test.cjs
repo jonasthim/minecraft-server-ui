@@ -122,4 +122,10 @@ test('stall diagnosis names the first unmet readiness condition', () => {
   assert.equal(stalledCode(true, 0, { ...counts, teleports: 1, chunks: 1, keepalives: 1 }, caps, false, 'observe'), 'client_stalled_no_chunk_batch')
   assert.equal(stalledCode(true, 0, { teleports: 1, chunks: 1, keepalives: 1, chunk_batches: 1 }, caps, false, 'mark-a'), 'client_stalled_not_marked')
   assert.match(stalledCode(true, 0, counts, caps, false, 'observe'), /^client_[a-z_]{1,64}$/)
+  const trace = { state: 'configuration', last: 'custom_payload', batchStarts: 0 }
+  const code = stalledCode(false, null, counts, caps, false, 'observe', trace)
+  assert.equal(code, 'client_stalled_not_in_play_in_configuration_after_custom_payload')
+  assert.match(code, /^client_[a-z_]{1,64}$/)
+  assert.equal(stalledCode(true, 0, { ...counts, teleports: 1, chunks: 1, keepalives: 1 }, caps, false, 'observe', { ...trace, batchStarts: 1 }),
+    'client_stalled_no_chunk_batch_after_start')
 })

@@ -21,12 +21,15 @@ const VERSION_CAPABILITIES = Object.freeze({
 
 const STALL_MS = 55000
 
-function stalledCode (inPlay, initialYaw, counts, capabilities, marked, mode) {
-  if (!inPlay) return 'client_stalled_not_in_play'
+function stalledCode (inPlay, initialYaw, counts, capabilities, marked, mode, trace) {
+  const detail = trace ? '_in_' + trace.state + '_after_' + trace.last : ''
+  if (!inPlay) return ('client_stalled_not_in_play' + detail).slice(0, 71)
   if (!counts.teleports || initialYaw === null) return 'client_stalled_no_teleport'
   if (!counts.chunks) return 'client_stalled_no_chunks'
   if (!counts.keepalives) return 'client_stalled_no_keepalive'
-  if (capabilities.chunkBatch && !counts.chunk_batches) return 'client_stalled_no_chunk_batch'
+  if (capabilities.chunkBatch && !counts.chunk_batches) {
+    return 'client_stalled_no_chunk_batch' + (trace ? (trace.batchStarts ? '_after_start' : '_without_start') : '')
+  }
   if (!marked && mode !== 'observe') return 'client_stalled_not_marked'
   return 'client_stalled_unclassified'
 }
@@ -62,6 +65,14 @@ function attach (client, mode, version, emit, fail) {
       ...(capabilities.chunkBatch ? { chunk_batches } : {}) })
   }
   client.on('playerJoin', () => { inPlay = true; report() })
+  // Protocol state and packet names only (fixed protocol identifiers), so a
+  // stall can say where the session stopped.
+  const trace = { state: 'handshaking', last: 'none', batchStarts: 0 }
+  client.on('state', state => { if (typeof state === 'string') trace.state = state })
+  client.on('packet', (_data, meta) => {
+    if (meta && typeof meta.name === 'string' && /^[a-z_]{1,40}$/.test(meta.name)) trace.last = meta.name
+  })
+  client.on('chunk_batch_start', () => { trace.batchStarts++ })
   client.on('position', packet => {
     if (!Number.isFinite(packet.yaw) || !Number.isInteger(packet.teleportId)) return fail('client_position_invalid')
     // Initial login must be absolute. Guessing relative initial state would
@@ -103,7 +114,7 @@ function attach (client, mode, version, emit, fail) {
   tick?.unref()
   // Before the harness's own deadline, name the first unmet readiness
   // condition instead of timing out silently.
-  const stall = setTimeout(() => { if (!reported) fail(stalledCode(inPlay, initialYaw, counts, capabilities, marked, mode)) }, STALL_MS)
+  const stall = setTimeout(() => { if (!reported) fail(stalledCode(inPlay, initialYaw, counts, capabilities, marked, mode, trace)) }, STALL_MS)
   stall.unref()
   return { counts, capabilities, stop: () => { if (tick) clearInterval(tick); clearTimeout(stall) } }
 }
